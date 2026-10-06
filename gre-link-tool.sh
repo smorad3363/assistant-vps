@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-link-tool.sh -o /tmp/gre-link-tool.sh && sudo install -m 755 /tmp/gre-link-tool.sh /usr/local/bin/gre-link-tool && sudo gre-link-tool
 
 APP="gre-link-tool"
-VERSION="2.1"
+VERSION="2.2"
 CONFIG="/etc/${APP}.conf"
 LOG_DIR="/var/log/${APP}"
 INSTALL_PATH="/usr/local/bin/${APP}"
@@ -921,6 +921,160 @@ remove_gre() {
   ok "GRE service, watchdog, and helper files removed. Saved configuration was kept in $CONFIG."
 }
 
+
+debug_cmd() {
+  local report=$1 title=$2
+  shift 2
+  local rc
+  {
+    printf '\n================================================================\n%s\n================================================================\n' "$title"
+    printf 'Command:'; printf ' %q' "$@"; printf '\n'
+  } >> "$report"
+  set +e
+  "$@" >> "$report" 2>&1
+  rc=$?
+  set -e
+  printf '\n[exit_code=%s]\n' "$rc" >> "$report"
+}
+
+debug_shell() {
+  local report=$1 title=$2 cmd=$3 rc
+  {
+    printf '\n================================================================\n%s\n================================================================\n' "$title"
+    printf 'Shell: %s\n' "$cmd"
+  } >> "$report"
+  set +e
+  bash -o pipefail -c "$cmd" >> "$report" 2>&1
+  rc=$?
+  set -e
+  printf '\n[exit_code=%s]\n' "$rc" >> "$report"
+}
+
+generate_debug_report() {
+  local stamp report main_iface cmd
+  stamp="$(date '+%Y%m%d-%H%M%S')"
+  report="$LOG_DIR/debug-$stamp.txt"
+  main_iface="$(detect_main_iface || true)"
+  umask 077
+  : > "$report"
+  chmod 600 "$report"
+
+  {
+    echo "GRE Link Tool - Full Troubleshooting Report"
+    echo "Generated: $(date -Is 2>/dev/null || date)"
+    echo "Generated UTC: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "Tool version: $VERSION"
+    echo "Installed path: $INSTALL_PATH"
+    echo
+    echo "This report contains network addresses, routes, ports, firewall/NAT rules,"
+    echo "service status and recent GRE Link Tool logs."
+    echo "It intentionally avoids shell history, environment dumps, passwords,"
+    echo "tokens, SSH/WireGuard private keys and full packet payloads."
+    echo
+    echo "---- Saved GRE Link Tool settings ----"
+    printf 'SITE_ROLE=%q\n' "$SITE_ROLE"
+    printf 'LOCAL_PUBLIC_IP=%q\n' "$LOCAL_PUBLIC_IP"
+    printf 'PEER_PUBLIC_IP=%q\n' "$PEER_PUBLIC_IP"
+    printf 'GRE_IFACE=%q\n' "$GRE_IFACE"
+    printf 'LOCAL_TUN_CIDR=%q\n' "$LOCAL_TUN_CIDR"
+    printf 'PEER_TUN_IP=%q\n' "$PEER_TUN_IP"
+    printf 'GRE_MTU=%q\n' "$GRE_MTU"
+    printf 'IPERF_PORT=%q\n' "$IPERF_PORT"
+    printf 'TARGET_RATE=%q\n' "$TARGET_RATE"
+    printf 'ENABLE_FORWARD=%q\n' "$ENABLE_FORWARD"
+    printf 'FORWARD_PROTO=%q\n' "$FORWARD_PROTO"
+    printf 'FORWARD_PORT=%q\n' "$FORWARD_PORT"
+    printf 'WATCHDOG_ENABLED=%q\n' "$WATCHDOG_ENABLED"
+    printf 'WATCHDOG_INTERVAL=%q\n' "$WATCHDOG_INTERVAL"
+    printf 'WATCHDOG_FAIL_THRESHOLD=%q\n' "$WATCHDOG_FAIL_THRESHOLD"
+  } >> "$report"
+
+  debug_shell "$report" "SCRIPT / CONFIG FILE METADATA" \
+    "ls -l $(printf '%q' "$INSTALL_PATH") $(printf '%q' "$CONFIG") 2>&1 || true; sha256sum $(printf '%q' "$INSTALL_PATH") 2>/dev/null || true"
+  debug_shell "$report" "OS / KERNEL / UPTIME / RESOURCES" \
+    'cat /etc/os-release 2>/dev/null || true; echo; uname -a; echo; uptime; echo; systemd-detect-virt 2>/dev/null || true; echo; free -h 2>/dev/null || true; echo; df -hT / 2>/dev/null || true'
+  debug_shell "$report" "NETWORK TOOL VERSIONS" \
+    'for c in ip iptables nft ping iperf3 mtr tcpdump curl systemctl journalctl sysctl ethtool; do echo "--- $c ---"; command -v "$c" 2>/dev/null || echo MISSING; case "$c" in ip) ip -Version 2>&1;; iptables) iptables --version 2>&1;; nft) nft --version 2>&1;; ping) ping -V 2>&1 | head -n 2;; iperf3) iperf3 --version 2>&1 | head -n 4;; mtr) mtr --version 2>&1 | head -n 2;; tcpdump) tcpdump --version 2>&1 | head -n 2;; curl) curl --version 2>&1 | head -n 3;; systemctl|journalctl) "$c" --version 2>&1 | head -n 4;; sysctl) sysctl --version 2>&1 | head -n 2;; ethtool) ethtool --version 2>&1 | head -n 2;; esac; echo; done'
+
+  debug_cmd "$report" "GRE SERVICE STATUS" systemctl --no-pager --full status "$SERVICE"
+  debug_cmd "$report" "WATCHDOG SERVICE STATUS" systemctl --no-pager --full status "$WATCHDOG_SERVICE"
+  debug_cmd "$report" "WATCHDOG TIMER STATUS" systemctl --no-pager --full status "$WATCHDOG_TIMER"
+  debug_shell "$report" "SYSTEMD UNIT DEFINITIONS / ENABLE STATES" \
+    "for u in $(printf '%q' "$SERVICE") $(printf '%q' "$WATCHDOG_SERVICE") $(printf '%q' "$WATCHDOG_TIMER"); do echo \"===== \$u =====\"; systemctl is-enabled \"\$u\" 2>&1 || true; systemctl is-active \"\$u\" 2>&1 || true; systemctl show \"\$u\" -p LoadState -p ActiveState -p SubState -p Result -p ExecMainStatus -p FragmentPath -p UnitFileState 2>&1 || true; systemctl cat \"\$u\" 2>&1 || true; echo; done; systemctl list-timers --all --no-pager $(printf '%q' "$WATCHDOG_TIMER") 2>&1 || true; echo; cat /run/$APP-watchdog.failures 2>/dev/null || echo 'No watchdog failure state file.'"
+
+  debug_cmd "$report" "GRE SERVICE JOURNAL - LAST 24H" journalctl -u "$SERVICE" --since "-24 hours" -n 500 --no-pager -o short-iso
+  debug_cmd "$report" "WATCHDOG SERVICE JOURNAL - LAST 24H" journalctl -u "$WATCHDOG_SERVICE" --since "-24 hours" -n 500 --no-pager -o short-iso
+  debug_cmd "$report" "WATCHDOG LOGGER JOURNAL - LAST 24H" journalctl -t "$APP-watchdog" --since "-24 hours" -n 500 --no-pager -o short-iso
+
+  debug_shell "$report" "GENERATED GRE HELPERS" \
+    "for f in $(printf '%q' "$HELPER_UP") $(printf '%q' "$HELPER_DOWN") $(printf '%q' "$HELPER_WATCHDOG"); do echo \"===== \$f =====\"; if [[ -r \"\$f\" ]]; then sed -n '1,320p' \"\$f\"; else echo MISSING; fi; echo; done"
+
+  debug_cmd "$report" "INTERFACE SUMMARY" ip -br addr
+  debug_cmd "$report" "LINK DETAILS / COUNTERS" ip -d -s link show
+  debug_cmd "$report" "IPv4 ADDRESSES" ip -4 addr show
+  debug_shell "$report" "GRE TUNNELS" 'ip -d tunnel show 2>&1 || true; echo; ip -s tunnel show 2>&1 || true'
+  debug_cmd "$report" "ROUTING TABLES" ip -4 route show table all
+  debug_cmd "$report" "IP RULES" ip -4 rule show
+  debug_cmd "$report" "NEIGHBORS" ip neigh show
+  debug_cmd "$report" "SOCKET SUMMARY" ss -s
+  debug_cmd "$report" "LISTENING SOCKETS" ss -lntup
+
+  if valid_ipv4 "$PEER_PUBLIC_IP"; then
+    debug_cmd "$report" "ROUTE TO PEER PUBLIC IP" ip -4 route get "$PEER_PUBLIC_IP"
+    debug_cmd "$report" "PING PEER PUBLIC IP" ping -n -c 5 -W 1 "$PEER_PUBLIC_IP"
+    command -v mtr >/dev/null 2>&1 && debug_cmd "$report" "MTR PEER PUBLIC IP" mtr -rwzc 10 "$PEER_PUBLIC_IP"
+    cmd="for s in 1472 1464 1452 1440 1420 1400 1380 1360 1320 1280 1240 1200; do printf 'payload=%s: ' \"\$s\"; ping -n -c 1 -W 1 -M do -s \"\$s\" $(printf '%q' "$PEER_PUBLIC_IP") >/dev/null 2>&1 && echo PASS || echo FAIL; done"
+    debug_shell "$report" "PUBLIC PATH MTU MATRIX" "$cmd"
+  fi
+
+  if valid_ipv4 "$PEER_TUN_IP"; then
+    debug_cmd "$report" "ROUTE TO PEER TUNNEL IP" ip -4 route get "$PEER_TUN_IP"
+    if valid_iface "$GRE_IFACE" && ip link show "$GRE_IFACE" >/dev/null 2>&1; then
+      debug_cmd "$report" "GRE INTERFACE DETAIL" ip -d -s link show dev "$GRE_IFACE"
+      debug_cmd "$report" "PING PEER TUNNEL IP THROUGH GRE" ping -I "$GRE_IFACE" -n -c 8 -W 1 "$PEER_TUN_IP"
+      cmd="for s in 1372 1360 1340 1320 1300 1280 1240 1200; do printf 'payload=%s: ' \"\$s\"; ping -I $(printf '%q' "$GRE_IFACE") -n -c 1 -W 1 -M do -s \"\$s\" $(printf '%q' "$PEER_TUN_IP") >/dev/null 2>&1 && echo PASS || echo FAIL; done"
+      debug_shell "$report" "GRE PATH MTU MATRIX" "$cmd"
+    fi
+  fi
+
+  debug_shell "$report" "RELEVANT SYSCTLS / GRE MODULES" \
+    "sysctl net.ipv4.ip_forward net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter net.ipv4.conf.all.accept_redirects net.ipv4.conf.all.send_redirects 2>&1 || true; [[ -n $(printf '%q' "$main_iface") ]] && sysctl net.ipv4.conf.$main_iface.rp_filter 2>&1 || true; [[ -n $(printf '%q' "$GRE_IFACE") ]] && sysctl net.ipv4.conf.$GRE_IFACE.rp_filter 2>&1 || true; echo; lsmod 2>/dev/null | grep -E '^(ip_gre|gre|ip_tunnel)' || true"
+
+  debug_cmd "$report" "IPTABLES FILTER RULES / COUNTERS" iptables -L -n -v --line-numbers
+  debug_cmd "$report" "IPTABLES FILTER RULE SPEC" iptables -S
+  debug_cmd "$report" "IPTABLES NAT RULES / COUNTERS" iptables -t nat -L -n -v --line-numbers
+  debug_cmd "$report" "IPTABLES NAT RULE SPEC" iptables -t nat -S
+  debug_cmd "$report" "IPTABLES MANGLE RULE SPEC" iptables -t mangle -S
+  command -v nft >/dev/null 2>&1 && debug_shell "$report" "NFTABLES RULESET - FIRST 2500 LINES" "nft list ruleset 2>&1 | sed -n '1,2500p'"
+  [[ -n "$main_iface" ]] && command -v ethtool >/dev/null 2>&1 && debug_cmd "$report" "MAIN NIC OFFLOAD FEATURES" ethtool -k "$main_iface"
+  command -v dmesg >/dev/null 2>&1 && debug_shell "$report" "RELEVANT KERNEL MESSAGES" "dmesg -T 2>&1 | grep -Ei 'gre|ip_tunnel|network|link|route|mtu|icmp|martian|rp_filter|netfilter' | tail -n 300"
+
+  if command -v tcpdump >/dev/null 2>&1 && valid_ipv4 "$PEER_PUBLIC_IP"; then
+    cmd="tmp=\$(mktemp /tmp/$APP.tcpdump.XXXXXX); timeout 8 tcpdump -ni any -nn -s 64 -c 80 -tttt 'proto 47 or icmp' >\"\$tmp\" 2>&1 & cap=\$!; sleep 1; ping -n -c 3 -W 1 $(printf '%q' "$PEER_PUBLIC_IP") >/dev/null 2>&1 || true;"
+    if valid_ipv4 "$PEER_TUN_IP" && valid_iface "$GRE_IFACE"; then
+      cmd+=" ip link show $(printf '%q' "$GRE_IFACE") >/dev/null 2>&1 && ping -I $(printf '%q' "$GRE_IFACE") -n -c 4 -W 1 $(printf '%q' "$PEER_TUN_IP") >/dev/null 2>&1 || true;"
+    fi
+    cmd+=" wait \"\$cap\" 2>/dev/null || true; cat \"\$tmp\"; rm -f \"\$tmp\""
+    debug_shell "$report" "SHORT GRE/ICMP PACKET-HEADER PROBE - 8 SECONDS" "$cmd"
+  fi
+
+  debug_shell "$report" "RECENT GRE LINK TOOL LOGS - 5 FILES / 350 LINES EACH" \
+    "count=0; while IFS= read -r f; do echo \"===== \$f =====\"; tail -n 350 \"\$f\" 2>&1 || true; echo; count=\$((count+1)); (( count >= 5 )) && break; done < <(find $(printf '%q' "$LOG_DIR") -maxdepth 1 -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null | sort -nr | cut -d' ' -f2-)"
+
+  {
+    echo
+    echo "================================================================"
+    echo "END OF REPORT"
+    echo "================================================================"
+    echo "Report path: $report"
+    echo "Generated: $(date -Is 2>/dev/null || date)"
+  } >> "$report"
+
+  ok "Full debug report created: $report"
+  log "Send this single file for troubleshooting."
+  warn "It contains IPs, routes, ports and firewall details; keep it within a trusted support context."
+}
+
 print_header() {
   echo "============================================================"
   echo " GRE Link Tool v$VERSION"
@@ -938,10 +1092,11 @@ main_menu() {
   echo "  5) Edit saved tunnel/ports/watchdog configuration"
   echo "  6) Show GRE tunnel status"
   echo "  7) Remove GRE tunnel service + watchdog"
+  echo "  8) Generate full debug report for troubleshooting"
   echo
 
   local mode
-  read -r -p "Selection [1-7]: " mode
+  read -r -p "Selection [1-8]: " mode
   case "$mode" in
     1) start_iperf_listener ;;
     2) run_bidirectional_sender_test ;;
@@ -950,10 +1105,19 @@ main_menu() {
     5) edit_gre_configuration ;;
     6) show_saved_gre_status ;;
     7) remove_gre ;;
+    8) generate_debug_report ;;
     *) die "Invalid selection." ;;
   esac
 }
 
 auto_update_or_install "$@"
+
+case "${1:-}" in
+  --debug|--debug-report|debug)
+    generate_debug_report
+    exit 0
+    ;;
+esac
+
 main_menu
 log "Log saved: $LOG_FILE"
