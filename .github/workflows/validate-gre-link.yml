@@ -1,0 +1,14 @@
+name: Validate GRE Link Tool
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bash-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Bash syntax
+        run: bash -n gre-link-tool.sh
