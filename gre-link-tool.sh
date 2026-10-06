@@ -213,13 +213,13 @@ install_deps() {
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y iproute2 iputils-ping iperf3 mtr-tiny tcpdump iptables procps coreutils curl
+    apt-get install -y iproute2 iputils-ping iperf3 mtr-tiny tcpdump iptables procps coreutils diffutils curl
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y iproute iputils iperf3 mtr tcpdump iptables procps-ng coreutils curl
+    dnf install -y iproute iputils iperf3 mtr tcpdump iptables procps-ng coreutils diffutils curl
   elif command -v yum >/dev/null 2>&1; then
-    yum install -y iproute iputils iperf3 mtr tcpdump iptables procps-ng coreutils curl
+    yum install -y iproute iputils iperf3 mtr tcpdump iptables procps-ng coreutils diffutils curl
   else
-    die "No supported package manager was found. Install iproute2, ping, iperf3, mtr, tcpdump, iptables, procps, coreutils and curl manually."
+    die "No supported package manager was found. Install iproute2, ping, iperf3, mtr, tcpdump, iptables, procps, coreutils, diffutils and curl manually."
   fi
   ok "Dependencies installed."
 }
