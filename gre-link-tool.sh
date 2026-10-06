@@ -179,7 +179,24 @@ auto_update_or_install() {
 
   if ! bash -n "$tmp" \
     || [[ "$(head -n 1 "$tmp")" != '#!/usr/bin/env bash' ]] \
-    || ! grep -q '^APP="gre-link-tool"
+    || ! grep -Fqx 'APP="gre-link-tool"' "$tmp"; then
+    warn "Downloaded update failed validation; keeping the current version."
+    rm -f "$tmp"
+    return 0
+  fi
+
+  if [[ ! -f "$INSTALL_PATH" ]] || ! cmp -s "$tmp" "$INSTALL_PATH"; then
+    install -m 755 "$tmp" "$INSTALL_PATH"
+    updated=1
+    ok "Installed the latest version from GitHub to $INSTALL_PATH."
+  fi
+  rm -f "$tmp"
+
+  if (( updated )) || [[ "$self" != "$INSTALL_PATH" ]]; then
+    exec env GRE_LINK_TOOL_SKIP_UPDATE=1 "$INSTALL_PATH" "$@"
+  fi
+}
+
 install_deps() {
   local missing=()
   local command_name
