@@ -5,6 +5,7 @@ ports on each refresh, never adds firewall rules or changes tc. History persists
 for 10 minutes across viewer restarts in the existing V2-owned SQLite DB.
 """
 from collections import defaultdict
+from contextlib import nullcontext
 import json
 import math
 import os
@@ -13,7 +14,7 @@ import sqlite3
 import sys
 import time
 
-from . import accounting, config, sampler, transaction
+from . import accounting, auto_monitor, config, sampler, transaction
 from .errors import PM2Error
 
 WINDOW = 600
@@ -200,29 +201,67 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
 
 
 def render(data, requested, effective, rules):
-    width = max(65, min(shutil.get_terminal_size((90, 28)).columns, 140))
-    print(f"PORT MANAGER 2 | LIVE PORTS | 10m rolling graph | "
-          f"refresh {effective:g}s (requested {requested:g}s) | {rules} rules")
-    print("Last 10 minutes of the rolling 10m average: left=oldest, "
-          "right=latest; UP=outbound, DOWN=inbound; Mbit/s")
+    """Compact colorful V1-style terminal dashboard without extra prompts."""
+    interactive = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+    def c(code, value):
+        return f"\x1b[{code}m{value}\x1b[0m" if interactive else str(value)
+    width = max(72, min(shutil.get_terminal_size((100, 28)).columns, 116))
+    print(c("96;1", "╔" + "═" * (width - 2) + "╗"))
+    title = "  PORT MANAGER  •  LIVE PORTS  •  10-MIN TRAFFIC  "
+    print(c("96;1", "║" + title.center(width - 2)[:width-2] + "║"))
+    print(c("96;1", "╚" + "═" * (width - 2) + "╝"))
+    print(f"  {c('92;1', '● LIVE')}  refresh {effective:g}s"
+          + (f"  {c('93', '(CPU-safe adjusted)')}" if effective != requested else "")
+          + f"  │  {rules} counter rules")
+    links = data.get("interfaces", [])
+    if links:
+        for row in links[:2]:
+            print(f"  {c('96', row['interface'][:14]):14}  "
+                  f"{c('92', '↑')} {row['tx_mbps']:8.1f} Mb/s   "
+                  f"{c('94', '↓')} {row['rx_mbps']:8.1f} Mb/s  "
+                  + c("90", "(whole interface)"))
+    print(c("90", "  " + "─" * (width - 4)))
     if not data["rows"]:
-        print("No port traffic yet. Use --all-ports to show idle configured ports.")
-    for row in data["rows"]:
-        port = str(row["listen_port"]) if row["listen_port"] is not None else "ALL*"
-        avgup = "-" if row["avg10m_up_mbps"] is None else f"{row['avg10m_up_mbps']:.3f}"
-        avgdown = "-" if row["avg10m_down_mbps"] is None else f"{row['avg10m_down_mbps']:.3f}"
-        print(f"\n{row['name'][:18]:18} {row['protocol']:3} :{port:<5} "
-              f"NOW U:{row['now_up_mbps']:.2f} D:{row['now_down_mbps']:.2f} "
-              f"AVG10m U:{avgup} D:{avgdown} "
-              f"[coverage {row['coverage_seconds']:.0f}/600s]")
-        print(f"  U {row['graph_up']}\n  D {row['graph_down']}")
-    if any(x["listen_port"] is None for x in data["rows"]):
-        print("* All-except counts are aggregate, not individual destination ports.")
+        count = data.get("auto_discovered_ports", 0)
+        if count:
+            print(c("93", f"  Detected {count} local TCP/UDP ports; "
+                         "waiting for attributed IPv4 traffic..."))
+        else:
+            print(c("93", "  No per-port counters. Interface traffic above is still real."))
+            print("  Monitor discovers listening TCP/UDP ports automatically.")
+        print(c("90", "  Whole-interface traffic cannot honestly be attributed to a port."))
+    else:
+        for row in data["rows"]:
+            port = str(row["listen_port"]) if row["listen_port"] is not None else "ALL"
+            up = row["now_up_mbps"]
+            down = row["now_down_mbps"]
+            avg_u = row["avg10m_up_mbps"]
+            avg_d = row["avg10m_down_mbps"]
+            name = (str(row["name"])[:16] + " ") if row["name"] else ""
+            print(f"  {c('97;1', row['protocol'].upper() + ':' + port)} "
+                  f"{c('90', name)} "
+                  f"↑ {c('92;1', f'{up:.1f}')}  ↓ {c('94;1', f'{down:.1f}')} Mb/s"
+                  f"  [10m avg ↑ {avg_u:.1f} ↓ {avg_d:.1f}]"
+                  if avg_u is not None and avg_d is not None else
+                  f"  {c('97;1', row['protocol'].upper() + ':' + port)}  "
+                  f"↑ {up:.1f} ↓ {down:.1f} Mb/s (warming up)")
+            print(f"    {c('92', '↑')} {c('92', row['graph_up'])}")
+            print(f"    {c('94', '↓')} {c('94', row['graph_down'])}")
+    print(c("90", "  " + "─" * (width - 4)))
+    print(c("90", "  Graph = 10-minute rolling average  •  Ctrl+C returns to menu"))
+    sys.stdout.flush()
 
 
 def watch(refresh=5, tunnel=None, top=20, active_only=True,
           once=False, json_mode=False):
-    """One reader; CPU-adaptive refresh, bounded SQLite history and no mutations."""
+    """Auto-detect Xray/Sing-box local TCP/UDP ports if no managed rules exist.
+
+    Reuse existing V2/V1 counters as-is. Only if *none* exist, enable up
+    to 24 temporary, counter-only IPv4 rules owned by this viewer. No tc,
+    NAT, ACCEPT or DROP action and no V1 state change. Interface rates are
+    always measured separately from /proc/net/dev for visibility when no
+    port can be attributed.
+    """
     if not 2 <= refresh <= 60 or not 1 <= top <= 100:
         raise PM2Error("E_VALIDATION", "Refresh 2..60 seconds, top 1..100")
     if os.geteuid() != 0:
@@ -236,48 +275,68 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
         t0 = time.monotonic()
         before = accounting.counters(by_port=True, include_v1=True)
         labels = add_v1_labels(labels, before, tunnel)
-        cost = time.monotonic() - t0
-        interval = refresh_interval(refresh, len(before), cost)
-        while True:
-            try:
-                time.sleep(interval)
-                t1 = time.monotonic()
-                after = accounting.counters(by_port=True, include_v1=True)
-                labels = add_v1_labels(labels, after, tunnel)
-                t2 = time.monotonic()
-                elapsed = max(0.001, t2 - t0)
-                effective = refresh_interval(refresh, len(after), t2 - t1)
-                now = time.time()
-                # Use actual monotonic elapsed rather than assuming requested
-                # interval is the effective elapsed time.
-                rates = deltas(before, after, elapsed, labels)
-                record(db, now, elapsed, rates)
-                result = frame(labels, rates, history(db, now, labels),
-                               now, top=top, active_only=active_only)
-                result.update({"requested_refresh_seconds": refresh,
-                               "effective_refresh_seconds": interval,
-                               "rule_count": len(after)})
-                if json_mode:
-                    print(json.dumps(result, sort_keys=True), flush=True)
-                else:
-                    if sys.stdout.isatty() and not once:
-                        print("\x1b[2J\x1b[H", end="")
-                    render(result, refresh, interval, len(after))
-                if once:
-                    return 0
-                before, t0, interval = after, t2, effective
-                # A tunnel may be added/removed while viewing. Refresh the
-                # tiny JSON config at most once per 30 seconds.
-                if "next_reload" not in locals() or now >= next_reload:
-                    cfg = config.load(transaction.CONFIG)
-                    labels = port_labels(cfg["tunnels"])
-                    if tunnel:
-                        labels = {key: v for key, v in labels.items()
-                                  if key[0] == tunnel}
-                    labels = add_v1_labels(labels, after, tunnel)
-                    next_reload = now + 30
-            except KeyboardInterrupt:
-                print("\nGraph stopped. No firewall/tc changes.")
-                return 130
+        # V2 used to show "0 rules" for a busy Debian/Xray host with no
+        # configured tunnel. Explicitly collect local listening ports then.
+        # We do not run ss every N seconds or indiscriminately track 65k ports.
+        use_auto = not labels and tunnel is None
+        monitor = auto_monitor.AutoMonitor() if use_auto else nullcontext()
+        try:
+            with monitor as session:
+                if use_auto:
+                    labels.update({("auto", proto, port): "Local service"
+                                   for proto, port in session.ports})
+                    t0 = time.monotonic()
+                    before = accounting.counters(by_port=True, include_v1=True,
+                                                 include_probe=True)
+                net_before = auto_monitor.interface_counters()
+                sample_cost = time.monotonic() - t0
+                interval = refresh_interval(refresh, len(before), sample_cost)
+                next_reload = time.time() + 30
+                while True:
+                    try:
+                        time.sleep(interval)
+                        t1 = time.monotonic()
+                        after = accounting.counters(by_port=True, include_v1=True,
+                                                    include_probe=use_auto)
+                        net_after = auto_monitor.interface_counters()
+                        labels = add_v1_labels(labels, after, tunnel)
+                        t2 = time.monotonic()
+                        elapsed = max(0.001, t2 - t0)
+                        effective = refresh_interval(refresh, len(after), t2 - t1)
+                        now = time.time()
+                        rates = deltas(before, after, elapsed, labels)
+                        record(db, now, elapsed, rates)
+                        result = frame(labels, rates, history(db, now, labels),
+                                       now, top=top, active_only=active_only)
+                        result["interfaces"] = auto_monitor.interface_rates(
+                            net_before, net_after, elapsed)[:5]
+                        result.update({"requested_refresh_seconds": refresh,
+                                       "effective_refresh_seconds": interval,
+                                       "rule_count": len(after),
+                                       "auto_discovered_ports": len(session.ports) if use_auto else 0,
+                                       "port_coverage": "selected_ipv4_listening_ports"
+                                       if use_auto else "configured_monitor_rules"})
+                        if json_mode:
+                            print(json.dumps(result, sort_keys=True), flush=True)
+                        else:
+                            if sys.stdout.isatty() and not once:
+                                print("\x1b[2J\x1b[H", end="")
+                            render(result, refresh, interval, len(after))
+                        if once:
+                            return 0
+                        before, net_before, t0, interval = after, net_after, t2, effective
+                        if not use_auto and now >= next_reload:
+                            cfg = config.load(transaction.CONFIG)
+                            labels = port_labels(cfg["tunnels"])
+                            if tunnel:
+                                labels = {key: v for key, v in labels.items()
+                                          if key[0] == tunnel}
+                            labels = add_v1_labels(labels, after, tunnel)
+                            next_reload = now + 30
+                    except KeyboardInterrupt:
+                        print("\nLive monitor stopped; owned temporary counters cleaned.")
+                        return 130
+        except BlockingIOError as exc:
+            raise PM2Error("E_LOCKED", "Another live monitor is already running") from exc
     finally:
         db.close()
