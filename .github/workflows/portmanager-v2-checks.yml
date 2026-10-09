@@ -89,6 +89,18 @@ jobs:
           sudo test -f /etc/portmanager2/systemd-owner.json
           sudo portmanager2 --version | grep -Fx '2.0.0-dev.1'
           sudo portmanager2 doctor --json
+          # Failure injection: refuse deletion if an owned unit was tampered.
+          sudo sh -c 'echo "# tampered externally" >> /etc/systemd/system/portmanager2-restore.service'
+          set +e
+          sudo portmanager2 uninstall --yes > "$RUNNER_TEMP/pm2-tamper.out" 2>&1
+          tamper_rc=$?
+          set -e
+          test "$tamper_rc" -eq 5
+          grep -F 'E_CONFLICT' "$RUNNER_TEMP/pm2-tamper.out"
+          sudo test -e /usr/local/bin/portmanager2
+          sudo cp /opt/portmanager2/current/systemd/portmanager2-restore.service /etc/systemd/system/portmanager2-restore.service
+          sudo systemctl daemon-reload
+          # Clean reinstall must be idempotent and repair nothing unowned.
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
           sudo portmanager2 uninstall --dry-run
           sudo portmanager2 uninstall --yes
