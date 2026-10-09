@@ -194,11 +194,12 @@ def _tracked_elsewhere():
     return known
 
 
-def _select_ports():
-    """Include externally DNAT-forwarded ports as well as local listeners.
+def _select_ports(existing_monitored=()):
+    """Track forwarding and listeners with stable selection.
 
-    Forwarded packets need not have a local listening socket at all. This
-    discovers rules read-only; it never adopts or modifies foreign NAT rules.
+    A crowded VPS can have >24 candidate ports. Prioritize the previously
+    monitored ports that still exist instead of re-ranking busy listeners
+    every minute and resetting ALL counters unnecessarily.
     """
     known = _tracked_elsewhere()
     forwarded = []
@@ -215,9 +216,10 @@ def _select_ports():
             item = (proto, port)
             if item not in known and item not in forwarded:
                 forwarded.append(item)
-    # Forwarded ports are prioritized because they are invisible to ss.
     local = auto_monitor.discover(existing=known | set(forwarded))
-    return set((forwarded + local)[:MAX_PORTS])
+    candidates = list(dict.fromkeys(forwarded + local))
+    preferred = [p for p in sorted(existing_monitored) if p in candidates]
+    return set((preferred + [p for p in candidates if p not in preferred])[:MAX_PORTS])
 
 
 def collect(timestamp=None):
@@ -276,7 +278,7 @@ def collect(timestamp=None):
         if rates:
             port_graph.record(db, now, elapsed, rates)
         try:
-            wanted = _select_ports()
+            wanted = _select_ports(current_ports)
         except PM2Error:
             # A transient ss failure cannot reset previously owned counters.
             wanted = current_ports
