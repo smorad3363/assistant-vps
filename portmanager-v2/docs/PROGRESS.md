@@ -43,8 +43,13 @@
   Python compilation, isolated CLI unit tests and ShellCheck.
 - A CI unit assertion originally rejected the harmless `iptables-restore`
   *dependency name* and was corrected to detect execution instead.
-- CI pass must be **re-verified** on the latest commit; previous failure does
-  not mean networking was modified.
+- CI static/unit passed on Python 3.10 and 3.12 at commit
+  `1a70eaaa6d908d2166bb0f22702e02eb1eb051ed`.
+- Installer smoke on a disposable GitHub Ubuntu 24.04 VM caught a real
+  **reinstall bug**: `/var/lib/portmanager2` initially lacked `owner.json`.
+  Fixed in commit `3bb9f501e74b1e8b5e5237e7bacdab4a5779b312`.
+- Re-run GitHub Actions and require clean install, reinstall, dry-run
+  uninstall and confirmed uninstall **all green** on latest HEAD.
 - All actual `iptables`, systemd, reboot, root install/uninstall and V1/V2
   coexistence tests are still **NOT TESTED** on an isolated VM.
 - No phase 2, 3, 4 or 5 network functionality should be described as working.
