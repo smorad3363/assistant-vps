@@ -520,40 +520,69 @@ def _live():
         print("  Refresh must be 2..60 seconds.")
         return
     latest = {}
+    picked = {}
     def capture(frame):
         latest.clear()
         latest.update(frame)
-    print(_paint("90", "  Graph starts now. Ctrl+C opens port selection and limits."))
-    port_graph.watch(refresh=int(refresh), top=24, active_only=False, on_frame=capture)
+    def choose(row, interface):
+        # Store a read-only selection; actual traffic shaping is requested
+        # only after curses/monitor contexts have safely unwound.
+        picked.update({"row": row, "interface": interface})
+    print(_paint("90", "  Arrows choose port; Enter/q set limit; Tab selects NIC; Ctrl+C opens manual selection."))
+    result = port_graph.watch(refresh=int(refresh), top=24, active_only=False,
+                              on_frame=capture, on_select=choose)
     if not latest:
         return
-    items = [r for r in latest["rows"] if r["listen_port"]]
     links = latest.get("interfaces", [])
     default_iface = links[0]["interface"] if links else None
-    print("\n  Select a visible port number to limit, or ALL for the entire interface.")
-    print("  [0] Return without changes")
-    selected = _ask("Port / ALL", "0")
-    if not selected or selected == "0":
+    if picked:
+        row = picked["row"]
+        if row is None:
+            _limit(0, picked["interface"])
+            return
+        selected_port = row.get("listen_port")
+        if not selected_port:
+            print(_paint("93", "  Aggregate row selected. Use g for whole-interface limit."))
+            return
+        selected_interface = picked["interface"]
+    elif result == 0:
+        # Esc returns without changing limits. Ctrl+C retains manual fallback.
         return
-    if selected.upper() == "ALL":
-        _limit(0, default_iface)
-        return
-    if not selected.isdecimal() or not 1 <= int(selected) <= 65535:
-        return
-    selected_port = int(selected)
-    matching = [x for x in items if x["listen_port"] == selected_port]
-    if not matching:
-        print("  Port not in the displayed list; no change made.")
-        return
-    # The tracked traffic may be auto-local, V1, or a V2 tunnel. Use the
-    # actual configured interface for a V2 tunnel where possible.
-    row = matching[0]
-    interface = default_iface
+    else:
+        print("\n  Enter a port shown in Live, or ALL for the entire interface.")
+        print("  [0] Return without changes")
+        selected = _ask("Port / ALL", "0")
+        if not selected or selected == "0":
+            return
+        if selected.upper() == "ALL":
+            if len(links) > 1:
+                print("  Available interfaces: " +
+                      ", ".join(link["interface"] for link in links))
+                interface = _ask("Interface", default_iface)
+                if interface not in [link["interface"] for link in links]:
+                    print("  Interface not found; no limit changed.")
+                    return
+            else:
+                interface = default_iface
+            _limit(0, interface)
+            return
+        if not selected.isdecimal() or not 1 <= int(selected) <= 65535:
+            return
+        selected_port = int(selected)
+        matching = [x for x in latest["rows"] if x["listen_port"] == selected_port]
+        if not matching:
+            print("  Port not in the displayed list; no change made.")
+            return
+        row = matching[0]
+        selected_interface = default_iface
+    # Use the tunnel's explicit interface when known. Auto/V1
+    # counters can span multiple interfaces, so use the UI-selected NIC.
+    interface = selected_interface
     if row["tunnel_id"] not in ("auto", "v1"):
         cfg = config.load(transaction.CONFIG)
-        for t in cfg["tunnels"]:
-            if t["id"] == row["tunnel_id"]:
-                interface = t["interface"]
+        for tunnel in cfg["tunnels"]:
+            if tunnel["id"] == row["tunnel_id"]:
+                interface = tunnel["interface"]
                 break
     proto = row["protocol"] if row["protocol"] in ("tcp", "udp") else "tcp,udp"
     _limit(selected_port, interface, proto)
