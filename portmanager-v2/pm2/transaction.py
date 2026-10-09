@@ -28,6 +28,8 @@ def preflight(candidate, runtime, allow_protected=False):
     validate_collection(candidate["tunnels"])
     if PENDING.exists() or PENDING.is_symlink():
         raise PM2Error("E_CONFLICT", "Incomplete V2 pending transaction; manual recovery required")
+    if not allow_protected and (PENDING.parent / "protected.json").exists():
+        raise PM2Error("E_CONFLICT", "Unconfirmed high-risk change; confirm or rollback first")
     if any(t["enabled"] and t["mode"] == "all-except" for t in candidate["tunnels"]) and not allow_protected:
         raise PM2Error("E_CONFLICT", "All-except requires an armed 120-second rollback watchdog")
     report = discovery.audit(candidate["tunnels"])
