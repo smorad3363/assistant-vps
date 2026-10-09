@@ -237,3 +237,42 @@ jobs:
           sudo ip netns exec pm2relay portmanager2 confirm "$pending"
           sudo ip netns exec pm2relay portmanager2 uninstall --yes
           echo "PASS namespace TCP/UDP SNAT reverse path and own-rule cleanup"
+
+  coexist-v1-v2-ephemeral:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install real V1, preserve fingerprint, install and remove V2
+        env:
+          REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # Runs exclusively on a fresh disposable GitHub VM, not user VPS.
+          sudo bash portmanager-dashboard/install.sh
+          sudo test -s /usr/local/bin/portmanager
+          v1_executable_before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo bash portmanager-v1/install.sh
+          test "$v1_executable_before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo find /etc/portmanager /var/lib/portmanager -type f -exec sha256sum '{}' ';' 2>/dev/null |
+            sort > "$RUNNER_TEMP/v1-files-before" || true
+          sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-before" || true
+          sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-acct-before" || true
+          sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-before"
+          sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
+          sudo portmanager2 doctor --json
+          test "$v1_executable_before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo portmanager2 uninstall --yes
+          sudo test -s /usr/local/bin/portmanager
+          test "$v1_executable_before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo find /etc/portmanager /var/lib/portmanager -type f -exec sha256sum '{}' ';' 2>/dev/null |
+            sort > "$RUNNER_TEMP/v1-files-after" || true
+          sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-after" || true
+          sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-acct-after" || true
+          sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-after"
+          diff -u "$RUNNER_TEMP/v1-files-before" "$RUNNER_TEMP/v1-files-after"
+          diff -u "$RUNNER_TEMP/v1-cron-before" "$RUNNER_TEMP/v1-cron-after"
+          diff -u "$RUNNER_TEMP/v1-acct-before" "$RUNNER_TEMP/v1-acct-after"
+          diff -u "$RUNNER_TEMP/v1-tc-before" "$RUNNER_TEMP/v1-tc-after"
+          echo "PASS real V1 install, alias equivalence and V2 non-interference"
