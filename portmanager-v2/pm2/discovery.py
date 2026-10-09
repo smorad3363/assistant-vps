@@ -32,12 +32,16 @@ def audit(tunnels):
     for name in ("ip", "iptables", "iptables-save", "ss", "sysctl"):
         if not shutil.which(name):
             raise PM2Error("E_DEPENDENCY", f"Missing {name}")
+    # systemctl reflects the *host* manager even inside ip netns exec.
+    # Only its *actual hooks/chains in this network namespace* are relevant.
+    kernel_rules = run(["iptables-save"])
     if shutil.which("systemctl"):
         for service in ("ufw", "firewalld"):
             status = run(["systemctl", "is-active", service],
                          allowed=(0, 1, 3, 4)).strip()
-            if status == "active":
-                raise PM2Error("E_CONFLICT", "External firewall manager active",
+            signature = "ufw-" if service == "ufw" else "firewalld"
+            if status == "active" and signature in kernel_rules.lower():
+                raise PM2Error("E_CONFLICT", "External firewall manager owns active rules",
                                {"service": service})
     raw = json.loads(run(["ip", "-j", "-4", "addr", "show"]))
     interfaces = {}
