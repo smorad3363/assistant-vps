@@ -104,7 +104,9 @@ def doctor():
 
 def status():
     config = read_json(ETC / "config.json")
-    if config is not None and config.get("schema_version") != 1:
+    if config is not None and (
+        not isinstance(config, dict) or config.get("schema_version") != 1
+    ):
         raise PM2Error("E_UNSUPPORTED", "Unrecognized V2 config schema")
     return {
         "version": VERSION,
@@ -113,7 +115,7 @@ def status():
         "tunnels": len(config.get("tunnels", [])) if config else 0,
         "generation": config.get("generation", 0) if config else 0,
         "v1_installed": V1_BIN.exists(),
-        "v1_modified": False,  # design guarantee for phase-1 code paths
+        "v1_integrity_verified": False,  # independent VM/CI validation still required
     }
 
 
@@ -158,6 +160,8 @@ def uninstall(args):
         if input("Type REMOVE-V2 to uninstall: ").strip() != "REMOVE-V2":
             raise PM2Error("E_VALIDATION", "Uninstall cancelled")
     if args.purge:
+        if any(path.is_symlink() for path in (ETC, DATA, LOG)):
+            raise PM2Error("E_CONFLICT", "Refusing to purge a symlinked V2 data path")
         if not sys.stdin.isatty():
             raise PM2Error("E_VALIDATION", "Purge requires an additional interactive confirmation")
         if input("Type PURGE-V2-DATA to delete V2 data: ").strip() != "PURGE-V2-DATA":
