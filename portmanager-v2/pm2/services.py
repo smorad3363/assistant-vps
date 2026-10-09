@@ -153,6 +153,10 @@ def _change(operation: str):
             if not path.is_file() or path.is_symlink():
                 raise PM2Error("E_DEPENDENCY", f"Missing systemd source unit: {name}")
             contents[name] = path.read_bytes()
+    if operation == "install" and old is not None and all(
+        old["units"][name] == digest(contents[name]) for name in UNIT_NAMES
+    ):
+        return {"units": list(UNIT_NAMES), "changed": False, "enabled": False}
     paths = [SYSTEMD / n for n in UNIT_NAMES] + [MARKER]
     snapshots = {path: path.read_bytes() if path.is_file() else None for path in paths}
     try:
