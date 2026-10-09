@@ -48,8 +48,17 @@
 - Installer smoke on a disposable GitHub Ubuntu 24.04 VM caught a real
   **reinstall bug**: `/var/lib/portmanager2` initially lacked `owner.json`.
   Fixed in commit `3bb9f501e74b1e8b5e5237e7bacdab4a5779b312`.
-- Re-run GitHub Actions and require clean install, reinstall, dry-run
-  uninstall and confirmed uninstall **all green** on latest HEAD.
+- **PASSED:** workflow https://github.com/smorad3363/assistant-vps/actions/runs/37932900700
+  on commit `5d013af223b1f0b399bd1c0437bc092224517f43`.
+  Python 3.10 / 3.12 static+unit, Bash parsing, ShellCheck, SHA256 integrity,
+  frozen-V1 diff, and disposable Ubuntu 24.04 VM install/reinstall/dry-run
+  uninstall/uninstall all passed.
+- A CI permission assumption was fixed: after uninstall, root-private V2
+  config remains present (verify with `sudo test -f`, not ordinary user).
+- No V1 installation/coexistence test has run yet. Do **not** count
+  AT-001..AT-007 as fully passed.
+- Phase 1 remaining: systemd lifecycle implementation/testing, V1 alias
+  equivalence test with frozen V1, full coexistence/fingerprint verification.
 - All actual `iptables`, systemd, reboot, root install/uninstall and V1/V2
   coexistence tests are still **NOT TESTED** on an isolated VM.
 - No phase 2, 3, 4 or 5 network functionality should be described as working.
