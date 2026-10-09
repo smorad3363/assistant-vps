@@ -38,6 +38,14 @@ on a disposable VM: [راهنمای آزمون فارسی](docs/OPERATOR-TEST-FA
   possibly shared live `net.ipv4.ip_forward`.
 - Shaping and quotas are intentionally out of scope for V2 2.0; planned for
   2.1 and must not overwrite any existing `tc` qdisc.
+- **Per-port LIVE 10-minute graph:** `portmanager2 graph --refresh 5 --window 10m`
+  (and menu option 04) displays configured V2 and already-monitored V1 ports
+  without modifying V1. It shows current up/down Mbit/s, time-weighted
+  ten-minute means with truthful sample coverage, 24-bucket sparklines,
+  selectable 2..60s refresh and an automatic polling backoff on large
+  accounting tables. Only one read-only iptables-save mangle snapshot is read
+  each refresh; bounded SQLite history survives viewer restarts. See
+  [live graph guide](docs/LIVE-PORT-GRAPH-FA.md).
 - A **read-only scheduled-limit preview** is implemented in
   `pm2/limit_windows.py`, including weekdays, IANA timezone, overnight
   windows, overlap rejection and DST handling. **It does not actually throttle
