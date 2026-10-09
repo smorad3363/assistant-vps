@@ -141,6 +141,92 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIsNone(row)
         self.assertEqual(interface, "ens18")
 
+    def test_limit_column_and_large_detail_graph(self):
+        view = self.make_view()
+        view.window.getmaxyx = lambda: (42, 160)
+        data = sample()
+        data["speed_limits"] = [{
+            "id": "port8080", "port": 8080, "protocol": "tcp",
+            "interface": "eth0", "download_mbps": 20, "upload_mbps": 30,
+            "enabled": True, "scheduled_now": True,
+            "start": "18:00", "end": "02:00",
+            "days": list(range(7)), "timezone": "Asia/Tehran"}]
+        view.draw(data)
+        cells = view.window.writes
+        col = [v for y, x, v in cells if y == 9]
+        self.assertIn("LIMIT / HOURS", col)
+        self.assertIn("TREND", col)
+        self.assertTrue(any("↓20 ↑30 18:00" in v for _, _, v in cells))
+        self.assertTrue(any("SELECTED PORT: TCP:8080" in v for _, _, v in cells))
+        self.assertTrue(any("Asia/Tehran" in v for _, _, v in cells))
+        large = [v for _, _, v in cells if v.startswith("▲ UP    ")]
+        self.assertEqual(len(large), 1)
+        self.assertGreater(len(large[0]), 90)
+        self.assertTrue(any(v.startswith("▼ DOWN  ") for _, _, v in cells))
+
+    def test_highlight_is_cyan_bold_without_background(self):
+        view = self.make_view([FakeCurses.KEY_DOWN, ord("q")])
+        view.draw(sample())
+        view.wait(1)
+        selected = [(y, x, v) for y, x, v in view.window.writes
+                    if v == "TCP:22"]
+        self.assertEqual(len(selected), 1)
+        # The marker tracks selection and the background is never filled.
+        self.assertTrue(any(y == selected[0][0] and v == "▶"
+                            for y, _, v in view.window.writes))
+
+    def test_limits_show_future_and_disabled_distinct_from_current(self):
+        view = self.make_view()
+        data = sample()
+        data["speed_limits"] = [
+            {"id": "future", "port": 8080, "protocol": "tcp",
+             "interface": "eth0", "download_mbps": 20,
+             "upload_mbps": 20, "enabled": True,
+             "scheduled_now": False, "start": "18:00", "end": "02:00",
+             "days": list(range(7)), "timezone": "UTC"},
+            {"id": "off", "port": 22, "protocol": "tcp",
+             "interface": "eth0", "download_mbps": 7,
+             "upload_mbps": 8, "enabled": False,
+             "scheduled_now": False, "start": "00:00", "end": "00:00",
+             "days": list(range(7)), "timezone": "UTC"}]
+        view.draw(data)
+        content = "\n".join(v for _, _, v in view.window.writes)
+        self.assertIn("↓20 ↑20 18:00", content)
+        self.assertIn("↓7 ↑8 OFF", content)
+        self.assertEqual(view._limit_for(data["rows"][0], "ALL")["scheduled_now"], False)
+        self.assertEqual(view._limit_for(data["rows"][1], "ALL")["enabled"], False)
+
+    def test_nic_global_policy_is_not_falsely_attributed_in_all_view(self):
+        view = self.make_view()
+        data = sample()
+        data["speed_limits"] = [
+            {"id": "global", "port": 0, "protocol": "tcp,udp",
+             "interface": "eth0", "download_mbps": 50,
+             "upload_mbps": 50, "enabled": True,
+             "scheduled_now": True, "start": "00:00", "end": "00:00",
+             "days": list(range(7)), "timezone": "UTC"}]
+        view.draw(data)
+        self.assertIsNone(view._limit_for(data["rows"][0], "ALL"))
+        nic_info = view._limit_for(data["rows"][0], "eth0")
+        self.assertIn("NIC", nic_info["compact"])
+        self.assertTrue(nic_info["scheduled_now"])
+
+    def test_graph_scaling_preserves_missing_history(self):
+        trend = live_screen.LiveScreen._large_trend("  ▁▃█", 50)
+        self.assertEqual(len(trend), 50)
+        self.assertTrue(trend.startswith("    "))
+        self.assertTrue(trend.endswith("████"))
+        self.assertEqual(live_screen.LiveScreen._large_trend("", 10), "──────────")
+
+    def test_small_terminal_still_keeps_port_rows_and_limits(self):
+        view = self.make_view()
+        view.window.getmaxyx = lambda: (19, 82)
+        data = sample()
+        view.draw(data)
+        content = "\n".join(v for _, _, v in view.window.writes)
+        self.assertIn("TCP:8080", content)
+        self.assertIn("LIMIT / HOURS", content)
+
     def test_escape_exits_without_setting_limit(self):
         screen = self.make_view([27])
         screen.draw(sample())
