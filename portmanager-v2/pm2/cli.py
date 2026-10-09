@@ -18,7 +18,8 @@ import uuid
 
 from . import VERSION
 from .errors import PM2Error
-from . import services, tunnels, sampler, persistence, bandwidth, dashboard
+from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
+from . import config as safe_config
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -181,8 +182,22 @@ def uninstall(args):
         paths.append(str(services.MARKER))
     if args.purge:
         paths += [str(ETC), str(DATA), str(LOG)]
+    runtime_file = DATA / "state.json"
+    if runtime_file.exists() or runtime_file.is_symlink():
+        runtime = read_json(runtime_file)
+        if not isinstance(runtime, dict):
+            raise PM2Error("E_CONFLICT", "Unrecognized V2 firewall state")
+        owned = runtime.get("firewall", {})
+        firewall.check_inventory(firewall.snapshot(), owned)
+    elif (ETC / "config.json").exists():
+        raise PM2Error("E_CONFLICT", "Missing V2 firewall inventory; uninstall blocked")
+    else:
+        runtime, owned = None, {}
     if args.dry_run:
-        return {"would_remove": paths, "v1_untouched": True}
+        return {"would_remove": paths,
+                "would_remove_owned_chains": [chain for table, chain in firewall.ORDER
+                                             if chain in owned.get(table, {})],
+                "v1_untouched": True}
     if not args.yes:
         if not sys.stdin.isatty():
             raise PM2Error("E_VALIDATION", "Interactive confirmation required or pass --yes")
@@ -195,8 +210,25 @@ def uninstall(args):
             raise PM2Error("E_VALIDATION", "Purge requires an additional interactive confirmation")
         if input("Type PURGE-V2-DATA to delete V2 data: ").strip() != "PURGE-V2-DATA":
             raise PM2Error("E_VALIDATION", "Purge cancelled")
-    # Stop before touching the launcher if a unit was modified or enabled.
-    services.remove()
+    # Remove owned firewall rules *before* deleting the executable. Fail closed.
+    new_inventory = owned
+    if any(owned.get(table) for table in firewall.CHAINS):
+        new_inventory = firewall.reconcile(
+            {chain: [] for _, chain in firewall.ORDER}, owned)
+    try:
+        services.remove()
+    except PM2Error:
+        if new_inventory != owned:
+            try:
+                firewall.reconcile(
+                    {chain: list(owned.get(table, {}).get(chain, []))
+                     for table, chain in firewall.ORDER}, new_inventory)
+            except PM2Error as exc:
+                raise PM2Error("E_ROLLBACK", "Cannot restore V2-owned rules after unit error") from exc
+        raise
+    if runtime is not None and new_inventory != owned:
+        retained = dict(runtime, firewall=new_inventory, applied_generation=-1)
+        safe_config.atomic_json(runtime_file, retained)
     if BIN.is_symlink():
         BIN.unlink()
     shutil.rmtree(OPT)
