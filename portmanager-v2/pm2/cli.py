@@ -106,6 +106,13 @@ def doctor():
     config = read_json(ETC / "config.json")
     state = read_json(DATA / "state.json")
     owner = read_json(ETC / "owner.json")
+    try:
+        units = services.preflight()
+        unit_state = "installed_disabled" if units else "not_installed"
+        unit_error = None
+    except PM2Error as exc:
+        unit_state = "conflict"
+        unit_error = exc.message
     return {
         "development": True,
         "v1_installed": V1_BIN.exists(),
@@ -119,7 +126,8 @@ def doctor():
         "iptables_ownership": "not_implemented",
         "qdisc_ownership": "not_implemented",
         "cron_v1": "not_checked",
-        "systemd_units": "not_installed",
+        "systemd_units": unit_state,
+        "systemd_conflict": unit_error,
         "ip_forward": "not_checked",
         "drift": "not_checked",
     }
