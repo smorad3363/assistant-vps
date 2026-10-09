@@ -212,6 +212,12 @@ def uninstall(args):
         paths += [str(services.SYSTEMD / name) for name in services.UNIT_NAMES]
         paths.append(str(services.MARKER))
     if args.purge:
+        # A user asking to remove V2 must not unknowingly destroy their only
+        # archived V1 recovery binary/cron. Keep the archive unless it was
+        # separately restored or manually and intentionally backed up.
+        legacy = DATA / "legacy-v1" / "archive.json"
+        if legacy.exists() or legacy.is_symlink():
+            raise PM2Error("E_CONFLICT", "V1 rollback archive exists; refusing V2 purge. Use uninstall --yes without --purge.")
         paths += [str(ETC), str(DATA), str(LOG)]
     runtime_file = DATA / "state.json"
     if runtime_file.exists() or runtime_file.is_symlink():
