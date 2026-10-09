@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Alias to the original, unchanged Port Manager V1 installer.
 set -Eeuo pipefail
-ORIGINAL="https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-v1/legacy-install.sh"
+REF="${PORTMANAGER_INSTALL_REF:-master}"
+[[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo 'Invalid source ref' >&2; exit 1; }
+ORIGINAL="https://raw.githubusercontent.com/smorad3363/assistant-vps/$REF/portmanager-v1/legacy-install.sh"
 if [[ $(id -u) -ne 0 ]]; then
   printf 'ERROR: run with sudo/root, just like the original V1 installer.\n' >&2
   exit 1
