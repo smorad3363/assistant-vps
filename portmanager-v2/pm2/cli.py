@@ -21,7 +21,7 @@ from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
-from . import backup, guard, logbook, live, forwarding, limit_windows, port_graph
+from . import backup, guard, logbook, live, forwarding, limit_windows, port_graph, shaping
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -220,6 +220,9 @@ def uninstall(args):
         raise PM2Error("E_CONFLICT", "Missing V2 firewall inventory; uninstall blocked")
     else:
         runtime, owned = None, {}
+    shaper_state = shaping.state_load()
+    if shaper_state["interfaces"]:
+        paths.append("V2-owned tc clsact on: " + ",".join(shaper_state["interfaces"]))
     if args.dry_run:
         return {"would_remove": paths,
                 "would_remove_owned_chains": [chain for table, chain in firewall.ORDER
@@ -237,6 +240,9 @@ def uninstall(args):
             raise PM2Error("E_VALIDATION", "Purge requires an additional interactive confirmation")
         if input("Type PURGE-V2-DATA to delete V2 data: ").strip() != "PURGE-V2-DATA":
             raise PM2Error("E_VALIDATION", "Purge cancelled")
+    # Remove exact V2-owned police filters before deleting V2's executable.
+    # Unknown / drifted clsact state aborts; never flush foreign qdiscs.
+    shaping.remove_owned()
     # Remove owned firewall rules *before* deleting the executable. Fail closed.
     new_inventory = owned
     if any(owned.get(table) for table in firewall.CHAINS):
@@ -339,7 +345,36 @@ def main(argv=None):
             response(True, "OK", "Tunnel operation complete", details, json_mode)
         elif args.command == "limits":
             if args.operation == "list":
-                response(True, "OK", "Bandwidth changes are unavailable in 2.0", limit_list(), json_mode)
+                saved = shaping.schedule_load()
+                state = shaping.state_load()
+                response(True, "OK", "Managed clsact bandwidth policies", {
+                    "supported": True, "policies": saved["policies"],
+                    "active_filters": len(state["filters"]),
+                    "limitations": "No V1 or foreign clsact coexistence; disabled without systemd sampler"
+                }, json_mode)
+            elif args.operation == "schedule-list":
+                saved = shaping.schedule_load()
+                state = shaping.state_load()
+                response(True, "OK", "Scheduled per-port limits", {
+                    "policies": saved["policies"], "active_filters": state["filters"]
+                }, json_mode)
+            elif args.operation == "schedule-install":
+                lp = argparse.ArgumentParser(prog="portmanager2 limits schedule-install")
+                lp.add_argument("--file", required=True)
+                lp.add_argument("--json", action="store_true")
+                opts = lp.parse_args(args.args)
+                with mutation_lock():
+                    details = shaping.install_schedule(opts.file)
+                    result = shaping.reconcile()
+                    if details["saved"]:
+                        services.activate()
+                    details.update(result)
+                response(True, "OK", "Schedule installed and minute reconciliation activated", details, json_mode or opts.json)
+            elif args.operation == "schedule-apply":
+                with mutation_lock():
+                    details = shaping.reconcile()
+                response(True, "OK", "Scheduled port limits reconciled", details, json_mode)
+
             elif args.operation == "schedule-preview":
                 lp = argparse.ArgumentParser(prog="portmanager2 limits schedule-preview")
                 lp.add_argument("--file", required=True)
@@ -349,7 +384,7 @@ def main(argv=None):
                 preview = limit_windows.preview_json_file(opts.file, opts.at)
                 response(True, "OK", "Read-only 2.1 schedule preview; no shaping applied",
                          preview, json_mode or opts.json)
-            elif args.operation in ("set", "remove", "schedule-add", "schedule-remove", "schedule-apply"):
+            elif args.operation in ("set", "remove", "schedule-add", "schedule-remove"):
                 bandwidth.mutation()
             else:
                 raise PM2Error("E_VALIDATION", "Unknown limits command")
@@ -368,11 +403,13 @@ def main(argv=None):
         elif args.command == "sample":
             with mutation_lock():
                 payload = sampler.sample()
+                payload["shaping"] = shaping.reconcile()
             logbook.record("TRAFFIC_SAMPLED")
             response(True, "OK", "Traffic counters sampled", payload, json_mode)
         elif args.command == "restore":
             with mutation_lock():
                 payload = persistence.restore()
+                payload["shaping"] = shaping.reconcile(allow_kernel_reset=True)
             response(True, "OK", "V2-owned rules reconciled after reboot", payload, json_mode)
         elif args.command == "backup":
             argv = args.args or []
