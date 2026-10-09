@@ -17,7 +17,7 @@ CHAINS = {"down": ("PREROUTING", "PM2_HIST_RX", "ORIGINAL"),
           "up": ("POSTROUTING", "PM2_HIST_TX", "REPLY")}
 HOOK = "pm2hist:hook"
 LABEL = re.compile(r"^pm2hist:(tcp|udp):([1-9][0-9]{0,4}):(up|down)$")
-MAX_PORTS = auto_monitor.MAX_PORTS
+MAX_PORTS = 64  # Persistent accountant covers more ports than temporary Live probes
 
 
 def _rule_ports(line, chain, direction):
@@ -216,7 +216,7 @@ def _select_ports(existing_monitored=()):
             item = (proto, port)
             if item not in known and item not in forwarded:
                 forwarded.append(item)
-    local = auto_monitor.discover(existing=known | set(forwarded))
+    local = auto_monitor.discover(existing=known | set(forwarded), limit=MAX_PORTS)
     # Discover() intentionally returns only its busiest 24 candidates. Do
     # not evict a quieter previously monitored listener merely because it
     # now ranks 25th, which would reset every persistent counter chain.
