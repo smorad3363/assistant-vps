@@ -145,7 +145,7 @@ def history(db, timestamp, labels):
         "SELECT sample_end,tunnel_id,protocol,listen_port,duration_seconds,"
         "up_mbps,down_mbps FROM port_live_samples "
         "WHERE sample_end >= ? AND sample_end <= ? ORDER BY sample_end",
-        (timestamp - WINDOW - 60, timestamp)):
+        (timestamp - WINDOW, timestamp)):
         key = (tid, proto, port)
         if key in labels:
             series[key].append((end, duration, up, down))
