@@ -21,7 +21,7 @@ from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
-from . import backup, guard
+from . import backup, guard, logbook, live
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -273,7 +273,12 @@ def parser():
     report = sub.add_parser("report")
     report.add_argument("--window", choices=("1h", "24h", "7d"), required=True)
     report.add_argument("--json", action="store_true")
-    for name in ("live", "sample", "restore", "backup", "logs", "confirm", "rollback-pending"):
+    live_parser = sub.add_parser("live")
+    live_parser.add_argument("--interval", type=int, default=1)
+    live_parser.add_argument("--tunnel")
+    logs_parser = sub.add_parser("logs")
+    logs_parser.add_argument("--lines", type=int, default=100)
+    for name in ("sample", "restore", "backup", "confirm", "rollback-pending"):
         cmd = sub.add_parser(name)
         cmd.add_argument("args", nargs=argparse.REMAINDER)
     return p
@@ -298,6 +303,8 @@ def main(argv=None):
             response(True, "OK", "Development bootstrap status", status(), json_mode)
         elif args.command == "tunnel":
             details = tunnels.handle(args.operation, args.args, mutation_lock)
+            if args.operation in ("create", "update", "enable", "disable", "delete", "apply") and not details.get("dry_run"):
+                logbook.record("TUNNEL_" + args.operation.upper(), generation=details.get("generation"))
             response(True, "OK", "Tunnel operation complete", details, json_mode)
         elif args.command == "limits":
             if args.operation == "list":
@@ -321,6 +328,7 @@ def main(argv=None):
         elif args.command == "sample":
             with mutation_lock():
                 payload = sampler.sample()
+            logbook.record("TRAFFIC_SAMPLED")
             response(True, "OK", "Traffic counters sampled", payload, json_mode)
         elif args.command == "restore":
             with mutation_lock():
@@ -344,6 +352,11 @@ def main(argv=None):
         elif args.command == "report":
             payload = sampler.report(args.window)
             response(True, "OK", "Traffic report", payload, json_mode)
+        elif args.command == "live":
+            return live.watch(args.interval, args.tunnel, None if sys.stdout.isatty() else 2)
+        elif args.command == "logs":
+            for line in logbook.tail(args.lines):
+                print(line)
         elif args.command == "uninstall":
             if args.dry_run:
                 details = uninstall(args)
