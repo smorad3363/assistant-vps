@@ -128,11 +128,17 @@ def _expected_hook(builtin, chain):
 
 def _valid_counter(line, chain, direction):
     args = shlex.split(line)
-    if len(args) != 13 or args[:2] != ["-A", chain]:
+    if len(args) != 14 or args[:2] != ["-A", chain]:
         return False
     # Netfilter canonical order may differ between nft and legacy backends;
     # enforce *all* non-dynamic semantics and forbid any packet target.
     if "-j" in args or "-g" in args or "--dport" in args:
+        return False
+    # Exact rule signature avoids ever deleting unrelated service rules.
+    if args[2:6] not in (["-p", "tcp", "-m", "conntrack"],
+                         ["-p", "udp", "-m", "conntrack"]):
+        return False
+    if args[6] != "--ctdir" or args[8] != "--ctorigdstport" or args[10:13] != ["-m", "comment", "--comment"]:
         return False
     try:
         proto = args[args.index("-p") + 1]
