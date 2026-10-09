@@ -21,7 +21,7 @@ from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
-from . import backup, guard, logbook, live, forwarding, limit_windows, port_graph, shaping
+from . import backup, guard, logbook, live, forwarding, limit_windows, port_graph, shaping, history_collector
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -420,6 +420,7 @@ def main(argv=None):
             with mutation_lock():
                 payload = sampler.sample()
                 payload["shaping"] = shaping.reconcile()
+                payload["port_history"] = history_collector.collect()
             logbook.record("TRAFFIC_SAMPLED")
             response(True, "OK", "Traffic counters sampled", payload, json_mode)
         elif args.command == "restore":
