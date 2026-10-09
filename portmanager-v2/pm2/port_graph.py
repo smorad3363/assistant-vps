@@ -337,8 +337,19 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
         # V2 used to show "0 rules" for a busy Debian/Xray host with no
         # configured tunnel. Explicitly collect local listening ports then.
         # We do not run ss every N seconds or indiscriminately track 65k ports.
-        use_auto = not labels and tunnel is None
-        monitor = auto_monitor.AutoMonitor() if use_auto else nullcontext()
+        # Always discover currently unmonitored local services, even when
+        # another V1/V2 tunnel already has its own accounting chain.
+        # Otherwise one configured idle port could hide a busy Xray listener.
+        use_auto = tunnel is None
+        known = set()
+        for _tid, protocol, port in labels:
+            if not port:
+                continue
+            if protocol == "all":
+                known.update((("tcp", port), ("udp", port)))
+            else:
+                known.add((protocol, port))
+        monitor = auto_monitor.AutoMonitor(existing=known) if use_auto else nullcontext()
         try:
             with monitor as session:
                 if use_auto:
