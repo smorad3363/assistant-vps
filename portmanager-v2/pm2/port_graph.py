@@ -16,6 +16,7 @@ import time
 
 from . import accounting, auto_monitor, config, sampler, transaction
 from .errors import PM2Error
+from .live_screen import LiveScreen
 
 WINDOW = 600
 # A 10-minute history OF the trailing 10-minute moving average needs
@@ -351,7 +352,11 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                 known.add((protocol, port))
         monitor = auto_monitor.AutoMonitor(existing=known) if use_auto else nullcontext()
         try:
-            with monitor as session:
+            # curses gives an actual fixed screen; stdout/JSON remain
+            # machine-readable and never leak terminal control characters.
+            interactive = not once and not json_mode
+            view = LiveScreen(refresh) if interactive else nullcontext()
+            with monitor as session, view as screen:
                 if use_auto and session.ports:
                     labels.update({("auto", proto, port): "Local service"
                                    for proto, port in session.ports})
@@ -364,7 +369,13 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                 next_reload = time.time() + 30
                 while True:
                     try:
-                        time.sleep(interval)
+                        if screen is not None:
+                            action = screen.wait(interval)
+                            refresh = screen.requested
+                            if action == "quit":
+                                return 130
+                        else:
+                            time.sleep(interval)
                         t1 = time.monotonic()
                         after = accounting.counters(by_port=True, include_v1=True,
                                                     include_probe=use_auto)
@@ -390,9 +401,9 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                             on_frame(result)
                         if json_mode:
                             print(json.dumps(result, sort_keys=True), flush=True)
+                        elif screen is not None:
+                            screen.draw(result, effective=interval)
                         else:
-                            if sys.stdout.isatty() and not once:
-                                print("\x1b[2J\x1b[H", end="")
                             render(result, refresh, interval, len(after))
                         if once:
                             return 0
@@ -406,7 +417,8 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                             labels = add_v1_labels(labels, after, tunnel)
                             next_reload = now + 30
                     except KeyboardInterrupt:
-                        print("\nLive monitor stopped; owned temporary counters cleaned.")
+                        # The curses context restores the old menu/shell
+                        # without leaving repeated frames in terminal scrollback.
                         return 130
         except BlockingIOError as exc:
             raise PM2Error("E_LOCKED", "Another live monitor is already running") from exc

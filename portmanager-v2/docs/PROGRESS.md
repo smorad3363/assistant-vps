@@ -1,5 +1,28 @@
 # Port Manager V2 — checkpoint for any AI contributor
 
+## 2026-10-09 — Real fixed-screen TUI fix (PR #4)
+
+User's real Debian live excerpt has repeated 24-port full tables while the
+numbers change 496 -> 597 Mb/s (interface) and 159 -> 222 Mb/s (port 8080).
+So the underlying sampling updates: failure was console presentation,
+not a frozen rate calculation. Their requirement is one professional
+fullscreen display similar to btop, not repeated ANSI print output.
+
+Implementation on `fix/pm2-curses-real-time-dashboard`:
+- `pm2/live_screen.py`: stdlib curses alternate-screen display, fixed
+  row repaint, automatic terminal resize, colored concise per-port averages,
+  active ports only by default, `a` idle toggle, `q`/Esc/Ctrl+C return to
+  port selection, +/- refresh, arrow scrolling.
+- `pm2/port_graph.py`: interactive loop delegates delay/keyboard/draw to
+  LiveScreen, so no repeated print blocks; JSON/once mode stays unchanged.
+- PTY integration regression validates actual alt-screen enter/exit and
+  restoration of shell; mocked tests validate fixed repaint and controls.
+- Previous network tests preserved: auto-detected per-port Xray/ss traffic,
+  Debian, Ubuntu netns, no global firewall flush, tc matchall constraints.
+- DO NOT merge unless exact final SHA full GitHub CI is green, including
+  `test_live_pty`, Ubuntu TCP/UDP namespace and 120s watchdog.
+
+
 ## 2026-10-09 — Debian zero-counter regression and minimal TUI (PR #3)
 
 A Debian VPS showed `0 rules` in graph despite substantial interface
