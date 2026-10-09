@@ -352,7 +352,7 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
         monitor = auto_monitor.AutoMonitor(existing=known) if use_auto else nullcontext()
         try:
             with monitor as session:
-                if use_auto:
+                if use_auto and session.ports:
                     labels.update({("auto", proto, port): "Local service"
                                    for proto, port in session.ports})
                     t0 = time.monotonic()
