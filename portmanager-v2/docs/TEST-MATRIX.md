@@ -8,13 +8,13 @@ disposable Ubuntu 24.04 VM; **it is not a full V1+V2 deployed VPS**.
 
 | Gate / IDs | Current result | Evidence required |
 | --- | --- | --- |
-| Gate A — V1 directory frozen, Bash, Python, ShellCheck, SHA256 | PASS at previous HEAD; recheck latest | GitHub workflow |
-| Gate B — Phase-1 CLI and service ownership tests | Pending latest CI | unittest job for 3.10 and 3.12 |
+| Gate A — V1 frozen, Bash/Python/ShellCheck/SHA256 | PASS at SHA 6782c771 | GitHub run 37935515165 |
+| Gate B — Phase-1 CLI and service ownership tests | PASS (19 tests per Python) at SHA 6782c771 | GitHub run 37935515165 |
 | AT-001 actual install V1 via original URL | NOT TESTED | VM original installer |
 | AT-002 V1 alias identical result | PARTIAL | delegated URL/exit mocked only |
-| AT-003 V2-only install/version | Previously PASS; recheck latest | isolated VM |
+| AT-003 V2-only install/version | PASS for Ubuntu 24.04 bootstrap | run 37935515165 |
 | AT-004 V1 present then V2 install, fingerprint | NOT TESTED | dedicated sandbox VM |
-| AT-005 V2 repeated install no duplicate | Previously PASS; recheck latest | isolated VM |
+| AT-005 V2 repeated install no duplicate | PASS for disabled phase-1 systemd units | run 37935515165 |
 | AT-006 V2 uninstall while V1 installed | NOT TESTED | dedicated sandbox VM |
 | AT-007 V2 purge while V1 installed | NOT TESTED | VM manual confirm + fingerprint |
 | AT-022 dry-run no mutation, all mutators | PARTIAL | no NAT mutators implemented |
@@ -31,4 +31,7 @@ New Phase-1 regression checks:
 - Mocked unit lifecycle: new install, idempotent install, modified/foreign/
   symlinked/masked/active units block deletion; failed daemon-reload rolls back.
 - Installer and CLI uninstall share an exclusive nonblocking mutation lock.
+- An additional VM failure-injection check attempts to uninstall after unit
+  tampering, requires `E_CONFLICT`, then restores the V2-owned unit.
+  Check the latest CI before considering this check PASS.
 - Before/after `iptables-save` and `tc qdisc show` equality on ephemeral runner.
