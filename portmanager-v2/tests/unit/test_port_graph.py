@@ -83,6 +83,17 @@ COMMIT
         self.assertIn(" ", graph)
         self.assertTrue(graph.endswith("▇") or graph.endswith("█"))
 
+    def test_sparkline_is_of_rolling_ten_minute_means(self):
+        # At t=1000 the mean includes 10-minute tail; earlier points show
+        # a different mean, which distinguishes a moving-average graph from
+        # a chart of raw 25-second instant rates.
+        points = [(400, 100, 2.0, 4.0), (650, 100, 2.0, 4.0),
+                  (900, 100, 20.0, 40.0), (1000, 100, 20.0, 40.0)]
+        trace = port_graph.sparkline(points, 1000, "up", buckets=12)
+        self.assertEqual(len(trace), 12)
+        self.assertNotEqual(trace[0], trace[-1])
+        self.assertNotEqual(trace[-1], " ")
+
     def test_zero_ports_hidden_unless_all(self):
         labels = {(TID, "tcp", 443): "up",
                   (TID, "udp", 2053): "idle"}
@@ -115,10 +126,10 @@ COMMIT
                 db = sampler.connect()
                 key = (TID, "tcp", 443)
                 port_graph.record(db, 100, 2, {key: {"up": 1, "down": 3}})
-                port_graph.record(db, 720, 2, {key: {"up": 4, "down": 6}})
+                port_graph.record(db, 2500, 2, {key: {"up": 4, "down": 6}})
                 db.close()
                 reopened = sampler.connect()
-                series = port_graph.history(reopened, 720, {key: "edge"})
+                series = port_graph.history(reopened, 2500, {key: "edge"})
                 self.assertEqual(len(series[key]), 1)
                 self.assertAlmostEqual(series[key][0][2], 4)
                 reopened.close()
