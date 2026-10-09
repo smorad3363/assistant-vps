@@ -36,6 +36,24 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 - The same cyan-bordered compact menu cards are used for Home, IPtables
   and Configuration.
 
+## Live graphs, speed limits and selection
+
+The wide Live view shows `LIMIT / HOURS` beside each monitored port, based
+on saved policies and their current local-time schedule windows. Enabled
+policies outside their window show their planned times; disabled policies
+show `OFF`. This is **configured policy and scheduled-window status**,
+not proof that a `tc` kernel filter is currently installed. On a specific
+NIC the view also labels a network-wide limit; the `ALL` overview does not
+falsely attribute that NIC's global cap to every port.
+
+The selected port has a large, full-width upload and download 10-minute
+trend, derived from the same measured history without inventing missing
+samples. Small terminal sizes prioritize the port table and show detail only
+when space allows. Selection is marked by a cyan arrow and bold text,
+**without colored text backgrounds**, including in ordinary menus.
+Only Live presentation and read-only policy lookup are changed here;
+saving or removing a limit still requires the separate, confirmed wizard.
+
 ## Persistent per-port history (10m / 1h / 8h / 24h)
 
 When the installer is run with `PORTMANAGER2_ENABLE_SERVICES=1`, it
