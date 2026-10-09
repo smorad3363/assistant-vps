@@ -75,7 +75,18 @@ jobs:
           else
             v1_before="ABSENT"
           fi
+          sudo iptables-save > "$RUNNER_TEMP/pm2-iptables-before.rules"
+          sudo tc qdisc show > "$RUNNER_TEMP/pm2-qdisc-before.txt"
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
+          for name in portmanager2-restore.service portmanager2-sample.service portmanager2-sample.timer; do
+            sudo test -f "/etc/systemd/system/$name"
+            state="$(systemctl is-enabled "$name" 2>/dev/null || true)"
+            case "$state" in
+              disabled|static) ;;
+              *) echo "Unexpected enabled V2 unit: $name ($state)" >&2; exit 1 ;;
+            esac
+          done
+          sudo test -f /etc/portmanager2/systemd-owner.json
           sudo portmanager2 --version | grep -Fx '2.0.0-dev.1'
           sudo portmanager2 doctor --json
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
@@ -83,6 +94,14 @@ jobs:
           sudo portmanager2 uninstall --yes
           test ! -e /usr/local/bin/portmanager2
           test ! -L /usr/local/bin/portmanager2
+          for name in portmanager2-restore.service portmanager2-sample.service portmanager2-sample.timer; do
+            sudo test ! -e "/etc/systemd/system/$name"
+          done
+          sudo test ! -f /etc/portmanager2/systemd-owner.json
+          sudo iptables-save > "$RUNNER_TEMP/pm2-iptables-after.rules"
+          sudo tc qdisc show > "$RUNNER_TEMP/pm2-qdisc-after.txt"
+          diff -u "$RUNNER_TEMP/pm2-iptables-before.rules" "$RUNNER_TEMP/pm2-iptables-after.rules"
+          diff -u "$RUNNER_TEMP/pm2-qdisc-before.txt" "$RUNNER_TEMP/pm2-qdisc-after.txt"
           sudo test -f /etc/portmanager2/config.json
           sudo test -f /var/lib/portmanager2/state.json
           # V2 sensitive directories intentionally deny access to normal users.
@@ -94,3 +113,37 @@ jobs:
             test "$v1_before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           fi
           echo "V2 bootstrap install/reinstall/uninstall checks PASS"
+
+  v1-alias-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify V1 wrapper delegates the original URL and propagates failures
+        run: |
+          # Stub only curl: never run the original V1 installer on the CI host.
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          cat > "$tmp/curl" <<'SH'
+          #!/usr/bin/env bash
+          printf '%s\\n' "$@" > "${PM2_TEST_DIR}/curl-args"
+          out=""
+          while [ "$#" -gt 0 ]; do
+            if [ "$1" = "-o" ]; then
+              shift
+              out="$1"
+            fi
+            shift
+          done
+          test -n "$out" || exit 88
+          printf '#!/usr/bin/env bash\\necho TEST-V1-ALIAS\\nexit 37\\n' > "$out"
+          SH
+          chmod +x "$tmp/curl"
+          set +e
+          sudo env PM2_TEST_DIR="$tmp" PATH="$tmp:$PATH" bash portmanager-v1/install.sh >"$tmp/out" 2>&1
+          code=$?
+          set -e
+          test "$code" -eq 37
+          grep -Fx 'TEST-V1-ALIAS' "$tmp/out"
+          grep -Fx 'https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh' "$tmp/curl-args"
+          test ! -e /usr/local/bin/portmanager2
+          echo 'V1 alias contract PASS; full V1 coexistence still NOT TESTED'
