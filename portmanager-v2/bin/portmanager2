@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Minimal launcher. It never touches V1 or network kernel resources.
+set -euo pipefail
+HERE="$(cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd -P)"
+PM2_ROOT="$(cd -- "$HERE/.." && pwd -P)"
+export PYTHONPATH="$PM2_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m pm2.cli "$@"
