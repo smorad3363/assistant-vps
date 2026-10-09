@@ -103,7 +103,7 @@ class AutoMonitorTests(unittest.TestCase):
         def simulate(**kwargs):
             kwargs["on_frame"](fakeframe)
             return 130
-        with (mock.patch.object(simple_ui, "_ask", side_effect=["5", "ALL"]),
+        with (mock.patch.object(simple_ui, "_ask", side_effect=["ALL"]),
               mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulate),
               mock.patch.object(simple_ui, "_limit") as limits,
               mock.patch.object(simple_ui, "_title")):
@@ -119,7 +119,7 @@ class AutoMonitorTests(unittest.TestCase):
         def simulate(**kwargs):
             kwargs["on_frame"](fakeframe)
             return 130
-        with (mock.patch.object(simple_ui, "_ask", side_effect=["5", "2053"]),
+        with (mock.patch.object(simple_ui, "_ask", side_effect=["2053"]),
               mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulate),
               mock.patch.object(simple_ui, "_limit") as limits,
               mock.patch.object(simple_ui, "_title")):
@@ -137,13 +137,13 @@ class AutoMonitorTests(unittest.TestCase):
             kwargs["on_frame"](frame)
             kwargs["on_select"](frame["rows"][0], "wgcf")
             return 0
-        with (mock.patch.object(simple_ui, "_ask", return_value="5") as asked,
+        with (mock.patch.object(simple_ui, "_ask") as asked,
               mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulate),
               mock.patch.object(simple_ui, "_limit") as limits,
               mock.patch.object(simple_ui, "_title")):
             simple_ui._live()
         limits.assert_called_once_with(2053, "wgcf", "udp")
-        asked.assert_called_once()
+        asked.assert_not_called()
 
     def test_live_g_sets_entire_selected_interface_limit(self):
         frame = {"rows": [], "interfaces": [
@@ -153,7 +153,7 @@ class AutoMonitorTests(unittest.TestCase):
             kwargs["on_frame"](frame)
             kwargs["on_select"](None, "wgcf")
             return 0
-        with (mock.patch.object(simple_ui, "_ask", return_value="5"),
+        with (mock.patch.object(simple_ui, "_ask"),
               mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulate),
               mock.patch.object(simple_ui, "_limit") as limits,
               mock.patch.object(simple_ui, "_title")):
