@@ -522,3 +522,52 @@ jobs:
           assert "clsact" not in q,q
           print("PASS timed per-port TCP/UDP upload/download clsact police lifecycle")
           PY
+
+  autodetect-ports-debian-style-netns:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Live local service port traffic must appear without any V2 tunnel
+        env:
+          PYTHONPATH: portmanager-v2
+        run: |
+          set -euxo pipefail
+          sudo ip netns add pm2server
+          sudo ip netns add pm2client
+          cleanup() {
+            sudo ip netns pids pm2server | xargs -r sudo kill || true
+            sudo ip netns del pm2client 2>/dev/null || true
+            sudo ip netns del pm2server 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          sudo ip link add pm2v0 type veth peer name pm2v1
+          sudo ip link set pm2v0 netns pm2server
+          sudo ip link set pm2v1 netns pm2client
+          sudo ip -n pm2server addr add 10.205.0.1/24 dev pm2v0
+          sudo ip -n pm2client addr add 10.205.0.2/24 dev pm2v1
+          sudo ip -n pm2server link set pm2v0 up
+          sudo ip -n pm2client link set pm2v1 up
+          sudo ip -n pm2server link set lo up
+          sudo ip -n pm2client link set lo up
+          sudo ip netns exec pm2server python3 -m http.server 18443 --bind 10.205.0.1 > "$RUNNER_TEMP/autoserver.log" 2>&1 &
+          sleep 2
+          sudo env PYTHONPATH="$PYTHONPATH" ip netns exec pm2server python3 - <<'PY'
+          from pm2 import auto_monitor as am, accounting
+          import subprocess
+          with am.AutoMonitor() as monitor:
+              assert ("tcp",18443) in monitor.ports,monitor.ports
+              before=accounting.counters(by_port=True,include_probe=True)
+              subprocess.run(["ip","netns","exec","pm2client","python3","-c",
+                "from urllib.request import urlopen; urlopen('http://10.205.0.1:18443').read()"],
+                check=True,timeout=15)
+              after=accounting.counters(by_port=True,include_probe=True)
+              key=("auto","tcp","down",18443)
+              assert after.get(key,0)>before.get(key,0),(before,after)
+          # The viewer must only delete its own temporary accounting chains.
+          remaining=subprocess.run(["ip","netns","exec","pm2server","iptables",
+                 "-t","mangle","-S"],capture_output=True,text=True,check=True).stdout
+          assert "PM2_VIEW" not in remaining,remaining
+          print("PASS local port auto-monitoring with genuine IPv4 packets and clean owned teardown")
+          PY
