@@ -40,6 +40,12 @@ COMMIT
         current = {443: [200, 300]}
         self.assertEqual(app.delta(previous, current, 2), [(443, 0.0, 0.0)])
 
+    def test_large_v1_ruleset_triggers_adaptive_poll_backoff(self):
+        self.assertEqual(app.adjusted_interval(2, 1500, 0.2), 10)
+        self.assertEqual(app.adjusted_interval(5, 10000, 0.4), 30)
+        self.assertEqual(app.adjusted_interval(5, 100, 2.0), 10)
+        self.assertEqual(app.adjusted_interval(30, 10, 0.1), 30)
+
     def test_default_interval_enforces_minimum(self):
         with self.assertRaises(SystemExit):
             app.main(["--interval", "1", "--once"])
