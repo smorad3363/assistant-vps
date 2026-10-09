@@ -127,8 +127,9 @@ VERSION="$(cat "$tmp/source/portmanager-v2/VERSION")"
 release_id="$VERSION-${SHA:0:12}"
 new_release="$ROOT/releases/$release_id"
 
-mkdir -p -m 0755 "$ROOT/releases" "$ETC" "$DATA" "$LOG"
+mkdir -p -- "$ROOT/releases" "$ETC" "$DATA" "$LOG"
 chmod 0755 "$ROOT" "$ROOT/releases"
+chmod 0700 "$ETC" "$DATA" "$LOG"
 if [[ -f "$ROOT/.owner.json" ]]; then
   : # validated before creation
 else
