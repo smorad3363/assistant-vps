@@ -78,6 +78,27 @@ class CLITests(TestCase):
                 self.assertEqual(set(obj), {"ok", "code", "message", "details", "request_id"})
                 self.assertEqual(obj["details"]["version"], "2.0.0-dev.1")
 
+    def test_schedule_preview_is_json_and_does_not_call_tc_or_iptables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "windows.json"
+            schedule = {"schema_version": 1, "policies": [{
+                "id": "evening", "port": 443, "protocol": "tcp,udp",
+                "timezone": "UTC", "days": [0], "start": "18:00", "end": "23:00",
+                "download_mbps": 20, "upload_mbps": 10, "enabled": True
+            }]}
+            path.write_text(json.dumps(schedule))
+            with mock.patch("pm2.discovery.run",
+                            side_effect=AssertionError("read-only preview called network")):
+                code, out, err = self.invoke([
+                    "limits", "schedule-preview", "--file", str(path),
+                    "--at", "2026-10-12T20:00:00Z", "--json"])
+            self.assertEqual(code, 0, err)
+            payload = json.loads(out)
+            self.assertTrue(payload["ok"])
+            self.assertFalse(payload["details"]["network_mutation"])
+            self.assertEqual(payload["details"]["would_apply"][0]["port"], 443)
+            self.assertEqual(json.loads(path.read_text()), schedule)
+
     def test_limits_list_never_claims_shaping_support(self):
         code, out, _ = self.invoke(["limits", "list", "--json"])
         self.assertEqual(code, 0)
