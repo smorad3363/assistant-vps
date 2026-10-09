@@ -3,7 +3,7 @@ import argparse
 import json
 import os
 import sys
-from . import config, firewall, transaction
+from . import config, firewall, transaction, guard
 from .errors import PM2Error
 from .validation import make_tunnel
 
@@ -85,6 +85,8 @@ def handle(operation, argv, lock):
             return {"dry_run": True, "rules": firewall.compile_rules(cfg)}
         with lock():
             cfg = config.load(transaction.CONFIG)
+            if guard._read() is not None:
+                raise PM2Error("E_CONFLICT", "Protected change pending; confirm or rollback first")
             return transaction.apply(cfg)
     with lock() if not args.dry_run else _null():
         cfg = config.load(transaction.CONFIG)
@@ -97,6 +99,10 @@ def handle(operation, argv, lock):
         if operation == "delete" and not args.yes:
             if not sys.stdin.isatty() or input("Type DELETE-V2-TUNNEL: ").strip() != "DELETE-V2-TUNNEL":
                 raise PM2Error("E_VALIDATION", "Tunnel deletion not confirmed")
+        if guard.risky(cfg, candidate):
+            return guard.apply(candidate)
+        if guard._read() is not None:
+            raise PM2Error("E_CONFLICT", "Protected change pending; confirm or rollback first")
         return transaction.apply(candidate)
 
 
