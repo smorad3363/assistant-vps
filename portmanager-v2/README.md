@@ -36,6 +36,45 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 - The same cyan-bordered compact menu cards are used for Home, IPtables
   and Configuration.
 
+## Per-port traffic volume by arbitrary date and time
+
+Open Port Manager and select **See port usage by date and time** (option 4).
+Enter a start, end, explicit timezone (e.g. `Asia/Tehran`), and a port
+number or `ALL`. The report stores integer iptables byte deltas in the same
+owned SQLite database `/var/lib/portmanager2/traffic.sqlite3`. Unlike
+Live's *rate* history, these records are not erased after 24 hours and are
+collected once per minute by the systemd sampler without opening Live.
+
+For exact export suitable for checking a purchasing discrepancy:
+
+```bash
+portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran
+portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran --port 8080 --csv > /root/port8080-usage.csv
+portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran --json
+```
+
+The report separates **lower-bound measured bytes** from the **upper-bound
+bytes that may fall inside a partially overlapping first or last minute**.
+Unknown within-minute timing is not silently estimated. Interrupted
+samples, a reboot, counter resets, and unavailable ports are shown as
+coverage gaps, **not zero usage**. Existing rate-only history cannot be
+converted into authoritative historical byte volumes: accurate byte
+logging starts only when this upgrade's ledger has established its baseline.
+
+This is a host-side IPv4, original-destination-port measurement—not
+the network provider's bill. Only 24 autodiscovered ports are continuously
+sampled, plus owned/legacy accounting rules. IPv6, untracked ports, VPS
+hypervisor overhead, and internal Docker/NAT paths may be absent or overlap.
+Do **not** add network-interface totals or duplicate sources to a port's
+recorded bytes. Totals are offered for investigation, *not* as audited
+payable balances. Large long-term histories grow SQLite: monitor free
+disk space and back up the database. Never delete it just to clear history.
+
+The systemd sampler now briefly waits for a concurrent Port Manager
+mutation; if still locked it marks that tick as `SKIPPED_LOCK`, rather than
+failing the unit. Consecutive lost ticks still create gaps in the
+measurement history.
+
 ## Live graphs, speed limits and selection
 
 The wide Live view shows `LIMIT / HOURS` beside each monitored port, based
