@@ -74,6 +74,31 @@ acceptance gates A–F and user testing complete.
 - Safety: no global iptables flush/restore, no root qdisc modifications,
   source names `PM2_*`, no V1 binary/cron overwrite.
 
+## 2026-10-09: Debian V1 CPU regression and requested 2.1 scheduling
+
+- User observed all 4 cores at 100% on an active Debian host immediately
+  after selecting V1 Live `measure window 1s`; screenshot also displayed
+  `ksoftirqd`, Xray and sing-box. **CPU causation not proven solely by image.**
+- Frozen V1 source audit (run 37963364961) confirms `liverows` calls
+  `ensure_rules` on every refresh. Each call discovers ports via
+  `ss`, `iptables-save` and `ip6tables-save`, checks chain ownership
+  via repeated `iptables` commands and *can rebuild* entire accounting
+  chain when ports change. This is unnecessarily expensive for 1-second
+  viewing; per-packet mangle costs may persist even after closing Live.
+- **V1 installation and original binary are untouched.** New optional
+  `portmanager-v1/perf/fast_live.py` reads only existing V1 counters,
+  skips rule discovery/recreation, clamps refresh >=2s and defaults 5s.
+  GitHub V1 read-only audit CI run 37963898105 passed **6 pure unit tests**;
+  live Debian CPU effect is **NOT TESTED** and needs measured before/after.
+- A new pure `pm2/limit_windows.py` backend supports scheduled per-port
+  policy validation/evaluation: weekday, timezone, overnight, DST,
+  overlap and preview-only JSON. Tests and example plan added.
+  **This does NOT enforce bandwidth in V2 2.0.0.** Real 2.1 qdisc
+  ownership-based enforcement is still a separate work item; see
+  [ADR-0003](ADR-0003-SCHEDULED-LIMITS.md).
+- Requested extra acceptance IDs: AT-041..050, with 047..050
+  requiring real scheduling + qdisc ownership and VM tests.
+
 ## Open risks and acceptance work remaining
 
 1. **P0 until verified:** Full guest reboot of a VM with actual active
