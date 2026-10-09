@@ -64,8 +64,7 @@ class NewThemeTest(unittest.TestCase):
               mock.patch.dict(simple_ui.os.environ, {"TERM": "xterm-256color"}),
               redirect_stdout(io.StringIO()) as output):
             simple_ui._clear_screen()
-        self.assertEqual(output.getvalue(), "\\033[2J\\033[H".replace(
-            "\\033", "\\x1b"))  # ANSI screen reset, not a newline flood
+        self.assertEqual(output.getvalue(), chr(27) + "[2J" + chr(27) + "[H")
 
     def test_ports_menu_displays_nat_without_entering_config(self):
         old = {"chain": "PREROUTING", "protocol": "tcp", "port": "1001",
