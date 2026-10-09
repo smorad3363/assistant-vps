@@ -28,7 +28,7 @@ with LiveScreen(2) as live:
                 'averages': {name:{'up_mbps':rate,'down_mbps':3.0,
                                    'coverage_seconds':10}
                              for name in ('10m','1h','8h','24h')},
-                'graph_up':'___/\\', 'graph_down':'___'
+                'graph_up':'rising', 'graph_down':'___'
             }],
             'interfaces':[{'interface':'eth0','rx_mbps':510.0,'tx_mbps':480.0}],
             'port_coverage':'selected_ipv4_listening_ports'
