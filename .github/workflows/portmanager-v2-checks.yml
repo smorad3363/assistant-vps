@@ -472,3 +472,56 @@ jobs:
           sudo portmanager2 uninstall --yes
           test "$before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           echo 'PASS shared URL dispatches V2 by default and frozen V1 by explicit v1'
+
+  tc-police-scheduled-ephemeral:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate real clsact per-port TC filter lifecycle on disposable veth
+        env:
+          PYTHONPATH: portmanager-v2
+        run: |
+          set -euxo pipefail
+          sudo ip link add relay0 type veth peer name pm2tcpeer
+          trap 'sudo ip link del relay0 2>/dev/null || true' EXIT
+          sudo ip link set relay0 up
+          sudo ip link set pm2tcpeer up
+          sudo env PYTHONPATH="$PYTHONPATH" python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from unittest import mock
+          import subprocess
+          from pm2 import shaping
+          tid="c7145b99-5b6c-4b76-a88f-fd0da56095ca"
+          cfg={"schema_version":1,"generation":1,"tunnels":[{
+             "id":tid,"enabled":True,"name":"demo","mode":"ports",
+             "interface":"relay0","listen_ip":"192.0.2.2","target_ip":"198.51.100.2",
+             "protocols":["tcp","udp"],
+             "mapping":[{"listen_port":443,"target_port":8443}],"exclude":[]}]}
+          schedule={"schema_version":1,"policies":[{
+            "id":"any","port":443,"protocol":"tcp,udp","timezone":"UTC",
+            "days":[0,1,2,3,4,5,6],"start":"18:00","end":"22:00",
+            "download_mbps":20,"upload_mbps":10,"enabled":True}]}
+          on=datetime(2026,10,9,19,tzinfo=timezone.utc)
+          off=datetime(2026,10,9,12,tzinfo=timezone.utc)
+          with TemporaryDirectory() as d:
+            with (mock.patch.object(shaping,"STATE",Path(d)/"owned.json"),
+                  mock.patch.object(shaping,"PENDING",Path(d)/"pending.json"),
+                  mock.patch.object(shaping,"_V1",Path(d)/"no_v1"),
+                  mock.patch.object(shaping,"schedule_load",return_value=schedule),
+                  mock.patch.object(shaping.config,"load",return_value=cfg)):
+              result=shaping.reconcile(on)
+              assert result["active_filters"]==4,result
+              assert shaping.reconcile(on)["changed"] is False
+              assert shaping.reconcile(off)["active_filters"]==0
+              assert shaping.reconcile(on)["active_filters"]==4
+              result=shaping.remove_owned()
+              assert result["changed"]
+              assert not shaping.PENDING.exists()
+          q=subprocess.run(["tc","qdisc","show","dev","relay0"],capture_output=True,text=True,check=True).stdout
+          assert "clsact" not in q,q
+          print("PASS timed per-port TCP/UDP upload/download clsact police lifecycle")
+          PY
