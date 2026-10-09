@@ -8,8 +8,8 @@
 
 ## Implementation phases
 - [x] Phase 0 — pinned baseline/source audit and ownership model documented.
-- [ ] Phase 1 — V1 alias, independent V2 installer/bootstrap and CLI have been
-      committed; completing CI, installer tests and VM coexistence validation.
+- [ ] Phase 1 — V1 alias, V2 bootstrap, CLI and *disabled* systemd lifecycle
+      committed; CI and full V1-installed VM coexistence gates remain.
 - [ ] Phase 2 — IPv4 DNAT/SNAT, strict ownership, CRUD and rollback.
 - [ ] Phase 3 — all-except, port/SSH guard, 120-second rollback.
 - [ ] Phase 4 — sampling, live dashboard, SQLite reports.
@@ -57,10 +57,25 @@
   config remains present (verify with `sudo test -f`, not ordinary user).
 - No V1 installation/coexistence test has run yet. Do **not** count
   AT-001..AT-007 as fully passed.
-- Phase 1 remaining: systemd lifecycle implementation/testing, V1 alias
-  equivalence test with frozen V1, full coexistence/fingerprint verification.
-- All actual `iptables`, systemd, reboot, root install/uninstall and V1/V2
-  coexistence tests are still **NOT TESTED** on an isolated VM.
+- Phase 1 **systemd implementation** now includes 3 dedicated units, disabled
+  by design (ADR-0002), SHA256 ownership manifest and preflight verification.
+  A service manager atomically installs/removes units and attempts restore if
+  daemon-reload fails; modified/active/masked/foreign units block removal.
+- V1 alias mocked-delegation CI job added; does **not** count as AT-001/AT-002
+  full equivalence until real V1 isolated installation is compared.
+- CI kernel snapshot check compares iptables-save and tc qdisc before and after
+  V2-only clean install/reinstall/uninstall on an ephemeral runner.
+- Added nonblocking mutation lock shared between V2 installer and uninstaller.
+- Added full normative `docs/PM2-SPEC-001.fa.md` to this repository, making
+  the plan portable across chats/assistants.
+- **NEXT:** Refresh SHA256 manifest; run latest CI; fix all failures; then
+  run V1-installed isolated VM fingerprint/coexistence validation. Only after
+  that may Phase 1 be marked complete.
+- Prior V2-only root install/reinstall/uninstall checks passed on the GitHub
+  ephemeral Ubuntu 24.04 VM. The **new** disabled systemd tests and kernel
+  snapshots still require latest CI verification.
+- Real V1 installer, V1+V2 coexistence, reboot, privileged NAT and all
+  networkns tests remain **NOT TESTED**.
 - No phase 2, 3, 4 or 5 network functionality should be described as working.
 - Resumption: check fresh workflow runs for the current HEAD and fix failures.
 
@@ -76,3 +91,14 @@ R03 high: mixed nft/legacy and foreign NAT hooks (fail closed).
 R04 high: SSH/admin listener capture by all-except (mandatory exclusions).
 R05 high: incorrect SNAT/conntrack direction accounting.
 R06 high: destructive reinstall/uninstall (strict path ownership).
+
+## Current phase-1 change log (after previous verified SHA)
+
+- Systemd source units: restore.service, sample.service and sample.timer,
+  all disabled/inactive; see ADR-0002.
+- `pm2.services`: owner fingerprints, atomic unit changes, preflight, rollback.
+- Uninstaller calls unit preflight/remove before deleting any V2 binary.
+- `mutation_lock` shared with installer; no root cron or V1 resources touched.
+- Unit tests: own/foreign/masked/active/symlink/rollback and lock contention.
+- CI: V1 alias stub test, kernel iptables/tc snapshots, systemd unit lifecycle.
+- Preserve Draft PR #1; no merge/deploy until Gate A..F pass.
