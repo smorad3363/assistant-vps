@@ -15,7 +15,7 @@ fatal() { printf '[portmanager2] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[portmanager2] %s\n' "$*"; }
 
 [[ "$(id -u)" == 0 ]] || fatal "Run as root."
-for command in curl python3 sha256sum tar cp mv mkdir readlink mktemp ln chmod bash; do
+for command in curl python3 sha256sum tar cp mv mkdir readlink mktemp ln chmod bash grep rm cat; do
   command -v "$command" >/dev/null 2>&1 || fatal "Missing required tool: $command"
 done
 python3 -c 'import sys; assert sys.version_info >= (3, 10)' \
@@ -28,6 +28,11 @@ if [[ -L "$BIN" ]]; then
 fi
 [[ ! -e "$ROOT/current" || -L "$ROOT/current" ]] \
   || fatal "Unrecognized $ROOT/current"
+if [[ -L "$ROOT/current" ]]; then
+  current_target="$(readlink "$ROOT/current")"
+  [[ "$current_target" =~ ^releases/[A-Za-z0-9._-]+$ ]] \
+    || fatal "Unknown/escaping release target: $current_target"
+fi
 
 # Never adopt or overwrite someone else's directory.
 python3 - "$ROOT" "$ETC" "$DATA" "$LOG" <<'PY'
@@ -44,6 +49,20 @@ for value in sys.argv[1:]:
     # The log directory may exist without a marker after interrupted installs.
     if directory.exists() and any(directory.iterdir()) and not marker.is_file():
         raise SystemExit(f"Unowned nonempty V2 path: {directory}")
+    if marker.is_symlink():
+        raise SystemExit(f"Owner marker must not be a symlink: {marker}")
+    if value == "/etc/portmanager2":
+        for name in ("config.json", "owner.json"):
+            if (directory / name).is_symlink():
+                raise SystemExit(f"Unsafe symlink in V2 configuration: {name}")
+        config_file = directory / "config.json"
+        if config_file.is_file():
+            try:
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+            except (ValueError, OSError) as exc:
+                raise SystemExit(f"Invalid V2 config: {exc}")
+            if not isinstance(config, dict) or config.get("schema_version") != 1:
+                raise SystemExit("Unsupported V2 config schema; refusing migration")
     if marker.is_file():
         try:
             owner = json.loads(marker.read_text(encoding="utf-8"))
