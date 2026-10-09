@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "policies": [
+    {
+      "id": "port443-evening",
+      "port": 443,
+      "protocol": "tcp,udp",
+      "timezone": "Asia/Tehran",
+      "days": [0, 1, 2, 5, 6],
+      "start": "18:00",
+      "end": "02:00",
+      "download_mbps": 20,
+      "upload_mbps": 10,
+      "enabled": true
+    }
+  ]
+}
