@@ -212,7 +212,11 @@ jobs:
           sudo ip netns exec pm2relay portmanager2 tunnel create             --name trial --listen-ip 198.18.0.2 --interface pm2r0             --protocol tcp,udp --mode ports --mapping 443:8443,2053:2053             --target-ip 198.19.0.2
           sudo ip netns exec pm2client python3 portmanager-v2/tests/networkns/client.py
           sudo ip netns exec pm2relay portmanager2 sample
-          sudo ip netns exec pm2relay portmanager2 report --window 1h --json
+          sleep 2
+          sudo ip netns exec pm2client python3 portmanager-v2/tests/networkns/client.py
+          sudo ip netns exec pm2relay portmanager2 sample
+          sudo ip netns exec pm2relay portmanager2 report --window 1h --json |
+            python3 -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d); assert d["upload_bytes"] > 0 and d["download_bytes"] > 0; assert d["coverage_seconds"] > 0'
           sudo ip netns exec pm2relay portmanager2 tunnel apply
           test "$(sudo ip netns exec pm2relay iptables -t nat -S PREROUTING | grep -c 'pm2:owned-hook')" -eq 1
           tunnel_id="$(sudo ip netns exec pm2relay portmanager2 tunnel list --json |
