@@ -367,3 +367,42 @@ jobs:
           sudo portmanager2 status --json | python3 -c             'import json,sys; d=json.load(sys.stdin); assert d["ok"] and d["details"]["generation"] == 0'
           sudo portmanager2 uninstall --yes
           echo "PASS real 120-second automatic watchdog expiry without network mutation"
+
+  v1-reinstall-v2-purge:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preserve V1 after V1 reinstall and interactive V2 --purge
+        env:
+          REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          sudo bash portmanager-dashboard/install.sh
+          before="$(sha256sum /usr/local/bin/portmanager | awk '{print $1}')"
+          sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-before" || true
+          sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-iptables-before" || true
+          sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-before"
+          sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
+          # Re-running the unmodified original installer must not remove V2.
+          sudo bash portmanager-dashboard/install.sh
+          sudo test -L /usr/local/bin/portmanager2
+          test "$before" = "$(sha256sum /usr/local/bin/portmanager | awk '{print $1}')"
+          # --purge requires a real terminal, not --yes alone.
+          command -v script >/dev/null
+          printf 'PURGE-V2-DATA\n' | script -q -e -c 'sudo portmanager2 uninstall --yes --purge' /dev/null
+          sudo test ! -e /usr/local/bin/portmanager2
+          sudo test ! -e /opt/portmanager2
+          sudo test ! -e /etc/portmanager2
+          sudo test ! -e /var/lib/portmanager2
+          sudo test ! -e /var/log/portmanager2
+          sudo test -s /usr/local/bin/portmanager
+          test "$before" = "$(sha256sum /usr/local/bin/portmanager | awk '{print $1}')"
+          sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-after" || true
+          sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-iptables-after" || true
+          sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-after"
+          diff -u "$RUNNER_TEMP/v1-cron-before" "$RUNNER_TEMP/v1-cron-after"
+          diff -u "$RUNNER_TEMP/v1-iptables-before" "$RUNNER_TEMP/v1-iptables-after"
+          diff -u "$RUNNER_TEMP/v1-tc-before" "$RUNNER_TEMP/v1-tc-after"
+          echo 'PASS AT-007 V2 interactive purge, AT-032 V1 reinstall coexistence'
