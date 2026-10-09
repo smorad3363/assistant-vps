@@ -105,12 +105,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Resolve a mutable ref to a *full, recorded commit* BEFORE fetching its files.
-log "Resolving Git ref: $REF"
-curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
-  "https://api.github.com/repos/$REPO/commits/$REF" -o "$tmp/ref.json" \
-  || fatal "Cannot resolve Git ref"
-SHA="$(python3 - "$tmp/ref.json" <<'PY'
+# Resolve mutable refs to a full SHA, but skip the unauthenticated GitHub
+# REST API if caller already supplied an immutable 40-hex commit. This avoids
+# API 403 rate-limit errors in high-volume CI and preserves source pinning.
+if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+  SHA="$REF"
+  log "Using explicitly pinned source commit: $SHA"
+else
+  log "Resolving Git ref: $REF"
+  curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 \
+    "https://api.github.com/repos/$REPO/commits/$REF" -o "$tmp/ref.json" \
+    || fatal "Cannot resolve Git ref (GitHub API may be rate-limited); retry with a full commit SHA"
+  SHA="$(python3 - "$tmp/ref.json" <<'PY'
 import json, re, sys
 value = json.load(open(sys.argv[1], encoding="utf-8")).get("sha", "")
 if not re.fullmatch(r"[0-9a-f]{40}", value):
@@ -118,6 +124,7 @@ if not re.fullmatch(r"[0-9a-f]{40}", value):
 print(value)
 PY
 )" || fatal "Invalid GitHub response"
+fi
 log "Pinned source commit: $SHA"
 curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
   "https://codeload.github.com/$REPO/tar.gz/$SHA" -o "$tmp/source.tar.gz" \
