@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-from . import config, discovery, firewall
+from . import config, discovery, firewall, forwarding
 from .errors import PM2Error
 
 CONFIG = Path(os.environ.get("PM2_ETC", "/etc/portmanager2")) / "config.json"
@@ -36,8 +36,11 @@ def preflight(candidate, runtime, allow_protected=False):
     original_backend = runtime.get("backend")
     if original_backend is not None and original_backend != report["backend"]:
         raise PM2Error("E_CONFLICT", "iptables backend changed; no V2 mutation allowed")
-    if not discovery.forwarding_enabled() and any(t["enabled"] for t in candidate["tunnels"]):
-        raise PM2Error("E_CONFLICT", "IPv4 forwarding disabled; enable it in isolated test/managed sysctl first")
+    forward_info = forwarding.preflight()
+    report["forwarding_activation_required"] = (
+        not forward_info["forwarding_enabled"] and
+        any(t["enabled"] for t in candidate["tunnels"])
+    )
     inventory = runtime.get("firewall", {})
     firewall.check_inventory(firewall.snapshot(), inventory)
     return report
@@ -60,6 +63,8 @@ def apply(candidate, allow_protected=False):
     completed = False
     rollback_completed = False
     try:
+        if report["forwarding_activation_required"]:
+            forwarding.activate()
         applied = firewall.reconcile(compiled, previous)
         next_state = dict(runtime)
         next_state.update({
