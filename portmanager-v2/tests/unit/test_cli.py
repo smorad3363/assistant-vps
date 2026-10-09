@@ -13,7 +13,10 @@ class CLITests(TestCase):
     def invoke(self, arguments):
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            code = cli.main(arguments)
+            try:
+                code = cli.main(arguments)
+            except SystemExit as exc:
+                code = int(exc.code)
         return code, stdout.getvalue(), stderr.getvalue()
 
     def test_version(self):
