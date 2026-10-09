@@ -122,10 +122,10 @@ def preflight():
             # systemctl is-enabled returns 0 for enabled and static aliases;
             # static units (sample.service) must not be treated as active.
             val = res.stdout.strip()
-            if kind == "is-enabled" and val in ("enabled", "enabled-runtime", "linked", "linked-runtime"):
-                raise PM2Error("E_CONFLICT", f"V2 unit is enabled; refusing change: {name}")
-            if kind == "is-active" and res.returncode == 0:
-                raise PM2Error("E_CONFLICT", f"V2 unit is active; refusing change: {name}")
+            if kind == "is-enabled" and val not in ("disabled", "static", "indirect"):
+                raise PM2Error("E_CONFLICT", f"V2 unit is not safely disabled ({val}): {name}")
+            if kind == "is-active" and val != "inactive":
+                raise PM2Error("E_CONFLICT", f"V2 unit is not inactive ({val}): {name}")
     return marker
 
 
