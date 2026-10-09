@@ -47,7 +47,8 @@ class ServicesTests(TestCase):
         marker = json.loads(services.MARKER.read_text())
         self.assertEqual(set(marker["units"]), set(services.UNIT_NAMES))
         original = {n: (self.systemd / n).read_bytes() for n in services.UNIT_NAMES}
-        services.install()
+        again = services.install()
+        self.assertFalse(again["changed"])
         self.assertEqual(original, {n: (self.systemd / n).read_bytes()
                                     for n in services.UNIT_NAMES})
         self.assertEqual(services.remove()["enabled"], False)
