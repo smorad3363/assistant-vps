@@ -232,6 +232,16 @@ jobs:
           sudo test ! -e /var/lib/portmanager2/protected.json
           guarded_id="$(sudo ip netns exec pm2relay portmanager2 tunnel list --json |
             python3 -c 'import json,sys;print(json.load(sys.stdin)["details"]["tunnels"][0]["id"])')"
+          # Protected update intentionally NOT confirmed; manually invoke the
+          # same rollback entry point the 120s timer calls.
+          sudo ip netns exec pm2relay portmanager2 tunnel update "$guarded_id"             --name guarded --listen-ip 198.18.0.2 --interface pm2r0             --protocol tcp,udp --mode all-except --exclude 22,443,2053             --target-ip 198.19.0.2 --ack-all-ports
+          pending="$(sudo python3 -c 'import json;print(json.load(open("/var/lib/portmanager2/protected.json"))["change_id"])')"
+          sudo ip netns exec pm2relay portmanager2 rollback-pending "$pending"
+          sudo test ! -e /var/lib/portmanager2/protected.json
+          sudo ip netns exec pm2relay portmanager2 tunnel list --json |
+            python3 -c 'import json,sys; t=json.load(sys.stdin)["details"]["tunnels"][0];assert t["exclude"]==[22,443], t'
+          guarded_id="$(sudo ip netns exec pm2relay portmanager2 tunnel list --json |
+            python3 -c 'import json,sys;print(json.load(sys.stdin)["details"]["tunnels"][0]["id"])')"
           sudo ip netns exec pm2relay portmanager2 tunnel delete "$guarded_id" --yes
           pending="$(sudo python3 -c 'import json;print(json.load(open("/var/lib/portmanager2/protected.json"))["change_id"])')"
           sudo ip netns exec pm2relay portmanager2 confirm "$pending"
