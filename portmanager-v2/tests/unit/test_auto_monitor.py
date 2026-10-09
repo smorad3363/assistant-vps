@@ -74,8 +74,8 @@ class AutoMonitorTests(unittest.TestCase):
             "download_mbps": 50, "upload_mbps": 50, "enabled": True
         }
         self.assertTrue(limit_windows.validate([rule]))
-        with mock.patch.object(shaping, "_V1", Path("/missing-portmanager-v1")),
-             mock.patch.object(shaping, "_LEGACY_ARCHIVE", Path("/missing-archive-v1")):
+        with (mock.patch.object(shaping, "_V1", Path("/missing-portmanager-v1")),
+              mock.patch.object(shaping, "_LEGACY_ARCHIVE", Path("/missing-archive-v1"))):
             desired = shaping.desired_filters({"policies": [rule]}, [],
                                               datetime(2026, 10, 12, tzinfo=timezone.utc))
         self.assertEqual(len(desired), 2)
