@@ -363,7 +363,12 @@ jobs:
           PY
           sudo test -f /var/lib/portmanager2/protected.json
           sleep 130
-          sudo test ! -e /var/lib/portmanager2/protected.json
+          if sudo test -e /var/lib/portmanager2/protected.json; then
+            echo "Watchdog did not expire within 130s; dump owned timer state" >&2
+            sudo systemctl list-timers --all --no-pager | grep portmanager2-rollback || true
+            sudo journalctl -n 35 --no-pager | grep -E 'portmanager2-rollback|portmanager2' || true
+            exit 1
+          fi
           sudo portmanager2 status --json | python3 -c             'import json,sys; d=json.load(sys.stdin); assert d["ok"] and d["details"]["generation"] == 0'
           sudo portmanager2 uninstall --yes
           echo "PASS real 120-second automatic watchdog expiry without network mutation"
