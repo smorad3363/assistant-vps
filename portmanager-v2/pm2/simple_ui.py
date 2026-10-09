@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from .errors import PM2Error
-from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels
+from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules
 
 
 def _paint(code, text):
@@ -28,10 +28,13 @@ def _confirm(label):
 
 
 def _title(subtitle):
-    print("\n" + _paint("96;1", "╔════════════════════════════════════════════════╗"))
-    print(_paint("96;1", "║") + _paint("97;1", "       ✦  PORT MANAGER  ✦  " + subtitle[:19].ljust(19))
-          + _paint("96;1", "║"))
-    print(_paint("96;1", "╚════════════════════════════════════════════════╝"))
+    # Shared cyan/green card header across HOME, LIVE, IPTABLES, CONFIG.
+    label = f"  PORT MANAGER  │  {subtitle.upper()}  "
+    width = 64
+    print("\n" + _paint("96;1", "╭" + "─" * width + "╮"))
+    print(_paint("96;1", "│") + _paint("97;1", label.ljust(width)[:width]) +
+          _paint("96;1", "│"))
+    print(_paint("96;1", "╰" + "─" * width + "╯"))
 
 
 def _network_defaults():
@@ -156,7 +159,19 @@ def _list_tunnels():
         print(f"  {i}. {_paint('92' if t['enabled'] else '90', t['name'][:18])}"
               f"  {ports[:25]}  → {t['target_ip']}  {'●' if t['enabled'] else '○'}")
     if not items:
-        print("  No tunnels yet.")
+        print("  No tunnels managed by V2.")
+    # Show pre-existing kernel rules, even if they were installed with V1,
+    # Docker or another script. Foreign rules are NEVER editable/deletable.
+    rules, error = system_rules.detect_nat()
+    if rules:
+        print(_paint("96;1", "  ── EXISTING SYSTEM RULES (read-only) ──"))
+        for r in rules:
+            print(f"  {_paint('93', '•')} {r['chain'][:14]}  "
+                  f"{r['protocol']}:{r['port']} → "
+                  f"{r['target']} {r['destination'][:35]}  [external]")
+        print(_paint("90", "  External rules are shown for visibility; only V2 rules can be edited."))
+    elif error:
+        print(_paint("93", "  " + error))
     return items
 
 
@@ -192,7 +207,7 @@ def _manage():
     while True:
         _title("CONFIG")
         items = _list_tunnels()
-        print("  [1] Edit / Delete a tunnel   [2] Delete ALL   [0] Back")
+        print("  [1] Edit/Delete V2 tunnel   [2] Delete ALL V2   [0] Back")
         choice = _ask("Select", "0")
         if choice in ("0", None):
             return
@@ -366,10 +381,12 @@ def menu():
         raise PM2Error("E_VALIDATION", "Interactive Port Manager requires a terminal")
     while True:
         _title("HOME")
-        print("  [1] " + _paint("92;1", "LIVE & SPEED LIMITS"))
-        print("  [2] " + _paint("96;1", "IPTABLES / TUNNELS"))
-        print("  [3] " + _paint("93;1", "EDIT / DELETE CONFIGS"))
-        print("  [0] Exit")
+        print(_paint("90", "  ┌──────────────────────────────────────────────┐"))
+        print("  │  [1] " + _paint("92;1", "● LIVE & SPEED LIMITS") + "                 │")
+        print("  │  [2] " + _paint("96;1", "◆ IPTABLES / TUNNELS") + "                 │")
+        print("  │  [3] " + _paint("93;1", "✎ EDIT / DELETE CONFIGS") + "              │")
+        print("  │  [0] Exit                                    │")
+        print(_paint("90", "  └──────────────────────────────────────────────┘"))
         choice = _ask("Select", "0")
         if choice in ("0", None):
             return 0
