@@ -122,23 +122,37 @@ def doctor():
     except PM2Error as exc:
         unit_state = "conflict"
         unit_error = exc.message
+    kernel_ownership = "unknown_no_privilege"
+    kernel_drift = None
+    if isinstance(state, dict):
+        try:
+            firewall.check_inventory(firewall.snapshot(), state.get("firewall", {}))
+            kernel_ownership = "verified"
+            kernel_drift = False
+        except PM2Error as exc:
+            kernel_ownership = "conflict_or_unreadable"
+            kernel_drift = {"code": exc.code, "message": exc.message}
+    try:
+        forwarding_state = forwarding.preflight()
+    except PM2Error as exc:
+        forwarding_state = {"unknown": exc.code}
     return {
         "development": True,
         "v1_installed": V1_BIN.exists(),
         "dependencies_missing": missing,
         "iptables_backend": _backend(),
         "config_schema": config.get("schema_version") if isinstance(config, dict) else None,
-        "active_tunnels": len(config.get("tunnels", [])) if isinstance(config, dict) and isinstance(config.get("tunnels"), list) else None,
+        "active_tunnels": sum(bool(x.get("enabled")) for x in config.get("tunnels", []) if isinstance(x, dict)) if isinstance(config, dict) and isinstance(config.get("tunnels"), list) else None,
         "owner_valid": isinstance(owner, dict) and owner.get("product") == "portmanager2",
         "state_present": isinstance(state, dict),
-        "network_rules_supported": False,
-        "iptables_ownership": "not_implemented",
-        "qdisc_ownership": "not_implemented",
+        "network_rules_supported": not missing and _backend() not in (None, "unknown"),
+        "iptables_ownership": kernel_ownership,
+        "qdisc_ownership": "V2 does not manage tc (V1/foreign qdiscs preserved)",
         "cron_v1": "not_checked",
         "systemd_units": unit_state,
         "systemd_conflict": unit_error,
-        "ip_forward": "not_checked",
-        "drift": "not_checked",
+        "ip_forward": forwarding_state,
+        "drift": kernel_drift,
     }
 
 
