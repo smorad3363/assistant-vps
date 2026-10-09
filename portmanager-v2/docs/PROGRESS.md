@@ -43,6 +43,10 @@ acceptance gates A–F and user testing complete.
   3.10 and 3.12, shellcheck/Bash/SHA256, no V1 file changes.
 - Real original V1 install plus new alias: same binary, preserved V1 cron,
   V1 accounting chain, data fingerprints and tc state across V2 lifecycle.
+- `v1-reinstall-v2-purge` (run 37961638987): V1 reinstalled with V2
+  present; V2 purged via pseudo-terminal and explicit confirmation; V1
+  executable, cron, accounting chain and qdisc fingerprints remained intact.
+  AT-007 and AT-032 passed on disposable Ubuntu 24.04 runner.
 - Networkns: TCP 443→8443 and UDP 2053→2053 with return path; upload/download
   bytes positive with interval coverage; idempotent apply and removal of own
   hooks; all-except forward and confirmation; rollback-pending manual path.
@@ -66,8 +70,8 @@ acceptance gates A–F and user testing complete.
 3. **P1:** Validate iptables-legacy versus iptables-nft, UFW/firewalld,
    Docker/custom NAT collision rejection; never auto-flush foreign chains.
 4. **P1:** Privileged failure injection: partial multi-table apply, reload
-   failure, corrupt journals, full purge with installed V1 and permission
-   changes; preserve V1 and recovery evidence.
+   failure, corrupt journals and permission changes; preserve V1 and recovery
+   evidence. Purge with installed V1 now tested on an isolated Ubuntu runner.
 5. **P1:** Long-lived telemetry under counter resets, large sample history,
    retention rotation and date-window boundaries; evaluate need to implement
    rollups/cleanup before calling reporting stable.
