@@ -21,7 +21,7 @@ from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
-from . import backup, guard, logbook, live, forwarding
+from . import backup, guard, logbook, live, forwarding, limit_windows
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -314,7 +314,16 @@ def main(argv=None):
         elif args.command == "limits":
             if args.operation == "list":
                 response(True, "OK", "Bandwidth changes are unavailable in 2.0", limit_list(), json_mode)
-            elif args.operation in ("set", "remove"):
+            elif args.operation == "schedule-preview":
+                lp = argparse.ArgumentParser(prog="portmanager2 limits schedule-preview")
+                lp.add_argument("--file", required=True)
+                lp.add_argument("--at")
+                lp.add_argument("--json", action="store_true")
+                opts = lp.parse_args(args.args)
+                preview = limit_windows.preview_json_file(opts.file, opts.at)
+                response(True, "OK", "Read-only 2.1 schedule preview; no shaping applied",
+                         preview, json_mode or opts.json)
+            elif args.operation in ("set", "remove", "schedule-add", "schedule-remove", "schedule-apply"):
                 bandwidth.mutation()
             else:
                 raise PM2Error("E_VALIDATION", "Unknown limits command")
