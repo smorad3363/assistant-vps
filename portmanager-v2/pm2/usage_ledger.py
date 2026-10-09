@@ -109,25 +109,28 @@ def summarize(intervals, start, end):
     of potentially identical traffic, not independent billable usage.
     Prefer V2, then V1, then auto for exactly coincident sample windows.
     """
-    picked = {}
-    overlap_sources = set()
+    candidates = defaultdict(list)
     for a, b, source, proto, port, up, down in intervals:
         if proto not in ("tcp", "udp") or port <= 0:
-            continue   # all-except aggregates cannot be assigned to a port
-        if not (a < b and b > start and a < end):
             continue
-        key = (a, b, proto, port)
-        candidate = (source, int(up), int(down))
-        if key in picked:
-            overlap_sources.add((proto, port))
-            if _rank(source) < _rank(picked[key][0]):
-                picked[key] = candidate
-        else:
-            picked[key] = candidate
+        if a < b and b > start and a < end:
+            candidates[(proto, port)].append((a, b, source, int(up), int(down)))
 
-    grouped = defaultdict(list)
-    for (a, b, proto, port), (source, up, down) in picked.items():
-        grouped[(proto, port)].append((a, b, source, up, down))
+    grouped = {}
+    overlap_sources = set()
+    # Different chains can count the same forwarded bytes. Prefer one
+    # authoritative source per overlapped timespan, even if their sample
+    # boundaries differ by a fraction of a second. We conservatively
+    # exclude the second whole interval rather than sum duplicate bytes.
+    for key, rows in candidates.items():
+        chosen = []
+        for row in sorted(rows, key=lambda x: (_rank(x[2]), x[0], x[1])):
+            if any(row[0] < accepted[1] and accepted[0] < row[1]
+                   for accepted in chosen):
+                overlap_sources.add(key)
+                continue
+            chosen.append(row)
+        grouped[key] = sorted(chosen)
     results = []
     for (proto, port), records in grouped.items():
         low_up = low_down = extra_up = extra_down = 0
