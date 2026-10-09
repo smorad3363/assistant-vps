@@ -265,35 +265,39 @@ def _ui_actions(*choices):
 
 def _ui_header_row(width):
     if width >= 105:
-        return "  #  CHAIN          PROTO:PORT       ACTION    TARGET                              INTERFACE"
+        return "  #  CHAIN         PROTO:PORT      ACTION   TARGET                        IFACE        OWNER"
     if width >= 79:
-        return "  #  CHAIN          PROTO:PORT       ACTION    TARGET"
-    return "  #   PROTO:PORT  →  TARGET"
+        return "  #  CHAIN          PROTO:PORT       ACTION    TARGET / IFACE"
+    return "  #   PROTO:PORT  →  TARGET / IFACE"
 
 
-def _ui_record(index, chain, proto, action, destination, external=True):
+def _ui_record(index, chain, proto, action, destination, external=True, interface="-"):
     width = _ui_width()
     chain = _ui_clean(chain)
     proto = _ui_clean(proto)
     action = _ui_clean(action)
     destination = _ui_clean(destination)
+    iface = _ui_clean(interface)
     if width >= 105:
-        row = (f" {index:>2}  " + _paint("93", "●") + "  " +
-               f"{_ui_cut(chain, 14):<14}  " +
-               _paint("96;1", f"{_ui_cut(proto, 14):<14}") + "  " +
-               _paint("97", f"{_ui_cut(action, 8):<8}") + "  " +
-               _paint("95;1", f"{_ui_cut(destination, 34):<34}") +
-               "  " + _paint("90", "[external]" if external else "[managed]"))
+        row = (f" {index:>2}  " + _paint("93", "●") + " " +
+               f"{_ui_cut(chain, 12):<12}  " +
+               _paint("96;1", f"{_ui_cut(proto, 13):<13}") + "  " +
+               f"{_ui_cut(action, 7):<7}  " +
+               _paint("95;1", f"{_ui_cut(destination, 28):<28}") + "  " +
+               f"{_ui_cut(iface, 11):<11}  " +
+               _paint("90", "[external]" if external else "[managed]"))
     elif width >= 79:
         row = (f" {index:>2}  " + _paint("93", "●") + " " +
-               f"{_ui_cut(chain, 14):<14}  " +
-               _paint("96;1", f"{_ui_cut(proto, 14):<14}") + "  " +
-               f"{_ui_cut(action, 8):<8}  " +
-               _paint("95;1", _ui_cut(destination, max(12, width - 65))))
+               f"{_ui_cut(chain, 13):<13}  " +
+               _paint("96;1", f"{_ui_cut(proto, 13):<13}") + "  " +
+               f"{_ui_cut(action, 7):<7}  " +
+               _paint("95;1", _ui_cut(destination + " [" + iface + "]",
+                                     max(12, width - 58))))
     else:
         row = (f" {index:>2}  " + _paint("93", "●") + "  " +
                _paint("96;1", _ui_cut(proto, 14)) + " → " +
-               _paint("95;1", _ui_cut(destination, max(10, width - 31))))
+               _paint("95;1", _ui_cut(destination + " [" + iface + "]",
+                                     max(10, width - 31))))
     _ui_line(row)
 
 
@@ -329,7 +333,8 @@ def _list_tunnels():
         for i, rule in enumerate(rules, 1):
             _ui_record(i, rule["chain"],
                        f'{rule["protocol"]}:{rule["port"]}',
-                       rule["target"], rule["destination"])
+                       rule["target"], rule["destination"],
+                       interface=rule.get("interface", "-"))
     elif error:
         _ui_line(_paint("93", "  " + _ui_cut(error, width - 8)))
     else:
@@ -409,7 +414,7 @@ def _inspect_existing_rule():
         rule = rules[int(selected) - 1]
         _title("RULE DETAILS")
         _ui_edge("top")
-        for key in ("chain", "protocol", "port", "target", "destination", "source"):
+        for key in ("chain", "protocol", "port", "target", "destination", "interface", "source"):
             _ui_line(f"  {key.upper():<16} {_ui_cut(rule.get(key, '-'), _ui_width() - 26)}")
         _ui_line("")
         _ui_line(_paint("93", "  Existing rule: inspect only; safe import is not configured."))
