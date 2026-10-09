@@ -71,6 +71,14 @@ COMMIT
         self.assertEqual(avg["coverage"], 300)
         self.assertTrue(avg["down"] > 0)
 
+    def test_historical_rolling_average_does_not_look_ahead(self):
+        # At t=500, a sample whose end time is 550 did not exist yet.
+        history = [(490, 10, 4.0, 6.0), (550, 100, 100.0, 200.0)]
+        avg = port_graph.weighted(history, 500)
+        self.assertEqual(avg["coverage"], 10)
+        self.assertEqual(avg["up"], 4.0)
+        self.assertEqual(avg["down"], 6.0)
+
     def test_no_false_ten_minute_coverage_when_just_started(self):
         avg = port_graph.weighted([(103, 3, 10, 20)], 103)
         self.assertEqual(avg["coverage"], 3)
