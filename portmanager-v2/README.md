@@ -36,6 +36,19 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 - The same cyan-bordered compact menu cards are used for Home, IPtables
   and Configuration.
 
+## Live monitor lock and exit
+
+`q` / Esc / Ctrl+C exits Live and releases its exclusive `flock`; the
+monitor is **not** a persistent background service. An independent scheduled
+sample timer may continue running after the menu closes.
+
+If `E_LOCKED` appears, another **running** Live window holds the monitor
+lock (the lock file's mere existence is normal). The error includes a
+possible PID. Check it using `ps -fp PID`, exit that Live window, or send
+SIGTERM only to the confirmed old viewer. SIGTERM now unwinds the monitor,
+restores the terminal and removes only its own ephemeral counter rules.
+**Never** remove `/run/lock/portmanager2-view.lock` to bypass a live lock.
+
 ## Included features
 
 - **Fixed-screen live terminal dashboard (curses):** single-screen real-time redraw on Debian/Ubuntu without spilling each interval into SSH scrollback. Default shows busiest active ports only, terminal-height bounded, with 10m/1h/8h/24h averages. Keys: `q` or `Esc` to choose a port, `a` show idle ports, `+/-` refresh seconds, arrows to scroll. JSON/once modes stay plain text.
