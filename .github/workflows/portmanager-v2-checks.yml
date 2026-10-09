@@ -291,7 +291,7 @@ jobs:
           sudo bash portmanager-v1/legacy-install.sh
           sudo test -s /usr/local/bin/portmanager
           v1_executable_before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
-          sudo bash portmanager-v1/install.sh
+          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-v1/install.sh
           test "$v1_executable_before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           sudo find /etc/portmanager /var/lib/portmanager -type f -exec sha256sum '{}' ';' 2>/dev/null |
             sort > "$RUNNER_TEMP/v1-files-before" || true
