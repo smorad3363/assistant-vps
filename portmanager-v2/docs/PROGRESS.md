@@ -36,6 +36,21 @@ acceptance gates A–F and user testing complete.
   legacy backend; verify admin/SSH continuity and user acceptance. Gate F BLOCKED.
 - [ ] Phase 7 — V2 2.1 qdisc limits/quotas (never part of 2.0 rollout).
 
+## Watchdog scheduling bug and mitigation (2026-10-09)
+
+- **Reproduced intermittent 120s deadline violation** in
+  [run 37961808849](https://github.com/smorad3363/assistant-vps/actions/runs/37961808849):
+  the transient `systemd-run --on-active=120s` default `AccuracySec=1min`
+  can coalesce execution up to ~60 additional seconds. In a 130s timeout
+  test, the rollback journal was still present.
+- **Fix:** set `--timer-property=AccuracySec=1s` explicitly in
+  `pm2/guard.py`. The 130s test now dumps transient timer status/journal
+  on a miss and unit tests assert explicit timing properties. **Latest CI
+  rerun is required before this mitigation can be marked PASS.**
+- Even with tighter accuracy, timers cannot provide a hard real-time
+  guarantee under a suspended/offline/unresponsive machine. Keep reboot
+  and SSH disconnect cases as P0 until independently tested.
+
 ## Current latest acceptance evidence
 
 - [Run 37960307468](https://github.com/smorad3363/assistant-vps/actions/runs/37960307468):
