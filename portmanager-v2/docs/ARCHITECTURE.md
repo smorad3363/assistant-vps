@@ -2,9 +2,10 @@
 
 ## Specification
 Contract: **PM2-SPEC-001 v1.0.0, 2026-10-09**.
-The full Persian specification is maintained as
-`PortManager_V2_Implementation_Roadmap_FA.md` in the originating planning artifact;
-the concise, self-contained phase checklist is in `docs/PROGRESS.md`.
+The full, authoritative Persian specification is vendored in this repository
+as [PM2-SPEC-001.fa.md](PM2-SPEC-001.fa.md); any assistant or contributor
+must read it before implementation. The resumable checkpoint is in
+[PROGRESS.md](PROGRESS.md).
 No unfinished feature may pretend to be working.
 
 ## Source baselines (frozen)
