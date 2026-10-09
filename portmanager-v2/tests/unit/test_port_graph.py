@@ -133,7 +133,7 @@ COMMIT
             with mock.patch.object(sampler, "DB", filename):
                 db = sampler.connect()
                 key = (TID, "tcp", 443)
-                port_graph.record(db, 100, 2, {key: {"up": 1, "down": 3}})
+                port_graph.record(db, -100000, 2, {key: {"up": 1, "down": 3}})
                 port_graph.record(db, 2500, 2, {key: {"up": 4, "down": 6}})
                 db.close()
                 reopened = sampler.connect()
