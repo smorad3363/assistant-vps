@@ -62,7 +62,7 @@ converted into authoritative historical byte volumes: accurate byte
 logging starts only when this upgrade's ledger has established its baseline.
 
 This is a host-side IPv4, original-destination-port measurement—not
-the network provider's bill. Only 24 autodiscovered ports are continuously
+the network provider's bill. Up to 64 autodiscovered or forwarded ports are continuously
 sampled, plus owned/legacy accounting rules. IPv6, untracked ports, VPS
 hypervisor overhead, and internal Docker/NAT paths may be absent or overlap.
 Do **not** add network-interface totals or duplicate sources to a port's
