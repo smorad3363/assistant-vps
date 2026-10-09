@@ -35,12 +35,50 @@ def _title(subtitle):
 
 
 def _network_defaults():
-    """Use configured default-route dev/src, not an invented interface/IP."""
+    """Prefer real VPS Ethernet to optional WARP/WireGuard default routing."""
     from .discovery import run
     out = run(["ip", "-4", "route", "get", "1.1.1.1"], timeout=5).split()
     if "dev" not in out or "src" not in out:
         raise PM2Error("E_DEPENDENCY", "Cannot discover default interface and local IPv4")
-    return out[out.index("dev") + 1], out[out.index("src") + 1]
+    dev, src = out[out.index("dev") + 1], out[out.index("src") + 1]
+    try:
+        rows = json.loads(run(["ip", "-j", "-4", "addr", "show", "scope", "global"],
+                              timeout=5))
+        physical = []
+        for row in rows:
+            name = row.get("ifname", "")
+            if not re.match(r"^(eth|ens|enp|eno)[0-9a-z_.-]*$", name):
+                continue
+            for address in row.get("addr_info", []):
+                if address.get("family") == "inet" and address.get("local"):
+                    physical.append((name, address["local"]))
+        if physical:
+            if dev in {p[0] for p in physical}:
+                return next(p for p in physical if p[0] == dev)
+            return sorted(physical, key=lambda item: (item[0] != "eth0", item[0]))[0]
+    except (PM2Error, ValueError, TypeError, KeyError):
+        pass
+    return dev, src
+
+
+def _protected_ssh_ports():
+    """Use common SSH port plus detected sshd listeners; never guess one alone."""
+    protected = {22}
+    try:
+        from .discovery import run
+        raw = run(["ss", "-H", "-ltnp"], timeout=5)
+        for line in raw.splitlines():
+            if "sshd" not in line:
+                continue
+            fields = line.split()
+            if len(fields) < 5 or ":" not in fields[4]:
+                continue
+            value = fields[4].rsplit(":", 1)[1]
+            if value.isdecimal() and 1 <= int(value) <= 65535:
+                protected.add(int(value))
+    except PM2Error:
+        pass
+    return ",".join(str(p) for p in sorted(protected))
 
 
 def _mutate(operation, argv):
@@ -87,7 +125,7 @@ def _tunnel_wizard(old=None, all_ports=False):
         "--mode", "all-except" if is_all else "ports"
     ]
     if is_all:
-        existing = ",".join(str(p) for p in old["exclude"]) if old else "22"
+        existing = ",".join(str(p) for p in old["exclude"]) if old else _protected_ssh_ports()
         excludes = _ask("Protected SSH/admin ports (never tunnel)", existing)
         if excludes is None:
             return
