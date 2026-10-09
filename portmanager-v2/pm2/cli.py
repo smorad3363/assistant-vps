@@ -262,7 +262,10 @@ def parser():
     rem.add_argument("--purge", action="store_true")
     rem.add_argument("--yes", action="store_true")
     rem.add_argument("--dry-run", action="store_true")
-    for name in ("live", "report", "sample", "restore", "backup", "logs", "confirm"):
+    report = sub.add_parser("report")
+    report.add_argument("--window", choices=("1h", "24h", "7d"), required=True)
+    report.add_argument("--json", action="store_true")
+    for name in ("live", "sample", "restore", "backup", "logs", "confirm"):
         cmd = sub.add_parser(name)
         cmd.add_argument("args", nargs=argparse.REMAINDER)
     return p
@@ -319,13 +322,7 @@ def main(argv=None):
                 raise PM2Error("E_VALIDATION", "Usage: backup create|list|restore <id> [--dry-run]")
             response(True, "OK", "Backup operation completed", details, json_mode)
         elif args.command == "report":
-            argv = args.args or []
-            if "--window" not in argv:
-                raise PM2Error("E_VALIDATION", "report requires --window 1h|24h|7d")
-            idx = argv.index("--window")
-            if idx + 1 >= len(argv):
-                raise PM2Error("E_VALIDATION", "Missing report window")
-            payload = sampler.report(argv[idx + 1])
+            payload = sampler.report(args.window)
             response(True, "OK", "Traffic report", payload, json_mode)
         elif args.command == "uninstall":
             if args.dry_run:
