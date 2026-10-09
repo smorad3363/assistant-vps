@@ -41,6 +41,11 @@ jobs:
         env:
           PYTHONPATH: portmanager-v2
         run: python -m unittest discover -s portmanager-v2/tests/unit -v
+      - name: Read-only command smoke test
+        run: |
+          bash portmanager-v2/bin/portmanager2 --version
+          bash portmanager-v2/bin/portmanager2 status --json
+          bash portmanager-v2/bin/portmanager2 doctor --json
       - name: ShellCheck
         run: |
           sudo apt-get update -qq
@@ -53,3 +58,23 @@ jobs:
       - run: |
           echo "NOT TESTED: privileged netns/VM, coexistence and boot/recovery tests"
           echo "This job is informational and is NOT evidence that release gates C-F passed."
+
+  install-bootstrap-ephemeral-vm:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install, reinstall and remove bootstrap on disposable GitHub VM
+        env:
+          REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # This is an ephemeral GitHub-hosted VM, NOT a user/production server.
+          sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
+          sudo portmanager2 --version | grep -Fx '2.0.0-dev.1'
+          sudo portmanager2 doctor --json
+          sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
+          sudo portmanager2 uninstall --dry-run
+          sudo portmanager2 uninstall --yes
+          test ! -e /usr/local/bin/portmanager2
+          test -f /etc/portmanager2/config.json
+          test ! -e /usr/local/bin/portmanager
