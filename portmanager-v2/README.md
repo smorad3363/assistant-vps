@@ -40,8 +40,8 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 
 The same install/update command now activates the owned
 `portmanager2-sample.timer` by default. Every ~60 seconds it snapshots
-TCP/UDP port counters (up to 24 autodetected local service ports plus existing
-V1/V2 tracked ports) into `traffic.sqlite3`, without opening Live.
+TCP/UDP port counters (up to 24 selected local-service or externally
+DNAT-forwarded ports, plus existing V1/V2 tracked ports) into `traffic.sqlite3`, without opening Live.
 This is a *rate history* in Mb/s, not a claim of full-day transferred bytes.
 First minute establishes a baseline; after a reboot, counter reset, newly
 discovered port, or gap over two minutes, unavailable time is not fabricated.
