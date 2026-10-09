@@ -45,6 +45,16 @@ class CLITests(TestCase):
         self.assertEqual(code, 3)
         self.assertIn("E_PERMISSION", err)
 
+    def test_report_window_json_is_parsed(self):
+        with mock.patch("pm2.sampler.report", return_value={
+            "window": "1h", "coverage_seconds": 0, "tunnels": []
+        }) as called:
+            code, out, err = self.invoke(["report", "--window", "1h", "--json"])
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self.assertTrue(json.loads(out)["ok"])
+        called.assert_called_once_with("1h")
+
     def test_tunnel_list_validates_persisted_config(self):
         with tempfile.TemporaryDirectory() as t:
             from pm2 import transaction
