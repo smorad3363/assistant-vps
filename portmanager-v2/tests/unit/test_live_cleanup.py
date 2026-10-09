@@ -28,7 +28,9 @@ class MonitorLifecycleTest(unittest.TestCase):
                 self.assertTrue(path.exists())
                 with auto_monitor.AutoMonitor():
                     self.assertEqual(auto_monitor.lock_owner_pid(), os.getpid())
-                self.assertEqual(cleaned.call_count, 2)
+                # Empty port sets clear stale owned chains on both enter
+                # and exit. Two successful sessions therefore do 4 sweeps.
+                self.assertEqual(cleaned.call_count, 4)
 
     def test_sigterm_unwinds_instead_of_leaving_stale_counters(self):
         previous = signal.getsignal(signal.SIGTERM)
