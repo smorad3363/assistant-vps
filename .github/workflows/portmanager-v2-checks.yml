@@ -159,3 +159,65 @@ jobs:
           grep -Fx 'https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh' "$tmp/curl-args"
           test ! -e /usr/local/bin/portmanager2
           echo 'V1 alias contract PASS; full V1 coexistence still NOT TESTED'
+
+  networkns-tcp-udp:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Isolated IPv4 DNAT+SNAT+forward TCP/UDP namespace integration
+        env:
+          REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euxo pipefail
+          echo_pid=""
+          cleanup() {
+            set +e
+            if [ -n "$echo_pid" ]; then sudo kill "$echo_pid" 2>/dev/null; fi
+            if sudo ip netns list | grep -q pm2relay; then
+              sudo ip netns exec pm2relay portmanager2 uninstall --yes >/dev/null 2>&1 || true
+            fi
+            for ns in pm2client pm2relay pm2target; do
+              sudo ip netns del "$ns" 2>/dev/null || true
+            done
+          }
+          trap cleanup EXIT
+          sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
+          sudo ip netns add pm2client
+          sudo ip netns add pm2relay
+          sudo ip netns add pm2target
+          sudo ip link add pm2c type veth peer name pm2r0
+          sudo ip link add pm2r1 type veth peer name pm2t
+          sudo ip link set pm2c netns pm2client
+          sudo ip link set pm2r0 netns pm2relay
+          sudo ip link set pm2r1 netns pm2relay
+          sudo ip link set pm2t netns pm2target
+          for ns in pm2client pm2relay pm2target; do
+            sudo ip -n "$ns" link set lo up
+          done
+          sudo ip -n pm2client addr add 198.18.0.1/24 dev pm2c
+          sudo ip -n pm2relay addr add 198.18.0.2/24 dev pm2r0
+          sudo ip -n pm2relay addr add 198.19.0.1/24 dev pm2r1
+          sudo ip -n pm2target addr add 198.19.0.2/24 dev pm2t
+          sudo ip -n pm2client link set pm2c up
+          sudo ip -n pm2relay link set pm2r0 up
+          sudo ip -n pm2relay link set pm2r1 up
+          sudo ip -n pm2target link set pm2t up
+          sudo ip -n pm2client route add default via 198.18.0.2
+          sudo ip netns exec pm2relay sysctl -qw net.ipv4.ip_forward=1
+          sudo ip netns exec pm2relay iptables -P FORWARD DROP
+          sudo ip netns exec pm2target python3 -u portmanager-v2/tests/networkns/echo_server.py &
+          echo_pid=$!
+          sleep 1
+          sudo ip netns exec pm2relay portmanager2 tunnel create             --name trial --listen-ip 198.18.0.2 --interface pm2r0             --protocol tcp,udp --mode ports --mapping 443:8443,2053:2053             --target-ip 198.19.0.2
+          sudo ip netns exec pm2client python3 portmanager-v2/tests/networkns/client.py
+          sudo ip netns exec pm2relay portmanager2 sample
+          sudo ip netns exec pm2relay portmanager2 report --window 1h --json
+          sudo ip netns exec pm2relay portmanager2 tunnel apply
+          test "$(sudo ip netns exec pm2relay iptables -t nat -S PREROUTING | grep -c 'pm2:owned-hook')" -eq 1
+          tunnel_id="$(sudo ip netns exec pm2relay portmanager2 tunnel list --json |
+            python3 -c 'import json,sys;print(json.load(sys.stdin)["details"]["tunnels"][0]["id"])')"
+          sudo ip netns exec pm2relay portmanager2 tunnel delete "$tunnel_id" --yes
+          test "$(sudo ip netns exec pm2relay iptables -t nat -S PREROUTING | grep -c 'pm2:owned-hook' || true)" -eq 0
+          sudo ip netns exec pm2relay portmanager2 uninstall --yes
+          echo "PASS namespace TCP/UDP SNAT reverse path and own-rule cleanup"
