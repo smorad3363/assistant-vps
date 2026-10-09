@@ -79,8 +79,17 @@ def _read():
         item = json.loads(PROTECTED.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise PM2Error("E_CONFLICT", "Invalid protected rollback record") from exc
-    if not isinstance(item, dict) or item.get("product") != "portmanager2":
+    if (not isinstance(item, dict) or item.get("product") != "portmanager2"
+            or not isinstance(item.get("original_config"), dict)
+            or not isinstance(item.get("original_state"), dict)
+            or not isinstance(item.get("change_id"), str)
+            or not isinstance(item.get("expires_at"), (int, float))
+            or not isinstance(item.get("desired_generation"), int)):
         raise PM2Error("E_CONFLICT", "Unknown protected rollback record")
+    try:
+        uuid.UUID(item["change_id"])
+    except (ValueError, AttributeError):
+        raise PM2Error("E_CONFLICT", "Invalid protected change UUID")
     return item
 
 
@@ -149,10 +158,19 @@ def rollback(ident):
     now_rules = firewall.snapshot()
     current_inv = runtime.get("firewall", {})
     # Refuse unknown/foreign ownership, even during watchdog rollback.
-    firewall.check_inventory(now_rules, current_inv)
+    present = [(table, chain) for table, chain in firewall.ORDER
+               if ["-N", chain] in now_rules[table]]
     previous_rules = {chain: list(old_state.get("firewall", {}).get(table, {}).get(chain, []))
                       for table, chain in firewall.ORDER}
-    restored_inv = firewall.reconcile(previous_rules, current_inv)
+    if present:
+        # Partial/different inventory is not proof of ownership.
+        firewall.check_inventory(now_rules, current_inv)
+        restored_inv = firewall.reconcile(previous_rules, current_inv)
+    else:
+        # A reboot clears netfilter's volatile rules. Restore the *previous*
+        # confirmed inventory, never the new unconfirmed rules.
+        firewall.check_inventory(now_rules, {})
+        restored_inv = firewall.reconcile(previous_rules, {})
     restored = dict(old_state, firewall=restored_inv,
                     applied_generation=old_conf["generation"],
                     desired_generation=old_conf["generation"])
