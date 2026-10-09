@@ -29,6 +29,13 @@ Additional acceptance evidence: [run 37961638987](https://github.com/smorad3363/
 V2 interactive `--purge` removed only V2 paths and preserved V1 executable,
 root cron, mangle accounting chain and tc state.
 
+Timing qualification: [run 37961808849](https://github.com/smorad3363/assistant-vps/actions/runs/37961808849)
+caught a delayed transient timer due to systemd's default
+`AccuracySec=1min`. The code now explicitly requests
+`--timer-property=AccuracySec=1s`; rerun the 130-second watchdog job
+on the newest HEAD before accepting this fix. A real SSH-disconnect or
+full reboot recovery gate is still open.
+
 **Scope of claims matters.** Successful GitHub jobs do **not** prove V2 safe
 on an arbitrary active VPS with Docker, UFW, custom SSH ports or `tc` shaping.
 Do not mark a full reboot, legacy iptables, IPv6, high-load soak, automatic
