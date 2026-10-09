@@ -23,6 +23,19 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 
 ## Included features
 
+- **Simple V1-inspired menu:** only [1] Live & speed limits, [2] IPTABLES & tunnels,
+  [3] Edit/remove configurations. No IDs or iptables syntax required.
+- **No more false “0 traffic” assumption:** autodetect TCP/UDP IPv4 local sockets
+  with bounded, owned, temporary mangle counters when V2/V1 lack per-port
+  accounting; always show real aggregate interface traffic separately.
+- 10m / 1h / 8h / 24h time-weighted per-port averages, sorted from highest
+  observed 10-minute utilization. History is retained for up to 24 hours **of
+  actual collected samples**, not fabricated while viewer is closed.
+- Select a displayed port after Ctrl+C to apply/edit/remove an always-on or
+  hourly timed limit; choose ALL for a **single aggregate IPv4 limit** over
+  an explicitly shown interface (including SSH). No global iptables flush.
+
+
 - TCP/UDP IPv4 NAT tunnels, individual port forwarding or all-except mode.
 - Protected all-except/management binding changes with timed rollback and
   explicit confirmation identifier; no blanket firewall flush.
