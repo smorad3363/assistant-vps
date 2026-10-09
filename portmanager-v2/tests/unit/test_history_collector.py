@@ -37,7 +37,9 @@ class HistoryCollectorTests(unittest.TestCase):
               mock.patch.object(history_collector.system_rules, "detect_nat",
                                 return_value=(foreign, None)),
               mock.patch.object(history_collector.auto_monitor, "discover",
-                                return_value=[("tcp", 5555)])):
+                                return_value=[("tcp", 5555)]),
+              mock.patch.object(history_collector.auto_monitor, "run",
+                                return_value="")):
             selected = history_collector._select_ports()
         self.assertEqual(selected, {("tcp", 8080), ("udp", 4343), ("tcp", 5555)})
 
@@ -58,8 +60,9 @@ class HistoryCollectorTests(unittest.TestCase):
                   mock.patch.object(history_collector, "_tracked_elsewhere", return_value=set()),
                   mock.patch.object(history_collector.system_rules, "detect_nat",
                                     return_value=([], None)),
-                  mock.patch.object(history_collector.auto_monitor, "discover",
-                                    return_value=list(ports)),
+                  mock.patch.object(history_collector, "_select_ports", return_value=ports),
+                  mock.patch.object(history_collector.usage_ledger, "boot_id",
+                                    return_value="11111111-1111-4111-8111-111111111111"),
                   mock.patch.object(history_collector, "_install") as install):
                 first = history_collector.collect(timestamp=1000)
                 second = history_collector.collect(timestamp=1060)
@@ -78,6 +81,40 @@ class HistoryCollectorTests(unittest.TestCase):
                 self.assertAlmostEqual(rows[0][2], 0.008)
                 self.assertAlmostEqual(rows[0][3], 0.016)
             finally:
+                db.close()
+
+
+    def test_sampler_writes_exact_kernel_byte_deltas_to_ledger(self):
+        ports = {("tcp", 8080)}
+        inspected = ([("PREROUTING", "PM2_HIST_RX", True, True),
+                      ("POSTROUTING", "PM2_HIST_TX", True, True)], ports)
+        states = [
+            {("auto", "tcp", 8080, "up"): 10000,
+             ("auto", "tcp", 8080, "down"): 20000},
+            {("auto", "tcp", 8080, "up"): 110000,
+             ("auto", "tcp", 8080, "down"): 220000}
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            with (mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"),
+                  mock.patch.object(history_collector.os, "geteuid", return_value=0),
+                  mock.patch.object(history_collector.usage_ledger, "boot_id",
+                                    return_value="11111111-1111-4111-8111-111111111111"),
+                  mock.patch.object(history_collector, "_inspect", return_value=inspected),
+                  mock.patch.object(history_collector, "_history_counters", side_effect=states),
+                  mock.patch.object(history_collector, "_select_ports", return_value=ports),
+                  mock.patch.object(history_collector, "_install") as install):
+                now = 1791588300
+                first = history_collector.collect(timestamp=now)
+                second = history_collector.collect(timestamp=now + 60)
+                install.assert_not_called()
+                self.assertEqual(first["byte_intervals_written"], 0)
+                self.assertEqual(second["byte_intervals_written"], 1)
+                db = sampler.connect()
+                row = db.execute(
+                    "SELECT upload_bytes, download_bytes, start_utc, end_utc "
+                    "FROM pm2_port_byte_intervals").fetchone()
+                self.assertEqual(row[:2], (100000, 200000))
+                self.assertEqual(row[2:], (now, now + 60))
                 db.close()
 
 
