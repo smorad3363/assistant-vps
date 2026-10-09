@@ -30,6 +30,7 @@ OPT = Path(os.environ.get("PM2_OPT", "/opt/portmanager2"))
 LOG = Path(os.environ.get("PM2_LOG", "/var/log/portmanager2"))
 BIN = Path(os.environ.get("PM2_BIN", "/usr/local/bin/portmanager2"))
 V1_BIN = Path("/usr/local/bin/portmanager")
+PRIMARY_V2 = "/opt/portmanager2/current/bin/portmanager2"
 REQUIRED = ("python3", "ip", "iptables", "iptables-save", "iptables-restore", "ss", "tc")
 PREFIX = "portmanager2-"
 LOCK = Path("/run/lock/portmanager2.lock")
@@ -138,7 +139,7 @@ def doctor():
         forwarding_state = {"unknown": exc.code}
     return {
         "development": True,
-        "v1_installed": V1_BIN.exists(),
+        "v1_installed": V1_BIN.is_file() and not V1_BIN.is_symlink(),
         "dependencies_missing": missing,
         "iptables_backend": _backend(),
         "config_schema": config.get("schema_version") if isinstance(config, dict) else None,
@@ -202,6 +203,9 @@ def uninstall(args):
         raise PM2Error("E_CONFLICT", "V2 release pointer is not a symlink")
     forward_info = forwarding.preflight()
     paths = [str(BIN), str(OPT)]
+    primary_owned = V1_BIN.is_symlink() and os.readlink(V1_BIN) == PRIMARY_V2
+    if primary_owned:
+        paths.append(str(V1_BIN))
     if forward_info["dropin_owned"]:
         paths.append(str(forwarding.DROPIN))
     if service_marker is not None:
@@ -265,6 +269,12 @@ def uninstall(args):
     forwarding.remove_dropin()
     if BIN.is_symlink():
         BIN.unlink()
+    if primary_owned:
+        # Only remove the V2-owned public alias. Leave a restored regular
+        # V1 executable and all archived V1 config/data completely untouched.
+        if not V1_BIN.is_symlink() or os.readlink(V1_BIN) != PRIMARY_V2:
+            raise PM2Error("E_CONFLICT", "Public command alias changed during uninstall")
+        V1_BIN.unlink()
     shutil.rmtree(OPT)
     if args.purge:
         for path in (ETC, DATA, LOG):
