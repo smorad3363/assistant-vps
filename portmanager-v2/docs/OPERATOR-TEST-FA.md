@@ -54,6 +54,7 @@ systemctl is-active portmanager2-sample.timer
 
 ```bash
 portmanager2 help
+sudo portmanager2 graph --refresh 5 --window 10m --once --json
 sudo portmanager2 tunnel list --json
 sudo portmanager2 status --json
 sudo portmanager2 limits list --json
