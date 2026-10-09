@@ -355,7 +355,8 @@ def _choose(*choices, selected=0):
         raise ValueError("Menu shortcuts must be unique")
     selected = max(0, min(selected, len(choices) - 1))
     _ui_actions(*choices, selected=selected)
-    if not (os.isatty(0) and os.isatty(1) and
+    if not (os.isatty(0) and os.isatty(1) and sys.stdin.isatty() and
+            sys.stdout.isatty() and
             os.getenv("TERM", "").lower() not in ("", "dumb")):
         return _ask("Choose number", "0")
     try:
@@ -365,6 +366,41 @@ def _choose(*choices, selected=0):
         # Nonstandard terminal: provide an ordinary numeric choice.
         print()
         return _ask("Choose number", "0")
+
+
+def _pick_row(title, rows, describe):
+    """Browse any length of port/rule list with bounded terminal-height pages."""
+    if not rows:
+        return None
+    size = max(3, min(7, shutil.get_terminal_size((100, 28)).lines - 13))
+    page = 0
+    while True:
+        start = page * size
+        window = rows[start:start + size]
+        _title(title)
+        _ui_edge("top")
+        _ui_line(f"  {len(rows)} items  |  Page {page + 1} of {(len(rows) + size - 1) // size}")
+        _ui_line("  Use arrows and Enter, or type an item number then Enter.")
+        _ui_edge("bottom")
+        choices = [(str(i + 1), _ui_cut(describe(item),
+                                       _ui_width() - 20))
+                   for i, item in enumerate(window)]
+        if page:
+            choices.append(("8", "Previous page"))
+        if start + size < len(rows):
+            choices.append(("9", "Next page"))
+        choices.append(("0", "Go back"))
+        action = _choose(*choices)
+        if action in ("0", None):
+            return None
+        if action == "8" and page:
+            page -= 1
+        elif action == "9" and start + size < len(rows):
+            page += 1
+        elif action == "r":
+            continue
+        elif action and action.isdecimal() and 1 <= int(action) <= len(window):
+            return window[int(action) - 1]
 
 
 def _ui_header_row(width):
@@ -491,39 +527,46 @@ def _delete_all():
 
 
 def _inspect_existing_rule():
-    """Foreign NAT rules are viewable, but must not be modified blindly."""
+    """Existing rules are browseable, never silently adopted or changed."""
     while True:
-        _title("EXISTING RULES")
         rules, error = system_rules.detect_nat(limit=200)
         if error:
-            print(_paint("93", "  " + error))
-            _ask("Enter to return")
+            _title("EXISTING PORTS")
+            _ui_edge("top")
+            _ui_line(_paint("93", "  Cannot read existing port rules right now."))
+            _ui_line(_ui_cut(error, _ui_width() - 8))
+            _ui_edge("bottom")
+            _ask("Press Enter to return")
             return
-        _ui_edge("top")
-        _ui_line(f"  {len(rules)} existing rules found  |  view only")
-        for index, rule in enumerate(rules, 1):
-            _ui_line("  " + _ui_cut(
-                f"[{index}] {rule['chain']}  {rule['protocol']}:{rule['port']} "
-                f"→ {rule['target']} {rule['destination']}", _ui_width() - 8))
-        _ui_line("")
-        _ui_line(_paint("93", _ui_cut(
-            "  These rules may belong to other apps. Changing them can break connections.",
-            _ui_width() - 8)))
-        _ui_edge("bottom")
-        selected = _ask("Rule number to inspect / 0 Back", "0")
-        if selected in ("0", None):
+        if not rules:
+            _title("EXISTING PORTS")
+            _ui_edge("top")
+            _ui_line("  No existing port rules found.")
+            _ui_edge("bottom")
+            _ask("Press Enter to return")
             return
-        if not selected.isdecimal() or not 1 <= int(selected) <= len(rules):
-            continue
-        rule = rules[int(selected) - 1]
-        _title("RULE DETAILS")
+        rule = _pick_row(
+            "EXISTING PORTS", rules,
+            lambda item: (f'{item["protocol"]}:{item["port"]} '
+                          f'→ {item["destination"]}  ({item["target"]})'))
+        if rule is None:
+            return
+        _title("PORT DETAILS")
         _ui_edge("top")
-        for key in ("chain", "protocol", "port", "target", "destination", "interface", "source"):
-            _ui_line(f"  {key.upper():<16} {_ui_cut(rule.get(key, '-'), _ui_width() - 26)}")
+        columns = (("Port", f'{rule["protocol"]}:{rule["port"]}'),
+                   ("Direction", "Incoming" if rule["chain"] == "PREROUTING"
+                    else "Outgoing" if rule["chain"] == "POSTROUTING"
+                    else rule["chain"]),
+                   ("Action", rule["target"]),
+                   ("Destination", rule["destination"]),
+                   ("Network", rule.get("interface", "-")))
+        for label, value in columns:
+            _ui_line(f"  {label:<14} {_ui_cut(value, _ui_width() - 24)}")
         _ui_line("")
-        _ui_line(_paint("93", "  From another app: you can view it here, not change it yet."))
+        _ui_line(_paint("93", "  Rule from another app: view only for safety."))
         _ui_edge("bottom")
-        _ask("Enter to continue")
+        _choose(("0", "Back to port list"))
+
 
 
 def _manage():
@@ -554,10 +597,12 @@ def _manage():
             _ui_edge("bottom")
             _ask("Enter to continue")
             continue
-        value = _ask("Tunnel number")
-        if not value or not value.isdecimal() or not 1 <= int(value) <= len(items):
+        selected = _pick_row(
+            "SAVED PORT CONNECTIONS", items,
+            lambda item: (f'{item.get("name", "Connection")}  → '
+                          f'{item.get("target_ip", "?")}'))
+        if selected is None:
             continue
-        selected = items[int(value) - 1]
         _title("EDIT TUNNEL")
         action = _choose(("1", "Change this port connection"),
                          ("2", "Remove this port connection"),
