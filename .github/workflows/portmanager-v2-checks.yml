@@ -421,3 +421,23 @@ jobs:
           diff -u "$RUNNER_TEMP/v1-iptables-before" "$RUNNER_TEMP/v1-iptables-after"
           diff -u "$RUNNER_TEMP/v1-tc-before" "$RUNNER_TEMP/v1-tc-after"
           echo 'PASS AT-007 V2 interactive purge, AT-032 V1 reinstall coexistence'
+
+  debian-12-graph-unit:
+    runs-on: ubuntu-24.04
+    container: debian:12
+    steps:
+      - name: Debian dependencies for static and graph checks
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git python3 python3-minimal ca-certificates coreutils
+      - uses: actions/checkout@v4
+      - name: Compile all V2 modules and validate time-window graph on Debian
+        env:
+          PYTHONPATH: portmanager-v2
+        run: |
+          cd portmanager-v2
+          sha256sum --check --strict manifest.sha256
+          cd ..
+          python3 -m compileall -q portmanager-v2/pm2
+          python3 -m unittest discover -s portmanager-v2/tests/unit -v
+          python3 portmanager-v2/bin/portmanager2 --help || bash portmanager-v2/bin/portmanager2 --version
