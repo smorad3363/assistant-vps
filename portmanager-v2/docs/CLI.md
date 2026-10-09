@@ -15,6 +15,10 @@ portmanager2 status --json
 portmanager2 tunnel list --json
 portmanager2 tunnel show <uuid> --json
 portmanager2 tunnel check --json
+portmanager2 graph --refresh 5 --window 10m         # interactive live 10-min graphs
+portmanager2 graph --refresh 10 --all-ports         # include idle configured ports
+portmanager2 graph --refresh 5 --once --json        # machine-readable one refresh
+portmanager2 live --interval 5                      # alias for per-port viewer
 portmanager2 limits list --json
 portmanager2 limits schedule-preview --file examples/scheduled-limits.example.json --at 2026-10-12T20:00:00Z --json
 portmanager2 report --window 1h --json
