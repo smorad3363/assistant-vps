@@ -93,7 +93,7 @@ class LiveScreenTests(unittest.TestCase):
     def test_keyboard_quits_without_waiting_full_refresh(self):
         screen = self.make_view([ord("q")])
         screen.draw(sample())
-        self.assertEqual(screen.wait(60), "quit")
+        self.assertEqual(screen.wait(60), "select")
 
     def test_refresh_and_scroll_keys(self):
         screen = self.make_view([ord("+"), ord("-"), FakeCurses.KEY_DOWN,
@@ -103,6 +103,47 @@ class LiveScreenTests(unittest.TestCase):
         self.assertEqual(screen.requested, 4)
         self.assertEqual(screen.wait(1), "refresh")
         self.assertEqual(screen.requested, 5)
+        self.assertEqual(screen.wait(1), "select")
+
+
+    def test_arrows_select_visible_port_and_q_confirms(self):
+        screen = self.make_view([FakeCurses.KEY_DOWN, ord("q")])
+        screen.draw(sample())
+        self.assertEqual(screen.wait(1), "select")
+        row, interface = screen.selection()
+        self.assertEqual(row["listen_port"], 22)
+        self.assertEqual(interface, "eth0")
+        display = "\\n".join(value for _, _, value in screen.window.writes)
+        self.assertIn("TCP:22", display)
+        self.assertIn("▶", display)
+
+    def test_tab_switches_nic_without_changing_port(self):
+        screen = self.make_view([9, ord("q")])
+        data = sample()
+        data["interfaces"].append({"interface": "wgcf", "rx_mbps": 50,
+                                   "tx_mbps": 60})
+        screen.draw(data)
+        self.assertEqual(screen.wait(1), "select")
+        row, interface = screen.selection()
+        self.assertEqual(row["listen_port"], 8080)
+        self.assertEqual(interface, "wgcf")
+        display = "\\n".join(value for _, _, value in screen.window.writes)
+        self.assertIn("wgcf", display)
+
+    def test_global_limit_shortcut_selects_current_nic(self):
+        screen = self.make_view([9, ord("g")])
+        data = sample()
+        data["interfaces"].append({"interface": "ens18", "rx_mbps": 1,
+                                   "tx_mbps": 2})
+        screen.draw(data)
+        self.assertEqual(screen.wait(1), "global")
+        row, interface = screen.selection(whole_interface=True)
+        self.assertIsNone(row)
+        self.assertEqual(interface, "ens18")
+
+    def test_escape_exits_without_setting_limit(self):
+        screen = self.make_view([27])
+        screen.draw(sample())
         self.assertEqual(screen.wait(1), "quit")
 
 
