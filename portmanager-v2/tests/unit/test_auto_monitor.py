@@ -259,9 +259,9 @@ class AutoMonitorTests(unittest.TestCase):
               mock.patch("builtins.print") as out):
             self.assertEqual(simple_ui.menu(), 0)
         displayed = "\n".join(str(x.args) for x in out.call_args_list)
-        self.assertIn("LIVE", displayed)
-        self.assertIn("IPTABLES", displayed)
-        self.assertIn("EDIT", displayed)
+        self.assertIn("live traffic", displayed.lower())
+        self.assertIn("forward ports", displayed.lower())
+        self.assertIn("change or remove", displayed.lower())
 
 
 if __name__ == "__main__":
