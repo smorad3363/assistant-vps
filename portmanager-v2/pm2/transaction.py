@@ -79,6 +79,10 @@ def apply(candidate, allow_protected=False):
         completed = True
     except Exception as exc:
         try:
+            if isinstance(exc, PM2Error) and exc.code == "E_ROLLBACK":
+                # The firewall engine explicitly says kernel recovery failed.
+                # Never overwrite the evidence or report the kernel as safe.
+                raise exc
             if applied is not None:
                 firewall.reconcile({chain: list(previous.get(table, {}).get(chain, []))
                                     for table, chain in firewall.ORDER}, applied)
