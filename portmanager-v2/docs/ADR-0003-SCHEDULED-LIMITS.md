@@ -1,5 +1,33 @@
 # ADR-0003 — Scheduled per-port bandwidth limits
 
+## 2.1.0-rc.1 implementation update
+
+A V2-owned `tc clsact` **police/drop** implementation is available in
+`pm2/shaping.py`. It resolves only **enabled V2 tunnel ports** to their
+own interface, attaches flower ingress rules for `upload_mbps` and egress
+rules for `download_mbps`, and samples the configured policy via the
+V2-owned minute timer. This is rate **policing**, not HTB queueing; excess
+packets can be dropped (TCP typically backs off).
+
+`limits schedule-install --file plan.json` validates, writes an atomic
+schedule, reconciles the kernel and activates the V2 timer.
+`limits schedule-list` and `limits schedule-apply` are also implemented,
+and option 05 in the text menu provides an editable wizard.
+
+**Safety:** refuses to change tc if frozen V1 is installed or a foreign
+clsact/filter exists. No V1 `tc` state or root qdisc is touched. V2-only
+clsact filters have recorded preferences and owner state; updates are
+journaled and rollback when possible, otherwise E_ROLLBACK preserves
+evidence. Shaping cannot be enabled on a port not bound to exactly one
+active V2 `ports` tunnel. A single scheduled policy needs explicit
+IANA timezone and an enabled start-day calendar.
+
+Open qualification: full guest reboot/SSH loss, adverse drift, high-rate
+iperf performance, DST clock-step cases on the real tc backend, and
+long-lived multi-provider coexistence are not guaranteed by unit tests.
+
+
+
 Status: **accepted specification + preview engine implemented; 2.1 enforcement is NOT available**.
 
 ## User story / example
