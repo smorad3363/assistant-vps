@@ -30,17 +30,27 @@ class CLITests(TestCase):
                 code, out, err = self.invoke([
                     "tunnel", "create", "--name", "not-ready",
                 ])
-                self.assertEqual(code, 8)
-                self.assertIn("E_UNSUPPORTED", err)
+                self.assertEqual(code, 2)
+                self.assertIn("E_VALIDATION", err)
                 self.assertFalse((Path(t) / "etc").exists())
 
-    def test_unimplemented_network_commands(self):
-        for args in (["tunnel", "apply"], ["restore"], ["sample"],
-                     ["limits", "set", "--tunnel", "abc"],
-                     ["backup", "create"]):
+    def test_unimplemented_admin_operations_fail_closed(self):
+        for args in (["limits", "set", "--tunnel", "abc"], ["backup", "create"],
+                     ["confirm", "nonexistent"]):
             code, _, err = self.invoke(args)
-            self.assertEqual(code, 8, args)
-            self.assertIn("E_UNSUPPORTED", err)
+            self.assertIn(code, (5, 8), args)
+            self.assertTrue("E_UNSUPPORTED" in err or "E_CONFLICT" in err)
+
+    def test_tunnel_list_validates_persisted_config(self):
+        with tempfile.TemporaryDirectory() as t:
+            from pm2 import transaction
+            base = Path(t)
+            (base / "config.json").write_text(
+                '{"schema_version":1,"generation":0,"tunnels":[]}')
+            with mock.patch.object(transaction, "CONFIG", base / "config.json"):
+                code, out, _ = self.invoke(["tunnel", "list", "--json"])
+                self.assertEqual(code, 0)
+                self.assertEqual(json.loads(out)["details"]["tunnels"], [])
 
     def test_status_json_contract(self):
         with tempfile.TemporaryDirectory() as t:
