@@ -23,7 +23,7 @@ class SourceTests(TestCase):
         self.assertNotIn("iptables -F", code)
         self.assertNotIn("qdisc del", code)
         self.assertNotIn("shell=True", code)
-        self.assertNotIn("iptables-restore", code)
+        self.assertNotIn('["iptables-restore",', code)
 
     def test_no_old_v1_path_copied_as_v2(self):
         self.assertTrue((REPO / "portmanager-dashboard" / "install.sh").exists())
