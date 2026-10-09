@@ -160,6 +160,78 @@ class AutoMonitorTests(unittest.TestCase):
             simple_ui._live()
         limits.assert_called_once_with(0, "wgcf")
 
+
+    def test_auto_port_resolves_eth0_not_docker_bridge(self):
+        ports = [{"interface": "eth0"}, {"interface": "docker0"}]
+        frame = {"rows": [{"listen_port": 1001, "protocol": "tcp",
+                           "tunnel_id": "auto"}], "interfaces": ports}
+        def simulated(**kwargs):
+            kwargs["on_frame"](frame)
+            kwargs["on_select"](frame["rows"][0], "ALL")
+            return 0
+        with (mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulated),
+              mock.patch.object(simple_ui.system_rules, "detect_nat",
+                                return_value=([{"chain": "PREROUTING",
+                                               "target": "DNAT", "protocol": "tcp",
+                                               "port": "1001", "interface": "-"}], None)),
+              mock.patch.object(simple_ui, "_network_defaults",
+                                return_value=("eth0", "192.0.2.1")),
+              mock.patch.object(simple_ui, "_choose_limit_interface") as chooser,
+              mock.patch.object(simple_ui, "_limit") as limits):
+            simple_ui._live()
+        chooser.assert_not_called()
+        limits.assert_called_once_with(1001, "eth0", "tcp")
+
+    def test_nat_explicit_ingress_interface_overrides_physical_default(self):
+        links = [{"interface": "eth0"}, {"interface": "docker0"}]
+        row = {"listen_port": 4343, "protocol": "udp", "tunnel_id": "auto"}
+        nat_rules = [{"chain": "PREROUTING", "target": "DNAT",
+                      "protocol": "udp", "port": "4343", "interface": "docker0"}]
+        with (mock.patch.object(simple_ui.system_rules, "detect_nat",
+                                return_value=(nat_rules, None)),
+              mock.patch.object(simple_ui, "_network_defaults") as default):
+            self.assertEqual(simple_ui._resolve_port_interface(row, links), "docker0")
+        default.assert_not_called()
+
+    def test_conflicting_nat_interfaces_do_not_guess(self):
+        links = [{"interface": "eth0"}, {"interface": "docker0"}]
+        row = {"listen_port": 8080, "protocol": "tcp", "tunnel_id": "auto"}
+        rules = [{"chain": "PREROUTING", "target": "DNAT",
+                  "protocol": "tcp", "port": "8080", "interface": name}
+                 for name in ("eth0", "docker0")]
+        with (mock.patch.object(simple_ui.system_rules, "detect_nat",
+                                return_value=(rules, None)),
+              mock.patch.object(simple_ui, "_network_defaults") as default):
+            self.assertIsNone(simple_ui._resolve_port_interface(row, links))
+        default.assert_not_called()
+
+    def test_owned_tunnel_uses_its_configured_interface(self):
+        links = [{"interface": "eth0"}, {"interface": "ens18"}]
+        row = {"listen_port": 2053, "protocol": "udp", "tunnel_id": "tunnel-a"}
+        with (mock.patch.object(simple_ui.config, "load",
+                                return_value={"tunnels": [
+                                    {"id": "tunnel-a", "interface": "ens18"}]}),
+              mock.patch.object(simple_ui.system_rules, "detect_nat") as nat):
+            self.assertEqual(simple_ui._resolve_port_interface(row, links), "ens18")
+        nat.assert_not_called()
+
+    def test_explicit_selected_interface_is_honored(self):
+        links = [{"interface": "eth0"}, {"interface": "docker0"}]
+        row = {"listen_port": 1001, "protocol": "tcp", "tunnel_id": "auto"}
+        with mock.patch.object(simple_ui.system_rules, "detect_nat") as nat:
+            self.assertEqual(simple_ui._resolve_port_interface(
+                row, links, chosen="docker0"), "docker0")
+        nat.assert_not_called()
+
+    def test_ambiguous_interfaces_require_manual_selection(self):
+        links = [{"interface": "wgcf"}, {"interface": "docker0"}]
+        row = {"listen_port": 1001, "protocol": "tcp", "tunnel_id": "auto"}
+        with (mock.patch.object(simple_ui.system_rules, "detect_nat",
+                                return_value=([], None)),
+              mock.patch.object(simple_ui, "_network_defaults",
+                                return_value=("lo", "127.0.0.1"))):
+            self.assertIsNone(simple_ui._resolve_port_interface(row, links))
+
     def test_warp_default_route_does_not_hide_physical_eth0(self):
         def run(argv, timeout=5):
             if argv[:3] == ["ip", "-4", "route"]:
