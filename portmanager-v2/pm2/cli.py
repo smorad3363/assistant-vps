@@ -21,7 +21,7 @@ from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
-from . import backup, guard, logbook, live
+from . import backup, guard, logbook, live, forwarding
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -185,7 +185,10 @@ def uninstall(args):
             raise PM2Error("E_CONFLICT", "V2 release pointer escapes expected directory")
     elif current.exists():
         raise PM2Error("E_CONFLICT", "V2 release pointer is not a symlink")
+    forward_info = forwarding.preflight()
     paths = [str(BIN), str(OPT)]
+    if forward_info["dropin_owned"]:
+        paths.append(str(forwarding.DROPIN))
     if service_marker is not None:
         paths += [str(services.SYSTEMD / name) for name in services.UNIT_NAMES]
         paths.append(str(services.MARKER))
@@ -238,6 +241,7 @@ def uninstall(args):
     if runtime is not None and new_inventory != owned:
         retained = dict(runtime, firewall=new_inventory, applied_generation=-1)
         safe_config.atomic_json(runtime_file, retained)
+    forwarding.remove_dropin()
     if BIN.is_symlink():
         BIN.unlink()
     shutil.rmtree(OPT)
