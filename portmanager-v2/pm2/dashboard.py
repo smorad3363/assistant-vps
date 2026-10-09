@@ -168,6 +168,22 @@ def _backup_page():
             print(backup.create())
 
 
+def _live_graph():
+    from . import port_graph
+    raw = _ask("Refresh seconds (2..60)", "5")
+    if raw is None:
+        return
+    try:
+        seconds = int(raw)
+        if not 2 <= seconds <= 60:
+            print("Refresh must be 2..60 seconds")
+            return
+        print("10-minute rolling graph: active ports only, Ctrl+C to return.")
+        port_graph.watch(refresh=seconds, top=20, active_only=True)
+    except ValueError:
+        print("Refresh must be a whole number between 2 and 60.")
+
+
 def _doctor():
     from . import cli
     print(json.dumps(cli.doctor(), indent=2, ensure_ascii=False))
@@ -201,8 +217,7 @@ def menu():
             elif choice == "05":
                 print("Bandwidth shaping not supported in 2.0; planned for 2.1.")
             elif choice == "04":
-                _reports()
-                print("For API: portmanager2 report --window 1h --json")
+                _live_graph()
             elif choice == "09":
                 from . import VERSION
                 print("Version", VERSION, "| IPv4 NAT forwarding, NOT encrypted VPN")
