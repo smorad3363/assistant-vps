@@ -109,7 +109,7 @@ def _mutate(operation, argv):
     result = tunnels.handle(operation, argv, mutation_lock)
     if result.get("pending_confirmation"):
         pending = result["pending_confirmation"]
-        print(_paint("93", "  IMPORTANT: SSH rollback guard armed (120 seconds)."))
+        print(_paint("93", "  Keep this SSH window open for 2 minutes while the change is checked."))
         if _confirm("Still connected and keep the change?"):
             with mutation_lock():
                 guard.confirm(pending)
@@ -124,7 +124,7 @@ def _tunnel_wizard(old=None, all_ports=False):
     except PM2Error as err:
         print(f"  Interface autodetection failed: {err.message}")
         return
-    name_default = old["name"] if old else f"tunnel-{len(config.load(transaction.CONFIG)['tunnels'])+1}"
+    name_default = old["name"] if old else f"port-link-{len(config.load(transaction.CONFIG)['tunnels'])+1}"
     name = _ask("Name for this port connection", name_default)
     if name is None:
         return
@@ -379,8 +379,8 @@ def _pick_row(title, rows, describe):
         window = rows[start:start + size]
         _title(title)
         _ui_edge("top")
-        _ui_line(f"  {len(rows)} items  |  Page {page + 1} of {(len(rows) + size - 1) // size}")
-        _ui_line("  Use arrows and Enter, or type an item number then Enter.")
+        _ui_line(f"  {len(rows)} results  |  Page {page + 1} of {(len(rows) + size - 1) // size}")
+        _ui_line("  Use ↑↓ and Enter, or type a number and Enter.")
         _ui_edge("bottom")
         choices = [(str(i + 1), _ui_cut(describe(item),
                                        _ui_width() - 20))
@@ -558,7 +558,11 @@ def _inspect_existing_rule():
                    ("Direction", "Incoming" if rule["chain"] == "PREROUTING"
                     else "Outgoing" if rule["chain"] == "POSTROUTING"
                     else rule["chain"]),
-                   ("Action", rule["target"]),
+                   ("Action", {"DNAT": "Forward to destination",
+                               "REDIRECT": "Handle on this server",
+                               "SNAT": "Change outgoing IP",
+                               "MASQUERADE": "Use this server's IP"}.get(
+                                   rule["target"], rule["target"])),
                    ("Destination", rule["destination"]),
                    ("Network", rule.get("interface", "-")))
         for label, value in columns:
@@ -572,7 +576,7 @@ def _inspect_existing_rule():
 
 def _manage():
     while True:
-        _title("CONFIG")
+        _title("MY PORTS")
         items = _list_tunnels()
         choice = _choose(("1", "Change or remove a saved port"),
                          ("2", "Remove all saved port connections"),
@@ -591,7 +595,7 @@ def _manage():
         if choice != "1":
             continue
         if not items:
-            _title("CONFIG")
+            _title("MY PORTS")
             _ui_edge("top")
             _ui_line("  No port connections saved in this app yet.")
             _ui_line("  You can still see existing ports with option [3].")
@@ -604,7 +608,7 @@ def _manage():
                           f'{item.get("target_ip", "?")}'))
         if selected is None:
             continue
-        _title("EDIT TUNNEL")
+        _title("EDIT PORT")
         action = _choose(("1", "Change this port connection"),
                          ("2", "Remove this port connection"),
                          ("0", "Go back"))
@@ -795,14 +799,14 @@ def _choose_limit_interface(links):
         return None
     if len(choices) == 1:
         return choices[0]
-    _title("CHOOSE INTERFACE")
+    _title("CHOOSE NETWORK")
     _ui_edge("top")
-    _ui_line("  Select one actual interface before applying speed limits.")
-    _ui_line(_paint("93", "  ALL is a display mode, not a Linux network interface."))
+    _ui_line("  More than one network matches. Choose the one to limit.")
+    _ui_line(_paint("93", "  Your choice affects only this network."))
     for index, name in enumerate(choices, 1):
         _ui_line(f"  [{index}] " + _ui_cut(name, _ui_width() - 12))
     _ui_edge("bottom")
-    choice = _ask("Interface number / 0 Back", "0")
+    choice = _ask("Network number / 0 Back", "0")
     if choice and choice.isdecimal() and 1 <= int(choice) <= len(choices):
         return choices[int(choice) - 1]
     return None
@@ -866,7 +870,7 @@ def _live():
     # AUTO when Live is on ALL; honor an explicitly selected NIC if any.
     interface = _resolve_port_interface(row, links, selected_interface)
     if not interface:
-        print(_paint("93", "  Interface ambiguous; choose one manually."))
+        print(_paint("93", "  Could not identify one network for this port."))
         interface = _choose_limit_interface(links)
     if not interface:
         return
