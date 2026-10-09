@@ -1,51 +1,68 @@
-# Port Manager V2 — Tunnel Edition (DEVELOPMENT)
+# Port Manager V2 — Tunnel Edition (`2.0.0-dev.1`)
 
-> **NOT READY FOR PRODUCTION.** Current version: `2.0.0-dev.1`.
-> Phase-1 bootstrap only. No tunnel, NAT, shaping or telemetry is implemented.
-> It installs **disabled** systemd unit templates but never starts or enables them.
+**Development / pre-release. Not yet approved for production.**
+V2 is a separate IPv4 NAT port-forwarding tool, **not an encrypted VPN**.
+No source files under `portmanager-dashboard/**` (stable V1) are changed.
 
-Port Manager V2 is a separate IPv4 NAT-forwarding application to be developed
-alongside the original Port Manager V1. **NAT is not an encrypted VPN.**
+## Version separation (after PR acceptance)
 
-### Version routing (master URLs become valid only after acceptance & merge)
+| Installer | Destination | Role |
+| --- | --- | --- |
+| `master/portmanager-dashboard/install.sh` | V1 / `portmanager` | **Original URL stays unchanged** |
+| `master/portmanager-v1/install.sh` | V1 / `portmanager` | New alias to original V1 |
+| `master/portmanager-v2/install.sh` | V2 / `portmanager2` | Separate V2; valid **only once PR merges** |
 
-Original V1 command (permanently unchanged):
+The current V2 code is available **only on** the protected-in-review
+`feat/portmanager-v2-roadmap` development branch. Do not try the V2 master URL
+before release. Full instructions to clone a pinned commit, test and uninstall
+on a disposable VM: [راهنمای آزمون فارسی](docs/OPERATOR-TEST-FA.md).
+
+## Implemented in the development branch
+
+- Strict IPv4 tunnel CRUD, TCP/UDP individual port mappings, and `all-except`
+  with explicit acknowledgment, existing-listener inspection and reserved SSH
+  fallback port 22.
+- V2-only `PM2_*` NAT, filter, mangle and accounting chains (no global flush);
+  conntrack scoped SNAT and bidirectional forwarding.
+- Full read-only previews, SHA256 file ownership, safety checks for V1 and
+  foreign rules, undo journal and rollback on recognized failures.
+- Dangerous binding/all-except changes: prearmed 120-second `systemd-run`
+  rollback and a unique confirmation ID. A failed/unknown rollback preserves
+  recovery evidence instead of pretending success.
+- SQLite sampling, upload/download reports for 1h/24h/7d, live rates,
+  separate JSON audit log, config backups, and a text-based tunnel manager.
+- Optional `systemd` V2-only restore + minute sampler services. **They are
+  disabled by default** and require explicit installer opt-in. No V1 cron
+  installation and no V1 `tc` changes.
+- V2-only IPv4 `sysctl.d` forwarding drop-in; uninstall never turns off a
+  possibly shared live `net.ipv4.ip_forward`.
+- Shaping and quotas are intentionally out of scope for V2 2.0; planned for
+  2.1 and must not overwrite any existing `tc` qdisc.
+
+## Useful CLI (after installing on a disposable VM)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash
+portmanager2                        # text menu on a TTY
+portmanager2 help
+portmanager2 doctor --json
+portmanager2 tunnel list --json
+portmanager2 tunnel create --dry-run --name test --listen-ip 192.0.2.11 --interface eth0 --protocol tcp --mode ports --mapping 443:8443 --target-ip 198.51.100.10
+portmanager2 tunnel check --json
+portmanager2 report --window 1h --json
+portmanager2 backup list
+portmanager2 limits list --json     # unavailable/2.1, as expected
+sudo portmanager2 uninstall --dry-run
+sudo portmanager2 uninstall --yes   # retains V2 config/data
 ```
 
-New V1 alias:
+Current evidence: [GitHub Actions run 37960307468](https://github.com/smorad3363/assistant-vps/actions/runs/37960307468)
+passed static/unit (48 tests per Python), real V1/V2 coexistence, networkns
+TCP+UDP round trip, guard rollback and 120s timer, and activated systemd on
+fresh GitHub Ubuntu VMs. **A full guest reboot, real multi-host reliability,
+IPv6 behavior, legacy iptables and user acceptance are still not certified.**
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-v1/install.sh | sudo bash
-```
-
-V2 independent installer, reserved until release gates pass:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-v2/install.sh | sudo bash
-```
-
-On this development branch, the bootstrap may be tried **in an isolated VM
-only**, using a pinned commit in `PORTMANAGER2_REF`. Never run on production.
-
-### Safe current commands
-- `portmanager2 --version`
-- `portmanager2 help`
-- `portmanager2 doctor --json` (read only; unsupported checks labeled)
-- `portmanager2 status --json`
-- `portmanager2 limits list --json` (reports unavailable)
-- `portmanager2 uninstall --dry-run`
-- `sudo portmanager2 uninstall --yes` (removes only verified V2 units
-  and V2 launcher/release; retains V2 config/data)
-- `sudo portmanager2 uninstall --purge` (interactive double confirmation)
-
-All unfinished tunnel, traffic and bandwidth-changing commands return
-`E_UNSUPPORTED` (exit 8) **without making network changes**.
-
-See the [full Persian specification](docs/PM2-SPEC-001.fa.md),
-[implementation checkpoints](docs/PROGRESS.md),
-[acceptance gate matrix](docs/TEST-MATRIX.md) and
-[architecture](docs/ARCHITECTURE.md). Stable release is gated on AT-001..040,
-VM/netns TCP/UDP tests, SSH protection and V1 coexistence checks.
+See [PM2-SPEC-001](docs/PM2-SPEC-001.fa.md),
+[progress checkpoint](docs/PROGRESS.md),
+[test matrix](docs/TEST-MATRIX.md), [CLI contract](docs/CLI.md) and
+[operator test guide](docs/OPERATOR-TEST-FA.md). PR must remain draft until
+all release gates pass.
