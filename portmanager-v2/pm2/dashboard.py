@@ -184,6 +184,89 @@ def _live_graph():
         print("Refresh must be a whole number between 2 and 60.")
 
 
+def _limits_page():
+    """Schedule wizard reuses the same CLI-owned validation/rollback backend."""
+    from . import shaping, limit_windows, services
+    from .cli import mutation_lock
+    import tempfile
+    from pathlib import Path
+    while True:
+        print("\nTimed limits: [1] List [2] Add [3] Remove [4] Apply now [0] Back")
+        choice = _ask("Choice")
+        if choice is None:
+            return
+        try:
+            plan = shaping.schedule_load()
+            if choice == "1":
+                for item in plan["policies"]:
+                    print(f" {item['id']}: :{item['port']} {item['protocol']} "
+                          f"{item['start']}-{item['end']} {item['timezone']} "
+                          f"weekdays {item['days']} upload {item['upload_mbps']} "
+                          f"download {item['download_mbps']} Mbit/s")
+                continue
+            if choice == "4":
+                with mutation_lock():
+                    print(shaping.reconcile())
+                continue
+            if choice == "2":
+                fields = {
+                    "id": _ask("Policy ID (ASCII)"),
+                    "port": _ask("Listen port 1..65535"),
+                    "protocol": _ask("Protocol tcp/udp/tcp,udp", "tcp,udp"),
+                    "timezone": _ask("IANA timezone", "Asia/Tehran"),
+                    "days": _ask("Weekdays 0=Mon .. 6=Sun (comma separated)", "0,1,2,3,4,5,6"),
+                    "start": _ask("Start HH:MM", "18:00"),
+                    "end": _ask("End HH:MM (next day if earlier)", "02:00"),
+                    "upload_mbps": _ask("Upload Mbit/s (0 = unlimited)", "10"),
+                    "download_mbps": _ask("Download Mbit/s (0 = unlimited)", "20"),
+                }
+                if any(x is None for x in fields.values()):
+                    continue
+                new = {"id": fields["id"], "port": int(fields["port"]),
+                       "protocol": fields["protocol"], "timezone": fields["timezone"],
+                       "days": sorted(set(int(d.strip()) for d in fields["days"].split(","))),
+                       "start": fields["start"], "end": fields["end"],
+                       "upload_mbps": int(fields["upload_mbps"]),
+                       "download_mbps": int(fields["download_mbps"]),
+                       "enabled": True}
+                plan["policies"].append(new)
+            elif choice == "3":
+                ident = _ask("Exact policy ID")
+                if ident is None:
+                    continue
+                old_count = len(plan["policies"])
+                plan["policies"] = [p for p in plan["policies"] if p["id"] != ident]
+                if len(plan["policies"]) == old_count:
+                    print("No matching policy.")
+                    continue
+            else:
+                print("Unknown selection")
+                continue
+            limit_windows.validate(plan["policies"])
+            print("\nProposed schedule:\n", json.dumps(plan, indent=2))
+            if _ask("Type APPLY to save") != "APPLY":
+                continue
+            # Reuse installer validation rather than editing the file outside
+            # the privileged transaction lock.
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             prefix=".pm2-sched-", suffix=".json",
+                                             dir=shaping.SCHEDULE.parent,
+                                             delete=False) as tmp:
+                filename = Path(tmp.name)
+                json.dump(plan, tmp)
+            try:
+                with mutation_lock():
+                    result = shaping.install_schedule(filename)
+                    result.update(shaping.reconcile())
+                    if plan["policies"]:
+                        services.activate()
+                print(result)
+            finally:
+                filename.unlink(missing_ok=True)
+        except (PM2Error, ValueError, OSError) as error:
+            print(f"Schedule rejected: {error}")
+
+
 def _doctor():
     from . import cli
     print(json.dumps(cli.doctor(), indent=2, ensure_ascii=False))
@@ -215,7 +298,7 @@ def menu():
             elif choice == "08":
                 _backup_page()
             elif choice == "05":
-                print("Bandwidth shaping not supported in 2.0; planned for 2.1.")
+                _limits_page()
             elif choice == "04":
                 _live_graph()
             elif choice == "09":
