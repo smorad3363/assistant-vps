@@ -1,0 +1,14 @@
+[Unit]
+Description=Port Manager V2 - restore owned IPv4 NAT rules
+Wants=network-online.target
+After=network-online.target netfilter-persistent.service
+ConditionPathExists=/etc/portmanager2/enable-restore
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/portmanager2 restore
+TimeoutStartSec=60
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
