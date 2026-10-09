@@ -37,6 +37,17 @@ def _title(subtitle):
     print(_paint("96;1", "╰" + "─" * width + "╯"))
 
 
+def _options(*choices):
+    """One compact card style for tunnel, edit and limit submenus."""
+    width = 60
+    print(_paint("90", "  ╭" + "─" * width + "╮"))
+    for choice in choices:
+        print("  " + _paint("90", "│") +
+              _paint("96;1" if choice.startswith("[1]") else "97", "  " + choice.ljust(width - 2)[:width - 2]) +
+              _paint("90", "│"))
+    print(_paint("90", "  ╰" + "─" * width + "╯"))
+
+
 def _network_defaults():
     """Prefer real VPS Ethernet to optional WARP/WireGuard default routing."""
     from .discovery import run
@@ -207,7 +218,7 @@ def _manage():
     while True:
         _title("CONFIG")
         items = _list_tunnels()
-        print("  [1] Edit/Delete V2 tunnel   [2] Delete ALL V2   [0] Back")
+        _options("[1] Edit/Delete V2 tunnel", "[2] Delete ALL V2", "[0] Back")
         choice = _ask("Select", "0")
         if choice in ("0", None):
             return
@@ -230,10 +241,10 @@ def _manage():
 def _tunnel_page():
     while True:
         _title("IPTABLES")
-        print("  [1] New port → IP tunnel")
-        print("  [2] Tunnel ALL ports (protect SSH)")
-        print("  [3] Edit / Delete current tunnels")
-        print("  [0] Back")
+        _options("[1] New port → IP tunnel",
+                 "[2] Tunnel ALL ports (protect SSH)",
+                 "[3] Edit / Delete current tunnels",
+                 "[0] Back")
         choice = _ask("Select", "0")
         if choice in ("0", None):
             return
