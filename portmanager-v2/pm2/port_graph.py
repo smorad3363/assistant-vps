@@ -20,7 +20,8 @@ from .errors import PM2Error
 WINDOW = 600
 # A 10-minute history OF the trailing 10-minute moving average needs
 # 20 minutes of underlying samples, not just the last 10 minutes.
-RETENTION = WINDOW * 2
+RETENTION = 86400 + WINDOW + 60
+PERIODS = {"10m": 600, "1h": 3600, "8h": 28800, "24h": 86400}
 SPARK = "▁▂▃▄▅▆▇█"
 
 
@@ -174,6 +175,8 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
     for key, name in labels.items():
         data = histories.get(key, [])
         avg = weighted(data, timestamp)
+        avgs = {period: weighted(data, timestamp, seconds)
+                for period, seconds in PERIODS.items()}
         recent = rates.get(key, {"up": 0.0, "down": 0.0})
         # Active means transferred bytes during the last rolling 10m, not
         # merely an open TCP listener/advertised port.
@@ -190,10 +193,18 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
             "now_up_mbps": recent["up"], "now_down_mbps": recent["down"],
             "avg10m_up_mbps": avg["up"], "avg10m_down_mbps": avg["down"],
             "coverage_seconds": round(avg["coverage"], 2),
+            "averages": {
+                period: {"up_mbps": stat["up"], "down_mbps": stat["down"],
+                         "coverage_seconds": round(stat["coverage"], 2),
+                         "requested_seconds": PERIODS[period]}
+                for period, stat in avgs.items()
+            },
             "graph_up": sparkline(data, timestamp, "up"),
             "graph_down": sparkline(data, timestamp, "down"),
         })
-    result.sort(key=lambda x: -(x["now_up_mbps"] + x["now_down_mbps"]))
+    result.sort(key=lambda x: (-((x["avg10m_up_mbps"] or 0) +
+                                      (x["avg10m_down_mbps"] or 0)),
+                               -(x["now_up_mbps"] + x["now_down_mbps"]), x["listen_port"] or 0))
     return {"timestamp_utc": timestamp, "window_seconds": WINDOW,
             "rows": result[:top], "active_rows": len(result),
             "refresh_is_read_only": True,
@@ -221,6 +232,7 @@ def render(data, requested, effective, rules):
                   f"{c('94', '↓')} {row['rx_mbps']:8.1f} Mb/s  "
                   + c("90", "(whole interface)"))
     print(c("90", "  " + "─" * (width - 4)))
+    print(c("90", "  Ranked by measured 10m usage | avg10m / 1h / 8h / 24h"))
     if not data["rows"]:
         count = data.get("auto_discovered_ports", 0)
         if count:
@@ -245,6 +257,14 @@ def render(data, requested, effective, rules):
                   if avg_u is not None and avg_d is not None else
                   f"  {c('97;1', row['protocol'].upper() + ':' + port)}  "
                   f"↑ {up:.1f} ↓ {down:.1f} Mb/s (warming up)")
+            stats = row.get("averages", {})
+            parts = []
+            for period in ("10m", "1h", "8h", "24h"):
+                item = stats.get(period, {})
+                mean = (item.get("up_mbps") or 0) + (item.get("down_mbps") or 0)
+                coverage = item.get("coverage_seconds", 0)
+                parts.append(f"{period}: {mean:.1f}" if coverage else f"{period}: --")
+            print("    " + "  ".join(parts) + " Mb/s")
             print(f"    {c('92', '↑')} {c('92', row['graph_up'])}")
             print(f"    {c('94', '↓')} {c('94', row['graph_down'])}")
     print(c("90", "  " + "─" * (width - 4)))
@@ -253,7 +273,7 @@ def render(data, requested, effective, rules):
 
 
 def watch(refresh=5, tunnel=None, top=20, active_only=True,
-          once=False, json_mode=False):
+          once=False, json_mode=False, on_frame=None):
     """Auto-detect Xray/Sing-box local TCP/UDP ports if no managed rules exist.
 
     Reuse existing V2/V1 counters as-is. Only if *none* exist, enable up
@@ -316,6 +336,8 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                                        "auto_discovered_ports": len(session.ports) if use_auto else 0,
                                        "port_coverage": "selected_ipv4_listening_ports"
                                        if use_auto else "configured_monitor_rules"})
+                        if on_frame is not None:
+                            on_frame(result)
                         if json_mode:
                             print(json.dumps(result, sort_keys=True), flush=True)
                         else:
