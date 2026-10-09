@@ -405,39 +405,40 @@ def _pick_row(title, rows, describe):
 
 def _ui_header_row(width):
     if width >= 105:
-        return "  #  CHAIN         PROTO:PORT      ACTION   TARGET                        IFACE        OWNER"
+        return "  #  DIRECTION     PORT          ACTION      DESTINATION                    NETWORK      CREATED BY"
     if width >= 79:
-        return "  #  CHAIN          PROTO:PORT       ACTION    TARGET / IFACE"
-    return "  #   PROTO:PORT  →  TARGET / IFACE"
+        return "  #  DIRECTION      PORT             ACTION     DESTINATION"
+    return "  #  PORT  →  DESTINATION"
 
 
 def _ui_record(index, chain, proto, action, destination, external=True, interface="-"):
     width = _ui_width()
-    chain = _ui_clean(chain)
+    direction = {"PREROUTING": "Incoming", "POSTROUTING": "Outgoing",
+                 "OUTPUT": "Local out"}.get(chain, chain)
+    operation = {"DNAT": "Forward", "REDIRECT": "Local", "SNAT": "Change IP",
+                 "MASQUERADE": "Share IP"}.get(action, action)
     proto = _ui_clean(proto)
-    action = _ui_clean(action)
     destination = _ui_clean(destination)
     iface = _ui_clean(interface)
+    owner = "Other app" if external else "This app"
     if width >= 105:
         row = (f" {index:>2}  " + _paint("93", "●") + " " +
-               f"{_ui_cut(chain, 12):<12}  " +
+               f"{_ui_cut(direction, 12):<12}  " +
                _paint("96;1", f"{_ui_cut(proto, 13):<13}") + "  " +
-               f"{_ui_cut(action, 7):<7}  " +
+               f"{_ui_cut(operation, 10):<10}  " +
                _paint("95;1", f"{_ui_cut(destination, 28):<28}") + "  " +
                f"{_ui_cut(iface, 11):<11}  " +
-               _paint("90", "[external]" if external else "[managed]"))
+               _paint("90", _ui_cut(owner, 11)))
     elif width >= 79:
         row = (f" {index:>2}  " + _paint("93", "●") + " " +
-               f"{_ui_cut(chain, 13):<13}  " +
-               _paint("96;1", f"{_ui_cut(proto, 13):<13}") + "  " +
-               f"{_ui_cut(action, 7):<7}  " +
-               _paint("95;1", _ui_cut(destination + " [" + iface + "]",
-                                     max(12, width - 58))))
+               f"{_ui_cut(direction, 13):<13}  " +
+               _paint("96;1", f"{_ui_cut(proto, 15):<15}") + "  " +
+               f"{_ui_cut(operation, 9):<9}  " +
+               _paint("95;1", _ui_cut(destination, max(12, width - 57))))
     else:
         row = (f" {index:>2}  " + _paint("93", "●") + "  " +
                _paint("96;1", _ui_cut(proto, 14)) + " → " +
-               _paint("95;1", _ui_cut(destination + " [" + iface + "]",
-                                     max(10, width - 31))))
+               _paint("95;1", _ui_cut(destination, max(10, width - 23))))
     _ui_line(row)
 
 
@@ -481,7 +482,7 @@ def _list_tunnels():
         _ui_line(_paint("90", "  No existing NAT forwarding rules found."))
     _ui_line("")
     _ui_line(_paint("90", _ui_cut(
-        "  Other apps may own these rules. View them here; do not remove them blindly.",
+        "  Other apps may own these rules (read-only). View them safely here.",
         width - 6)))
     _ui_edge("bottom", width)
     return items
@@ -506,8 +507,8 @@ def _delete_all():
         return
     if any(p["enabled"] for p in shaping.schedule_load()["policies"]):
         raise PM2Error("E_CONFLICT", "Remove active speed-limit policies before deleting tunnels")
-    print(_paint("91", "  Remove only Port Manager-created tunnels. External rules stay untouched."))
-    if not _confirm("Delete every V2 tunnel?"):
+    print(_paint("91", "  Remove saved port connections? Other apps will not be changed."))
+    if not _confirm("Remove ALL saved port connections?"):
         return
     with mutation_lock():
         current = config.load(transaction.CONFIG)
@@ -523,7 +524,7 @@ def _delete_all():
                 guard.confirm(result["pending_confirmation"])
             else:
                 print("  Pending 120s rollback; network change not confirmed.")
-    print(_paint("92", "  ✓ Tunnel removal requested"))
+    print(_paint("92", "  ✓ Saved connection removal requested"))
 
 
 def _inspect_existing_rule():
