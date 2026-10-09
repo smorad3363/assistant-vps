@@ -57,9 +57,10 @@ def validate(policies):
             invalid("Schedule record must be an object")
         required = {"id", "port", "protocol", "timezone", "days", "start",
                     "end", "download_mbps", "upload_mbps", "enabled"}
-        if set(rule) != required:
+        permitted = required | {"interface"}
+        if not required.issubset(set(rule)) or not set(rule).issubset(permitted):
             invalid("Unexpected/missing scheduling fields",
-                    unexpected=sorted(set(rule)-required),
+                    unexpected=sorted(set(rule)-permitted),
                     missing=sorted(required-set(rule)))
         rid = rule["id"]
         if not isinstance(rid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", rid):
@@ -68,11 +69,19 @@ def validate(policies):
             invalid("Duplicate schedule ID", id=rid)
         ids.add(rid)
         p = rule["port"]
-        if type(p) is not int or not 1 <= p <= 65535:
-            invalid("Port must be integer 1..65535", id=rid)
+        if type(p) is not int or not 0 <= p <= 65535:
+            invalid("Port must be 0 (all interface traffic) or 1..65535", id=rid)
+        iface = rule.get("interface")
+        if iface is not None and (not isinstance(iface, str) or
+                not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,15}", iface)):
+            invalid("Invalid interface for bandwidth policy", id=rid)
+        if p == 0 and iface is None:
+            invalid("All-port bandwidth limit requires an explicit interface", id=rid)
         protocol = rule["protocol"]
         if protocol not in ("tcp", "udp", "tcp,udp"):
             invalid("Protocol must be tcp, udp or tcp,udp", id=rid)
+        if p == 0 and protocol != "tcp,udp":
+            invalid("Global rate needs protocol=tcp,udp (covers interface IPv4)", id=rid)
         timezone_for(rule["timezone"])
         days = rule["days"]
         if (not isinstance(days, list) or not days or
@@ -141,7 +150,8 @@ def evaluate(policies, at=None):
             active.append({
                 "id": item["id"], "port": item["port"], "protocol": item["protocol"],
                 "download_mbps": item["download_mbps"],
-                "upload_mbps": item["upload_mbps"], "timezone": item["timezone"]
+                "upload_mbps": item["upload_mbps"], "timezone": item["timezone"],
+                "interface": item.get("interface")
             })
     return {"at_utc": when.astimezone(timezone.utc).isoformat(),
             "would_apply": sorted(active, key=lambda x: (x["port"], x["id"])),
