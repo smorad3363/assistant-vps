@@ -8,9 +8,10 @@ from .errors import PM2Error
 _COUNTER = re.compile(r"^\[(\d+):(\d+)\]$")
 _COMMENT = re.compile(r"^pm2:([a-f0-9-]{36}):(up|down)$")
 _V1_COMMENT = re.compile(r"^pm-(ul|dl):([0-9]{1,5})$")
+_PROBE_COMMENT = re.compile(r"^pm2view:(tcp|udp):(\d{1,5}):(up|down)$")
 
 
-def parse_counters(output, by_port=False, include_v1=False):
+def parse_counters(output, by_port=False, include_v1=False, include_probe=False):
     """Parse one iptables-save -c -t mangle snapshot.
 
     Existing default returns (tunnel_id, proto, direction) -> bytes, preserving
@@ -19,7 +20,9 @@ def parse_counters(output, by_port=False, include_v1=False):
     """
     data = {}
     for line in output.splitlines():
-        if "-A" not in line or not ("PM2_ACCOUNT" in line or (include_v1 and by_port and "PORTMANAGER_ACCT" in line)):
+        if "-A" not in line or not ("PM2_ACCOUNT" in line or
+                (include_v1 and by_port and "PORTMANAGER_ACCT" in line) or
+                (include_probe and by_port and "PM2_VIEW_" in line)):
             continue
         args = shlex.split(line)
         if "-A" not in args:
@@ -28,7 +31,9 @@ def parse_counters(output, by_port=False, include_v1=False):
         if index + 1 >= len(args):
             continue
         chain = args[index + 1]
-        if chain not in ("PM2_ACCOUNT", "PORTMANAGER_ACCT"):
+        if chain not in ("PM2_ACCOUNT", "PORTMANAGER_ACCT", "PM2_VIEW_RX", "PM2_VIEW_TX"):
+            continue
+        if chain in ("PM2_VIEW_RX", "PM2_VIEW_TX") and not (by_port and include_probe):
             continue
         if chain == "PORTMANAGER_ACCT" and not (include_v1 and by_port):
             continue
@@ -40,6 +45,15 @@ def parse_counters(output, by_port=False, include_v1=False):
         i = args.index("--comment")
         if i + 1 >= len(args):
             raise PM2Error("E_CONFLICT", "Truncated V2 accounting comment")
+        if chain in ("PM2_VIEW_RX", "PM2_VIEW_TX"):
+            match = _PROBE_COMMENT.fullmatch(args[i + 1])
+            if not match:
+                raise PM2Error("E_CONFLICT", "Unrecognized automatic port accounting label")
+            proto, port, direction = match.groups()
+            if direction != ("down" if chain == "PM2_VIEW_RX" else "up"):
+                raise PM2Error("E_CONFLICT", "Automatic port counter direction mismatch")
+            data[("auto", proto, direction, int(port))] = int(_COUNTER.fullmatch(counted).group(2))
+            continue
         if chain == "PORTMANAGER_ACCT":
             v1 = _V1_COMMENT.fullmatch(args[i + 1])
             if v1 is None:
@@ -80,7 +94,8 @@ def parse_counters(output, by_port=False, include_v1=False):
     return data
 
 
-def counters(by_port=False, include_v1=False):
+def counters(by_port=False, include_v1=False, include_probe=False):
     # One read-only kernel snapshot, not one iptables call per monitored port.
     output = run(["iptables-save", "-c", "-t", "mangle"])
-    return parse_counters(output, by_port=by_port, include_v1=include_v1)
+    return parse_counters(output, by_port=by_port, include_v1=include_v1,
+                          include_probe=include_probe)
