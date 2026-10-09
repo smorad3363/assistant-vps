@@ -61,7 +61,9 @@ def parse_established(text):
         # ss -H -tn state established: Recv-Q Send-Q Local:Port Peer:Port
         if len(fields) < 4:
             continue
-        local = fields[3] if fields[0].upper() == "ESTAB" and len(fields) >= 5 else fields[2]
+        # With -H and "state established" ss may emit either
+        # ESTAB 0 0 local peer or 0 0 local peer (state column omitted).
+        local = fields[3] if fields[0].upper() in ("ESTAB", "ESTABLISHED") and len(fields) >= 5 else fields[2]
         if ":" not in local:
             continue
         try:
