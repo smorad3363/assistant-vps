@@ -1,4 +1,4 @@
-# oort Manager V2 — Tunnel Edition (`2.1.0-rc.2`)
+# oort Manager V2 — Tunnel Edition (`2.1.0-rc.3`)
 
 oort Manager V2 has its own binary (`portmanager2`), configuration, firewall
 chains, SQLite accounting database and optional services. It does not alter
