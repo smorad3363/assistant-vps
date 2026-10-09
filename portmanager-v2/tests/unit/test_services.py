@@ -92,6 +92,64 @@ class ServicesTests(TestCase):
                 services.remove()
         self.assertEqual(error.exception.code, "E_CONFLICT")
 
+    def test_failed_owned_oneshot_does_not_block_upgrade_but_warns(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        with mock.patch.object(services, "FLAGS", (
+                self.etc / "enable-restore", self.etc / "enable-sample")):
+            services.install()
+            marker = json.loads(services.MARKER.read_text())
+            marker["activation"] = "active"
+            services.MARKER.write_text(json.dumps(marker))
+            for flag in services.FLAGS:
+                flag.write_bytes(services.FLAG_BYTES)
+            def running(args):
+                if args[0] == "is-enabled":
+                    state = ("indirect" if args[1] == "portmanager2-sample.service"
+                             else "enabled")
+                    return SimpleNamespace(returncode=0 if state == "enabled" else 1,
+                                           stdout=state + "\n", stderr="")
+                if args[0] == "is-active":
+                    state = ("active" if args[1] == "portmanager2-sample.timer"
+                             else "failed" if args[1] == "portmanager2-sample.service"
+                             else "inactive")
+                    return SimpleNamespace(returncode=0 if state == "active" else 3,
+                                           stdout=state + "\n", stderr="")
+                return fake_systemctl(args)
+            with (mock.patch.object(services, "_run", side_effect=running),
+                  redirect_stderr(StringIO()) as out):
+                marker = services.preflight()
+                result = services.install()
+            self.assertEqual(marker["activation"], "active")
+            self.assertFalse(result["changed"])
+            self.assertTrue(result["enabled"])
+            self.assertIn("sampler service previously failed", out.getvalue())
+
+    def test_failed_restore_unit_still_blocks_install(self):
+        with mock.patch.object(services, "FLAGS", (
+                self.etc / "enable-restore", self.etc / "enable-sample")):
+            services.install()
+            marker = json.loads(services.MARKER.read_text())
+            marker["activation"] = "active"
+            services.MARKER.write_text(json.dumps(marker))
+            for flag in services.FLAGS:
+                flag.write_bytes(services.FLAG_BYTES)
+            def invalid(args):
+                if args[0] == "is-enabled":
+                    return SimpleNamespace(
+                        returncode=0, stdout=("indirect\n" if args[1] ==
+                         "portmanager2-sample.service" else "enabled\n"), stderr="")
+                if args[0] == "is-active":
+                    return SimpleNamespace(returncode=3, stdout=(
+                        "active\n" if args[1] == "portmanager2-sample.timer"
+                        else "failed\n" if args[1] == "portmanager2-restore.service"
+                        else "inactive\n"), stderr="")
+                return fake_systemctl(args)
+            with mock.patch.object(services, "_run", side_effect=invalid):
+                with self.assertRaises(PM2Error) as exc:
+                    services.install()
+            self.assertEqual(exc.exception.code, "E_CONFLICT")
+
     def test_masked_unit_blocks_deletion(self):
         services.install()
         def masked(args):
