@@ -10,7 +10,7 @@ import re
 import shlex
 import time
 
-from . import accounting, auto_monitor, config, sampler, transaction, port_graph
+from . import accounting, auto_monitor, config, sampler, transaction, port_graph, system_rules
 from .errors import PM2Error
 
 CHAINS = {"down": ("PREROUTING", "PM2_HIST_RX", "ORIGINAL"),
@@ -193,6 +193,32 @@ def _tracked_elsewhere():
     return known
 
 
+def _select_ports():
+    """Include externally DNAT-forwarded ports as well as local listeners.
+
+    Forwarded packets need not have a local listening socket at all. This
+    discovers rules read-only; it never adopts or modifies foreign NAT rules.
+    """
+    known = _tracked_elsewhere()
+    forwarded = []
+    rules, error = system_rules.detect_nat(limit=200)
+    if not error:
+        for rule in rules:
+            proto, raw_port = rule.get("protocol"), str(rule.get("port", ""))
+            if (rule.get("target") not in ("DNAT", "REDIRECT") or
+                    proto not in ("tcp", "udp") or not raw_port.isdecimal()):
+                continue
+            port = int(raw_port)
+            if not 1 <= port <= 65535:
+                continue
+            item = (proto, port)
+            if item not in known and item not in forwarded:
+                forwarded.append(item)
+    # Forwarded ports are prioritized because they are invisible to ss.
+    local = auto_monitor.discover(existing=known | set(forwarded))
+    return set((forwarded + local)[:MAX_PORTS])
+
+
 def collect(timestamp=None):
     """Store one bounded, reset-safe counter interval per minute.
 
@@ -237,7 +263,7 @@ def collect(timestamp=None):
         if rates:
             port_graph.record(db, now, elapsed, rates)
         try:
-            wanted = set(auto_monitor.discover(existing=_tracked_elsewhere()))
+            wanted = _select_ports()
         except PM2Error:
             # A transient ss failure cannot reset previously owned counters.
             wanted = current_ports
