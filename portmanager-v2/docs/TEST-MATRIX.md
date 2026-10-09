@@ -36,6 +36,13 @@ caught a delayed transient timer due to systemd's default
 on the newest HEAD before accepting this fix. A real SSH-disconnect or
 full reboot recovery gate is still open.
 
+| AT-041..046 — scheduled-limit calendar logic | TESTS ADDED; CI PENDING | Weekdays, cross-midnight, overlap, independent protocols, DST, timezone conflict |
+| AT-047..050 — scheduled-rate enforcement | NOT IMPLEMENTED in 2.0 | 2.1 only: ownership-safe qdisc backend, reboot/time-jump and repeated transitions |
+
+The source of truth for the 2.1 schedule contract is
+[ADR-0003](ADR-0003-SCHEDULED-LIMITS.md). The 2.0 preview is read-only
+and must never be counted as a real scheduled bandwidth limiter.
+
 **Scope of claims matters.** Successful GitHub jobs do **not** prove V2 safe
 on an arbitrary active VPS with Docker, UFW, custom SSH ports or `tc` shaping.
 Do not mark a full reboot, legacy iptables, IPv6, high-load soak, automatic
