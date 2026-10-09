@@ -142,6 +142,23 @@ COMMIT
                 self.assertAlmostEqual(series[key][0][2], 4)
                 reopened.close()
 
+    def test_24h_history_compacts_to_minutes_without_discarding_averages(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(sampler, "DB", Path(folder) / "db.sqlite"):
+                db = sampler.connect()
+                key = (TID, "tcp", 443)
+                port_graph.record(db, 98200, 10, {key: {"up": 8, "down": 16}})
+                port_graph.record(db, 100000, 10, {key: {"up": 4, "down": 6}})
+                rolled = db.execute("SELECT COUNT(*) FROM port_live_minutes").fetchone()[0]
+                raw = db.execute("SELECT COUNT(*) FROM port_live_samples").fetchone()[0]
+                values = port_graph.history(db, 100000, {key: "app"})[key]
+                db.close()
+            self.assertEqual(rolled, 1)
+            self.assertEqual(raw, 1)
+            self.assertEqual(len(values), 2)
+            m = port_graph.weighted(values, 100000, 3600)
+            self.assertAlmostEqual(m["up"], 6.0)
+
     def test_watch_once_json_single_read_per_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp)
