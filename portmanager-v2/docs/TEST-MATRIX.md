@@ -31,7 +31,7 @@ New Phase-1 regression checks:
 - Mocked unit lifecycle: new install, idempotent install, modified/foreign/
   symlinked/masked/active units block deletion; failed daemon-reload rolls back.
 - Installer and CLI uninstall share an exclusive nonblocking mutation lock.
-- An additional VM failure-injection check attempts to uninstall after unit
-  tampering, requires `E_CONFLICT`, then restores the V2-owned unit.
-  Check the latest CI before considering this check PASS.
+- PASS at run 37935898792: tampering with a V2-owned unit causes uninstall
+  to fail with `E_CONFLICT` and leaves V2 installed; after restoring original
+  V2 unit content, safe reinstall and uninstall succeed.
 - Before/after `iptables-save` and `tc qdisc show` equality on ephemeral runner.
