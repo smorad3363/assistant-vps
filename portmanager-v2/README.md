@@ -44,6 +44,8 @@ only**, using a pinned commit in `PORTMANAGER2_REF`. Never run on production.
 All unfinished tunnel, traffic and bandwidth-changing commands return
 `E_UNSUPPORTED` (exit 8) **without making network changes**.
 
-See [implementation checkpoints](docs/PROGRESS.md) and
+See the [full Persian specification](docs/PM2-SPEC-001.fa.md),
+[implementation checkpoints](docs/PROGRESS.md),
+[acceptance gate matrix](docs/TEST-MATRIX.md) and
 [architecture](docs/ARCHITECTURE.md). Stable release is gated on AT-001..040,
 VM/netns TCP/UDP tests, SSH protection and V1 coexistence checks.
