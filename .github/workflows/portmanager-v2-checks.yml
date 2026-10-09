@@ -1,0 +1,55 @@
+name: Port Manager V2 — bootstrap checks
+
+on:
+  pull_request:
+    paths:
+      - "portmanager-v1/**"
+      - "portmanager-v2/**"
+      - ".github/workflows/portmanager-v2-checks.yml"
+  push:
+    branches:
+      - "feat/portmanager-v2-roadmap"
+    paths:
+      - "portmanager-v1/**"
+      - "portmanager-v2/**"
+      - ".github/workflows/portmanager-v2-checks.yml"
+
+jobs:
+  static-and-unit:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: V1 baseline must remain frozen
+        run: |
+          git diff --exit-code 64842968c85f85afdad4e11c3ed4adfce65f5d22 HEAD -- portmanager-dashboard/
+      - name: Bash parser checks
+        run: |
+          bash -n portmanager-v1/install.sh portmanager-v2/install.sh portmanager-v2/bin/portmanager2
+      - name: Manifest verification
+        run: cd portmanager-v2 && sha256sum --check --strict manifest.sha256
+      - name: Python compilation
+        run: python -m compileall -q portmanager-v2/pm2 portmanager-v2/tests
+      - name: Unit tests without root/network mutation
+        env:
+          PYTHONPATH: portmanager-v2
+        run: python -m unittest discover -s portmanager-v2/tests/unit -v
+      - name: ShellCheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck portmanager-v1/install.sh portmanager-v2/install.sh portmanager-v2/bin/portmanager2
+
+  integration-not-yet-enabled:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "NOT TESTED: privileged netns/VM, coexistence and boot/recovery tests"
+          echo "This job is informational and is NOT evidence that release gates C-F passed."
