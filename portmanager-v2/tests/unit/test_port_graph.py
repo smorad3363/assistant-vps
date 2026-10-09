@@ -1,6 +1,7 @@
 """Live 10-minute per-port graph: performance, counters, JSON and visualization."""
 import io
 import json
+from datetime import datetime, timezone
 import tempfile
 import time
 import unittest
@@ -118,6 +119,29 @@ COMMIT
             labels, {}, {(TID, "tcp", 0): [(100, 2, 2, 2)]}, 100)
         self.assertEqual(frames["rows"][0]["scope"], "all_except_aggregate")
         self.assertIsNone(frames["rows"][0]["listen_port"])
+
+    def test_speed_policy_frames_evaluate_timezone_window_without_tc_mutation(self):
+        policy = {"id": "evening", "port": 8080, "protocol": "tcp",
+                  "interface": "eth0", "download_mbps": 20,
+                  "upload_mbps": 30, "enabled": True,
+                  "start": "18:00", "end": "02:00",
+                  "timezone": "UTC", "days": list(range(7))}
+        inside = port_graph.limit_descriptions(
+            [policy], datetime(2026, 10, 10, 20, tzinfo=timezone.utc))[0]
+        outside = port_graph.limit_descriptions(
+            [policy], datetime(2026, 10, 10, 10, tzinfo=timezone.utc))[0]
+        self.assertTrue(inside["scheduled_now"])
+        self.assertFalse(outside["scheduled_now"])
+        self.assertEqual(inside["download_mbps"], 20)
+        self.assertEqual(inside["upload_mbps"], 30)
+        self.assertEqual(inside["timezone"], "UTC")
+        self.assertEqual(inside["start"], "18:00")
+        self.assertEqual(inside["end"], "02:00")
+        disabled = port_graph.limit_descriptions(
+            [dict(policy, enabled=False)],
+            datetime(2026, 10, 10, 20, tzinfo=timezone.utc))[0]
+        self.assertFalse(disabled["scheduled_now"])
+        self.assertFalse(disabled["enabled"])
 
     def test_refresh_adapts_to_large_ruleset_and_slow_iptable_reads(self):
         self.assertEqual(port_graph.refresh_interval(2, 10, 0.01), 2)
