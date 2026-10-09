@@ -1,5 +1,42 @@
 # Port Manager V2 — checkpoint for any AI contributor
 
+## 2026-10-09 — New version-router and 2.1 RC release candidate
+
+User has explicitly changed installer requirements:
+- **SAME ORIGINAL URL** `master/portmanager-dashboard/install.sh`
+  executes V2 when piped to `sudo bash`.
+- Explicit original V1 from SAME URL uses `| sudo bash -s -- v1`.
+  `sudo bash v1` is technically impossible to use as piped-script option:
+  Bash opens a file named `v1` rather than reading stdin.
+- `portmanager-v1/legacy-install.sh` is a byte-for-byte snapshot of the
+  frozen installer at original repository base SHA. The compressed V1 script
+  under `portmanager-dashboard/portmanager.sh.gz.b64` remains unchanged.
+- `portmanager-v1/install.sh` delegates to the snapshot and refuses V1
+  installation when V2-owned tc shaping state is active.
+- The original `portmanager-dashboard/install.sh` on the development branch
+  is now an explicit 2-way shell dispatcher, but `master` is unchanged
+  **until PR #1 is merged**. CI route tests are required before merge.
+- `pm2/shaping.py` adds real per-port scheduled `tc clsact` ingress
+  policing for upload and egress policing for download, each resolved to a
+  single active V2 tunnel interface. Uses `pm2/limit_windows.py` for
+  weekdays, IANA timezone, cross-midnight and DST logic.
+- V2 shaping **rejects V1 installation, unknown clsact/foreign filters and
+  journal conflicts**. It never deletes a root qdisc or flushes firewall
+  tables. The 1-minute V2 sampler timer is enabled on schedule installation.
+- CLI: `limits schedule-preview`, `schedule-install`, `schedule-list`,
+  `schedule-apply`, plus text menu 05 for interactive schedule entries.
+- Uninstall removes only owned V2 clsact filters after kernel ownership
+  verification. Tunnel edits are blocked while enabled V2 timed schedules
+  refer to that config, preventing stale scheduled filters.
+- Version bump: `2.1.0-rc.1`. **Do NOT call it stable until tests pass.**
+
+**Pending P0 tests:** latest commit manifest and CI (including actual
+`tc-police-scheduled-ephemeral` job); full guest reboot with live SSH plus
+real multi-host traffic and time-based shape under realistic load have not
+been independently demonstrated. A disposable VPS with independent console
+and snapshot is required to claim production readiness.
+
+
 **Last verified CI evidence:** 2026-10-09,
 [GitHub Actions 37960307468](https://github.com/smorad3363/assistant-vps/actions/runs/37960307468),
 source SHA `ac6655379fb370ad4b7d7933f361e98cf78d1ba1`. All 9 jobs passed,
