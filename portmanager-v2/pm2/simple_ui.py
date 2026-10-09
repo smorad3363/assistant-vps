@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -27,14 +28,15 @@ def _confirm(label):
     return (_ask(label + " (y/N)", "n") or "").lower() == "y"
 
 
+def _clear_screen():
+    """Redraw one screen per navigation step; no accumulated SSH scrollback."""
+    if os.isatty(1) and os.getenv("TERM", "").lower() not in ("", "dumb"):
+        print("\033[2J\033[H", end="", flush=True)
+
+
 def _title(subtitle):
-    # Shared cyan/green card header across HOME, LIVE, IPTABLES, CONFIG.
-    label = f"  PORT MANAGER  │  {subtitle.upper()}  "
-    width = 64
-    print("\n" + _paint("96;1", "╭" + "─" * width + "╮"))
-    print(_paint("96;1", "│") + _paint("97;1", label.ljust(width)[:width]) +
-          _paint("96;1", "│"))
-    print(_paint("96;1", "╰" + "─" * width + "╯"))
+    _clear_screen()
+    _ui_header(subtitle.upper())
 
 
 def _options(*choices):
@@ -98,7 +100,7 @@ def _protected_ssh_ports():
 def _mutate(operation, argv):
     from .cli import mutation_lock
     preview = tunnels.handle(operation, [*argv, "--dry-run"], mutation_lock)
-    print(_paint("93", "  Review change to V2-owned tunnel configuration"))
+    print(_paint("93", "  Review change to Port Manager-owned tunnel configuration"))
     if not _confirm("Apply?"):
         return
     if operation == "delete":
@@ -219,27 +221,27 @@ def _ui_header(page):
     width = _ui_width()
     label = f" ◆  PORT MANAGER  │  {page}"
     host = _ui_cut(socket.gethostname(), 18)
-    right = f"● LIVE  │  {_ui_cut(VERSION, 18)}  │  {host}"
+    right = f"● ONLINE  │  {_ui_cut(VERSION, 18)}  │  {host}"
     room = width - 4
     if len(label) + len(right) + 1 > room:
-        right = f"● LIVE  │  {_ui_cut(VERSION, 12)}"
+        right = f"● ONLINE  │  {_ui_cut(VERSION, 12)}"
     gap = max(1, room - len(label) - len(right))
     print()
     _ui_edge("top", width)
     _ui_line(_paint("96;1", label) + " " * gap + _paint("92;1", right), width)
     _ui_edge("bottom", width)
+    from .auto_monitor import interface_counters
     try:
-        interface, _ = _network_defaults()
-    except (PM2Error, OSError, ValueError):
+        detected = interface_counters()
+        interface = f"ALL ({len(detected)})" if detected else "none detected"
+    except (OSError, ValueError):
         interface = "unknown"
-    interface = _ui_cut(interface, 14)
     _ui_edge("top", width)
-    status = (" Interface: " + _paint("92;1", interface) +
-              "   │   Refresh: " + _paint("93", "manual") +
-              "   │   Mode: " + _paint("92;1", "interactive") +
-              "   │   System: " + _paint("92;1", "Local"))
+    status = (" Interfaces: " + _paint("92;1", interface) +
+              "   │   View: " + _paint("93", "all ports / rules") +
+              "   │   Mode: " + _paint("92;1", "interactive"))
     if _ui_len(status) > width - 4:
-        status = " Interface: " + _paint("92;1", interface) + "  │  Interactive"
+        status = " Interfaces: " + _paint("92;1", interface) + "  │  Interactive"
     _ui_line(status, width)
     _ui_edge("bottom", width)
 
@@ -299,12 +301,13 @@ def _list_tunnels():
     width = _ui_width()
     cfg = config.load(transaction.CONFIG)
     items = cfg["tunnels"]
+    rules, error = system_rules.detect_nat(limit=200)
     _ui_edge("top", width)
     _ui_line(_paint("96;1", " ▤  EXISTING FIREWALL CONFIGURATION"))
-    _ui_line(_paint("90", "    Managed tunnels and system NAT rules (read-only for external rules)"))
+    _ui_line(_paint("90", "    Port Manager tunnels and existing NAT rules (system-wide view)"))
     _ui_edge("rule", width)
     if items:
-        _ui_line(_paint("96;1", " ── MANAGED V2 TUNNELS ──"))
+        _ui_line(_paint("96;1", " ── PORT MANAGER CREATED TUNNELS ──"))
         for i, t in enumerate(items, 1):
             ports = ("ALL except " + ",".join(map(str, t["exclude"]))
                      if t["mode"] == "all-except" else
@@ -317,12 +320,11 @@ def _list_tunnels():
                      _paint("97", _ui_cut(ports, max(10, width - 65))) +
                      "  → " + _paint("95;1", dest) + "  " + state)
     else:
-        _ui_line(_paint("97", "  No tunnels managed by V2."))
+        _ui_line(_paint("97", f"  {len(items)} tunnels created here  |  {len(rules)} existing NAT rules detected"))
     _ui_line("")
-    _ui_line(_paint("96;1", " ── EXISTING SYSTEM RULES (read-only) ──"))
+    _ui_line(_paint("96;1", " ── EXISTING FIREWALL RULES ──"))
     _ui_line(_paint("90", _ui_cut(_ui_header_row(width), width - 5)))
     _ui_edge("rule", width)
-    rules, error = system_rules.detect_nat()
     if rules:
         for i, rule in enumerate(rules, 1):
             _ui_record(i, rule["chain"],
@@ -334,7 +336,7 @@ def _list_tunnels():
         _ui_line(_paint("90", "  No existing NAT forwarding rules found."))
     _ui_line("")
     _ui_line(_paint("90", _ui_cut(
-        "  External rules are visible only; only V2-managed tunnels can be edited.",
+        "  Existing third-party rules are visible; edit requires verified ownership/import.",
         width - 6)))
     _ui_edge("bottom", width)
     return items
@@ -359,7 +361,7 @@ def _delete_all():
         return
     if any(p["enabled"] for p in shaping.schedule_load()["policies"]):
         raise PM2Error("E_CONFLICT", "Remove active speed-limit policies before deleting tunnels")
-    print(_paint("91", "  Remove ALL V2 tunnels only; other firewall chains remain untouched."))
+    print(_paint("91", "  Remove only Port Manager-created tunnels. External rules stay untouched."))
     if not _confirm("Delete every V2 tunnel?"):
         return
     with mutation_lock():
@@ -379,28 +381,78 @@ def _delete_all():
     print(_paint("92", "  ✓ Tunnel removal requested"))
 
 
+def _inspect_existing_rule():
+    """Foreign NAT rules are viewable, but must not be modified blindly."""
+    while True:
+        _title("EXISTING RULES")
+        rules, error = system_rules.detect_nat(limit=200)
+        if error:
+            print(_paint("93", "  " + error))
+            _ask("Enter to return")
+            return
+        _ui_edge("top")
+        _ui_line(f"  {len(rules)} NAT rules found  |  read-only inspection")
+        for index, rule in enumerate(rules, 1):
+            _ui_line("  " + _ui_cut(
+                f"[{index}] {rule['chain']}  {rule['protocol']}:{rule['port']} "
+                f"→ {rule['target']} {rule['destination']}", _ui_width() - 8))
+        _ui_line("")
+        _ui_line(_paint("93", _ui_cut(
+            "  Editing a Docker/UFW/legacy rule without ownership validation can disconnect the VPS.",
+            _ui_width() - 8)))
+        _ui_edge("bottom")
+        selected = _ask("Rule number to inspect / 0 Back", "0")
+        if selected in ("0", None):
+            return
+        if not selected.isdecimal() or not 1 <= int(selected) <= len(rules):
+            continue
+        rule = rules[int(selected) - 1]
+        _title("RULE DETAILS")
+        _ui_edge("top")
+        for key in ("chain", "protocol", "port", "target", "destination", "source"):
+            _ui_line(f"  {key.upper():<16} {_ui_cut(rule.get(key, '-'), _ui_width() - 26)}")
+        _ui_line("")
+        _ui_line(_paint("93", "  Existing rule: inspect only; safe import is not configured."))
+        _ui_edge("bottom")
+        _ask("Enter to continue")
+
+
 def _manage():
     while True:
-        _ui_header("CONFIG")
+        _title("CONFIG")
         items = _list_tunnels()
-        _ui_actions(("1", "Edit / Delete V2 tunnel"),
-                    ("2", "Delete ALL V2 tunnels"),
+        _ui_actions(("1", "Edit / Delete Port Manager tunnel"),
+                    ("2", "Delete ALL Port Manager tunnels"),
+                    ("3", "Inspect existing external NAT rules"),
                     ("0", "Back"))
         choice = _ask("Select", "0")
         if choice in ("0", None):
             return
         if choice and choice.lower() == "r":
             continue
+        if choice == "3":
+            _inspect_existing_rule()
+            continue
         if choice == "2":
             _delete_all()
             continue
-        if choice != "1" or not items:
+        if choice != "1":
+            continue
+        if not items:
+            _title("CONFIG")
+            _ui_edge("top")
+            _ui_line("  No tunnels created by Port Manager in this installation.")
+            _ui_line("  Existing firewall rules are shown in option [3].")
+            _ui_edge("bottom")
+            _ask("Enter to continue")
             continue
         value = _ask("Tunnel number")
         if not value or not value.isdecimal() or not 1 <= int(value) <= len(items):
             continue
         selected = items[int(value) - 1]
-        action = _ask("[1] Edit   [2] Delete   [0] Back", "0")
+        _title("EDIT TUNNEL")
+        _ui_actions(("1", "Edit tunnel"), ("2", "Delete tunnel"), ("0", "Back"))
+        action = _ask("Select", "0")
         if action == "1":
             _tunnel_wizard(selected)
         elif action == "2":
@@ -409,11 +461,12 @@ def _manage():
 
 def _tunnel_page():
     while True:
-        _ui_header("PORTS")
-        _ui_ports_intro()
-        _ui_actions(("1", "New port → IP tunnel"),
+        _title("PORTS")
+        _list_tunnels()
+        _ui_actions(("1", "New port to IP tunnel"),
                     ("2", "Tunnel ALL ports (protect SSH)"),
-                    ("3", "Edit / Delete current tunnels"),
+                    ("3", "Edit / Delete managed tunnel"),
+                    ("4", "Inspect all system NAT rules"),
                     ("0", "Back"))
         choice = _ask("Select", "0")
         if choice in ("0", None):
@@ -421,11 +474,15 @@ def _tunnel_page():
         if choice and choice.lower() == "r":
             continue
         if choice == "1":
+            _title("NEW PORT")
             _tunnel_wizard()
         elif choice == "2":
+            _title("ALL PORTS")
             _tunnel_wizard(all_ports=True)
         elif choice == "3":
             _manage()
+        elif choice == "4":
+            _inspect_existing_rule()
 
 
 def _persist_policy(plan):
@@ -464,12 +521,17 @@ def _limit(port, interface, proto="tcp,udp"):
     mine = [p for p in plan["policies"] if p["port"] == port and
             (p.get("interface") == interface or not p.get("interface"))]
     title = "ALL interface IPv4 traffic" if port == 0 else f"port {port}"
-    print(f"\n  Speed limit: {title} on {interface}")
+    _title("SPEED LIMIT")
+    _ui_edge("top")
+    _ui_line(f"  Speed limit: {title} on {interface}")
+    _ui_line(_paint("93", "  Requires an explicit confirmation before changing tc."))
+    _ui_edge("bottom")
     if mine:
         for p in mine:
             print(f"   {p['id']}: ↓{p['download_mbps']} ↑{p['upload_mbps']} Mb/s "
                   f"{p['start']}-{p['end']}")
-    choice = _ask("[1] Set / Edit   [2] Remove limit   [0] Back", "0")
+    _ui_actions(("1", "Set or edit speed limit"), ("2", "Remove limit"), ("0", "Back"))
+    choice = _ask("Select", "0")
     if choice in ("0", None):
         return
     if choice == "2":
@@ -593,14 +655,13 @@ def menu():
         raise PM2Error("E_VALIDATION", "Interactive Port Manager requires a terminal")
     while True:
         _title("HOME")
-        print(_paint("90", "  ┌──────────────────────────────────────────────┐"))
-        print("  │  [1] " + _paint("92;1", "● LIVE & SPEED LIMITS") + "                 │")
-        print("  │  [2] " + _paint("96;1", "◆ IPTABLES / TUNNELS") + "                 │")
-        print("  │  [3] " + _paint("93;1", "✎ EDIT / DELETE CONFIGS") + "              │")
-        print("  │  [0] Exit                                    │")
-        print(_paint("90", "  └──────────────────────────────────────────────┘"))
+        _ui_actions(("1", "● LIVE TRAFFIC & SPEED LIMITS"),
+                    ("2", "◆ PORTS / TUNNELS / EXISTING RULES"),
+                    ("3", "✎ EDIT / DELETE CONFIGURATIONS"),
+                    ("0", "Exit"))
         choice = _ask("Select", "0")
         if choice in ("0", None):
+            _clear_screen()
             return 0
         try:
             if choice == "1":
@@ -611,5 +672,7 @@ def menu():
                 _manage()
         except PM2Error as exc:
             print(_paint("91", f"  {exc.code}: {exc.message}"))
+            _ask("Enter to continue")
         except (OSError, ValueError) as exc:
             print(_paint("91", f"  Invalid input: {str(exc)[:140]}"))
+            _ask("Enter to continue")
