@@ -27,6 +27,20 @@ class HistoryCollectorTests(unittest.TestCase):
         self.assertEqual(result[("auto", "tcp", "down", 443)], 1200)
         self.assertEqual(result[("auto", "tcp", "up", 443)], 400)
 
+    def test_external_dnat_ports_are_counted_without_local_listener(self):
+        foreign = [
+            {"target": "DNAT", "protocol": "tcp", "port": "8080"},
+            {"target": "DNAT", "protocol": "udp", "port": "4343"},
+            {"target": "SNAT", "protocol": "tcp", "port": "8080"},
+        ]
+        with (mock.patch.object(history_collector, "_tracked_elsewhere", return_value=set()),
+              mock.patch.object(history_collector.system_rules, "detect_nat",
+                                return_value=(foreign, None)),
+              mock.patch.object(history_collector.auto_monitor, "discover",
+                                return_value=[("tcp", 5555)])):
+            selected = history_collector._select_ports()
+        self.assertEqual(selected, {("tcp", 8080), ("udp", 4343), ("tcp", 5555)})
+
     def test_minute_samples_survive_viewer_exit_and_skip_offline_gaps(self):
         ports = {("tcp", 443)}
         inspected = ([("PREROUTING", "PM2_HIST_RX", True, True),
@@ -42,6 +56,8 @@ class HistoryCollectorTests(unittest.TestCase):
                   mock.patch.object(history_collector, "_inspect", return_value=inspected),
                   mock.patch.object(history_collector, "_history_counters", side_effect=data),
                   mock.patch.object(history_collector, "_tracked_elsewhere", return_value=set()),
+                  mock.patch.object(history_collector.system_rules, "detect_nat",
+                                    return_value=([], None)),
                   mock.patch.object(history_collector.auto_monitor, "discover",
                                     return_value=list(ports)),
                   mock.patch.object(history_collector, "_install") as install):
