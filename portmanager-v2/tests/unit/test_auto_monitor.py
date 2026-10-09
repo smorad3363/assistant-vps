@@ -126,6 +126,26 @@ class AutoMonitorTests(unittest.TestCase):
             simple_ui._live()
         limits.assert_called_once_with(2053, "eth0", "udp")
 
+    def test_warp_default_route_does_not_hide_physical_eth0(self):
+        def run(argv, timeout=5):
+            if argv[:3] == ["ip", "-4", "route"]:
+                return "1.1.1.1 via 10.1.1.1 dev wgcf src 10.1.1.2"
+            return json.dumps([{
+                "ifname": "eth0",
+                "addr_info": [{"family": "inet", "local": "192.0.2.10"}]
+            }, {
+                "ifname": "wgcf",
+                "addr_info": [{"family": "inet", "local": "10.1.1.2"}]
+            }])
+        with mock.patch("pm2.discovery.run", side_effect=run):
+            self.assertEqual(simple_ui._network_defaults(), ("eth0", "192.0.2.10"))
+
+    def test_sshd_nonstandard_port_excluded_from_all_tunnel(self):
+        ss = ('tcp LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* '
+              'users:(("sshd",pid=123,fd=3))\n')
+        with mock.patch("pm2.discovery.run", return_value=ss):
+            self.assertEqual(simple_ui._protected_ssh_ports(), "22,2222")
+
     def test_simple_menu_throughput_and_limit_options_are_three(self):
         with (mock.patch.object(simple_ui.os, "isatty", return_value=True),
               mock.patch.object(simple_ui, "_ask", return_value="0"),
