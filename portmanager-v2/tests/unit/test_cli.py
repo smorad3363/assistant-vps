@@ -78,7 +78,7 @@ class CLITests(TestCase):
         with (mock.patch.object(cli, "mutation_lock", side_effect=PM2Error(
                   "E_LOCKED", "test conflicting writer")) as held,
               mock.patch.object(cli.sampler, "sample") as sampled):
-            code, out, err = self.invoke(["sample", "--json"])
+            code, out, err = self.invoke(["sample"])
         self.assertEqual(code, 0, err)
         self.assertIn("SKIPPED_LOCK", out)
         sampled.assert_not_called()
