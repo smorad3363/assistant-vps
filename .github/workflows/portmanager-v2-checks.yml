@@ -223,5 +223,17 @@ jobs:
             python3 -c 'import json,sys;print(json.load(sys.stdin)["details"]["tunnels"][0]["id"])')"
           sudo ip netns exec pm2relay portmanager2 tunnel delete "$tunnel_id" --yes
           test "$(sudo ip netns exec pm2relay iptables -t nat -S PREROUTING | grep -c 'pm2:owned-hook' || true)" -eq 0
+          # Protected all-except: prearm timer; forward unchanged target ports.
+          sudo ip netns exec pm2relay portmanager2 tunnel create             --name guarded --listen-ip 198.18.0.2 --interface pm2r0             --protocol tcp,udp --mode all-except --exclude 22,443             --target-ip 198.19.0.2 --ack-all-ports
+          pending="$(sudo python3 -c 'import json;print(json.load(open("/var/lib/portmanager2/protected.json"))["change_id"])')"
+          test -n "$pending"
+          sudo ip netns exec pm2client python3 -c 'import socket; c=socket.create_connection(("198.18.0.2",8443),timeout=5); c.sendall(b"all-except"); assert c.recv(2048)==b"TCP:all-except";c.close()'
+          sudo ip netns exec pm2relay portmanager2 confirm "$pending"
+          sudo test ! -e /var/lib/portmanager2/protected.json
+          guarded_id="$(sudo ip netns exec pm2relay portmanager2 tunnel list --json |
+            python3 -c 'import json,sys;print(json.load(sys.stdin)["details"]["tunnels"][0]["id"])')"
+          sudo ip netns exec pm2relay portmanager2 tunnel delete "$guarded_id" --yes
+          pending="$(sudo python3 -c 'import json;print(json.load(open("/var/lib/portmanager2/protected.json"))["change_id"])')"
+          sudo ip netns exec pm2relay portmanager2 confirm "$pending"
           sudo ip netns exec pm2relay portmanager2 uninstall --yes
           echo "PASS namespace TCP/UDP SNAT reverse path and own-rule cleanup"
