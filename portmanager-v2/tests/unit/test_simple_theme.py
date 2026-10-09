@@ -161,6 +161,31 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(selected["name"], "Port-8")
         self.assertEqual(picked.call_count, 2)
 
+    def test_usage_menu_queries_exact_user_time_range(self):
+        report = {"ports": [{
+            "protocol": "tcp", "port": 8080,
+            "download_bytes_lower": 2_000_000_000,
+            "download_bytes_upper": 2_100_000_000,
+            "upload_bytes_lower": 1_000_000_000,
+            "upload_bytes_upper": 1_100_000_000,
+            "missing_seconds": 90, "boundary_uncertain_bytes": 200,
+            "overlapping_sources": False,
+        }]}
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ask", side_effect=[
+                  "Asia/Tehran", "2026-10-10 08:00",
+                  "2026-10-10 10:00", "8080"]),
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=report) as called,
+              mock.patch.object(simple_ui, "_choose", return_value="0"),
+              redirect_stdout(io.StringIO()) as out):
+            simple_ui._usage_report()
+        called.assert_called_once_with(
+            "2026-10-10 08:00", "2026-10-10 10:00",
+            "Asia/Tehran", port=8080)
+        self.assertIn("2.0000", out.getvalue())
+        self.assertIn("Unrecorded:", out.getvalue())
+
     def test_iptables_nat_includes_old_rules_but_only_readonly(self):
         text = (
             "-A PREROUTING -i eth0 -p tcp -m tcp --dport 8080 -j DNAT "
