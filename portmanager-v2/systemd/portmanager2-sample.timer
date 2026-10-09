@@ -1,0 +1,12 @@
+[Unit]
+Description=Port Manager V2 - sample tunnel traffic every minute
+
+[Timer]
+OnBootSec=60s
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=portmanager2-sample.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
