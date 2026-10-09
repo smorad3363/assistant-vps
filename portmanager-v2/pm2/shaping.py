@@ -109,13 +109,27 @@ def desired_filters(plan, tunnels, at=None):
                     raise PM2Error("E_CONFLICT", "Scheduled port bound to multiple interfaces")
                 bindings[key] = _iface(t["interface"])
     filters = []
+    # Global matchall and per-port police on the same interface can interfere
+    # and produce unexpected combined drops. Refuse any such combination.
+    global_ifaces = {p.get("interface") for p in plan["policies"]
+                     if p["enabled"] and p["port"] == 0}
+    if any(p["enabled"] and p["port"] != 0 and
+           (p.get("interface") in global_ifaces or
+            any(bindings.get((p["port"], proto)) in global_ifaces
+                for proto in p["protocol"].split(",")))
+           for p in plan["policies"]):
+        raise PM2Error("E_CONFLICT", "Remove individual port limits before setting an all-ports limit on same interface")
     for item in wanted:
-        for proto in item["protocol"].split(","):
+        for proto in (("all",) if item["port"] == 0 else item["protocol"].split(",")):
             key = (item["port"], proto)
-            iface = bindings.get(key)
+            iface = item.get("interface") or bindings.get(key)
             if iface is None:
-                raise PM2Error("E_CONFLICT", "Schedule references no enabled V2 tunnel",
+                raise PM2Error("E_CONFLICT", "Limit requires active V2 tunnel or explicit network interface",
                                {"port": item["port"], "protocol": proto})
+            iface = _iface(iface)
+            bound = bindings.get(key)
+            if bound is not None and bound != iface:
+                raise PM2Error("E_CONFLICT", "Explicit interface conflicts with tunnel listener interface")
             for direction, rate_key in (("ingress", "upload_mbps"), ("egress", "download_mbps")):
                 rate = item[rate_key]
                 if rate:
@@ -139,14 +153,14 @@ def _kernel(iface):
         rows = _tc_json(["filter", "show", "dev", iface, direction])
         concrete = []
         for row in rows:
-            if row.get("kind") != "flower":
+            if row.get("kind") not in ("flower", "matchall"):
                 raise PM2Error("E_CONFLICT", "Foreign tc filter in V2-controlled clsact",
                                {"interface": iface, "direction": direction})
             # iproute2 emits one bare flower descriptor followed by a second
             # fully-qualified descriptor for the *same* filter priority.
             # Only the concrete (keys + actions) entry is a separate filter.
             options = row.get("options")
-            if isinstance(options, dict) and options.get("keys"):
+            if isinstance(options, dict) and (options.get("keys") or options.get("actions")):
                 concrete.append(row)
             elif not isinstance(options, dict) and row.get("pref") is not None:
                 continue
@@ -189,11 +203,15 @@ def preflight(before, desired, allow_kernel_reset=False, allow_v1_cleanup=False)
             for pref, row in actual.items():
                 expected_f = expected[pref]
                 keys = row.get("options", {}).get("keys", {})
-                portkey = "dst_port" if direction == "ingress" else "src_port"
-                if str(keys.get(portkey)) != str(expected_f["port"]) or str(keys.get("ip_proto")) not in (
-                    expected_f["proto"], str({"tcp": 6, "udp": 17}[expected_f["proto"]])):
-                    raise PM2Error("E_CONFLICT", "V2 tc filter match drift",
-                                   {"interface": iface, "pref": pref})
+                if expected_f["port"] == 0:
+                    if row.get("kind") != "matchall":
+                        raise PM2Error("E_CONFLICT", "Global limit filter changed")
+                else:
+                    portkey = "dst_port" if direction == "ingress" else "src_port"
+                    if row.get("kind") != "flower" or str(keys.get(portkey)) != str(expected_f["port"]) or str(keys.get("ip_proto")) not in (
+                        expected_f["proto"], str({"tcp": 6, "udp": 17}[expected_f["proto"]])):
+                        raise PM2Error("E_CONFLICT", "V2 tc filter match drift",
+                                       {"interface": iface, "pref": pref})
                 actions = row.get("options", {}).get("actions", [])
                 if not any(a.get("kind") == "police" for a in actions if isinstance(a, dict)):
                     raise PM2Error("E_CONFLICT", "V2 tc filter police action drift",
@@ -201,16 +219,21 @@ def preflight(before, desired, allow_kernel_reset=False, allow_v1_cleanup=False)
 
 
 def _filter_add(f):
-    field = "dst_port" if f["direction"] == "ingress" else "src_port"
-    _tc(["filter", "add", "dev", f["iface"], f["direction"], "protocol", "ip",
-         "pref", str(f["pref"]), "flower", "ip_proto", f["proto"],
-         field, str(f["port"]), "action", "police", "rate",
-         f'{f["mbps"]}mbit', "burst", "256kb", "conform-exceed", "drop"])
+    prefix = ["filter", "add", "dev", f["iface"], f["direction"], "protocol", "ip",
+              "pref", str(f["pref"])]
+    if f["port"] == 0:
+        prefix.append("matchall")
+    else:
+        field = "dst_port" if f["direction"] == "ingress" else "src_port"
+        prefix += ["flower", "ip_proto", f["proto"], field, str(f["port"])]
+    _tc(prefix + ["action", "police", "rate", f'{f["mbps"]}mbit',
+                  "burst", "256kb", "conform-exceed", "drop"])
 
 
 def _filter_delete(f):
     _tc(["filter", "del", "dev", f["iface"], f["direction"],
-         "protocol", "ip", "pref", str(f["pref"]), "flower"])
+         "protocol", "ip", "pref", str(f["pref"]),
+         "matchall" if f["port"] == 0 else "flower"])
 
 
 def reconcile(at=None, allow_kernel_reset=False):
@@ -299,11 +322,16 @@ def install_schedule(path):
     for item in data["policies"]:
         if not item["enabled"]:
             continue
+        if item.get("interface") is not None:
+            _iface(item["interface"])
+            # An interface name can be validated syntactically, but the
+            # actual kernel existence/ownership must be verified before apply.
+            continue
         if not any(t["enabled"] and t["mode"] == "ports" and
                    item["port"] in {row["listen_port"] for row in t["mapping"]} and
                    set(item["protocol"].split(",")).issubset(set(t["protocols"]))
                    for t in cfg["tunnels"]):
-            raise PM2Error("E_CONFLICT", "Schedule must match one enabled V2 tunnel",
+            raise PM2Error("E_CONFLICT", "Schedule requires enabled V2 tunnel or explicit interface",
                            {"id": item["id"], "port": item["port"]})
     _safe(SCHEDULE)
     config.atomic_json(SCHEDULE, data)
