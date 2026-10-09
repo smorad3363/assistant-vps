@@ -21,7 +21,7 @@ from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
-from . import backup, guard, logbook, live, forwarding, limit_windows
+from . import backup, guard, logbook, live, forwarding, limit_windows, port_graph
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -258,7 +258,7 @@ def uninstall(args):
 def parser():
     p = argparse.ArgumentParser(
         prog="portmanager2",
-        description="Port Manager V2 development bootstrap — tunnel/NAT features disabled."
+        description="Port Manager V2 — IPv4 tunnel and per-port live monitoring (development)"
     )
     p.add_argument("--version", action="version", version=VERSION)
     sub = p.add_subparsers(dest="command")
@@ -279,8 +279,20 @@ def parser():
     report.add_argument("--window", choices=("1h", "24h", "7d"), required=True)
     report.add_argument("--json", action="store_true")
     live_parser = sub.add_parser("live")
-    live_parser.add_argument("--interval", type=int, default=1)
+    live_parser.add_argument("--interval", type=int, default=5)
     live_parser.add_argument("--tunnel")
+    live_parser.add_argument("--top", type=int, default=20)
+    live_parser.add_argument("--all-ports", action="store_true")
+    live_parser.add_argument("--once", action="store_true")
+    live_parser.add_argument("--json", action="store_true")
+    graph_parser = sub.add_parser("graph", help="Live per-port graphs, rolling 10-minute average")
+    graph_parser.add_argument("--refresh", type=int, default=5, help="2..60 seconds")
+    graph_parser.add_argument("--window", choices=("10m",), default="10m")
+    graph_parser.add_argument("--tunnel")
+    graph_parser.add_argument("--top", type=int, default=20)
+    graph_parser.add_argument("--all-ports", action="store_true")
+    graph_parser.add_argument("--once", action="store_true")
+    graph_parser.add_argument("--json", action="store_true")
     logs_parser = sub.add_parser("logs")
     logs_parser.add_argument("--lines", type=int, default=100)
     for name in ("sample", "restore", "backup", "confirm", "rollback-pending"):
@@ -366,8 +378,13 @@ def main(argv=None):
         elif args.command == "report":
             payload = sampler.report(args.window)
             response(True, "OK", "Traffic report", payload, json_mode)
-        elif args.command == "live":
-            return live.watch(args.interval, args.tunnel, None if sys.stdout.isatty() else 2)
+        elif args.command in ("live", "graph"):
+            return port_graph.watch(
+                refresh=args.interval if args.command == "live" else args.refresh,
+                tunnel=args.tunnel, top=args.top, active_only=not args.all_ports,
+                once=args.once or not sys.stdout.isatty(),
+                json_mode=args.json,
+            )
         elif args.command == "logs":
             for line in logbook.tail(args.lines):
                 print(line)
