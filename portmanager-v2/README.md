@@ -23,6 +23,7 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 
 ## Included features
 
+- **Fixed-screen live terminal dashboard (curses):** single-screen real-time redraw on Debian/Ubuntu without spilling each interval into SSH scrollback. Default shows busiest active ports only, terminal-height bounded, with 10m/1h/8h/24h averages. Keys: `q` or `Esc` to choose a port, `a` show idle ports, `+/-` refresh seconds, arrows to scroll. JSON/once modes stay plain text.
 - **Simple V1-inspired menu:** only [1] Live & speed limits, [2] IPTABLES & tunnels,
   [3] Edit/remove configurations. No IDs or iptables syntax required.
 - **No more false “0 traffic” assumption:** autodetect TCP/UDP IPv4 local sockets
