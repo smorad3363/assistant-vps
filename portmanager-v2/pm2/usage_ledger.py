@@ -192,7 +192,7 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
             "Intervals crossing requested endpoints have unknown intra-minute distribution; lower/upper bounds are shown.",
             "A missing interval is NOT zero traffic. This is not a provider billing reconciliation.",
             "Only data sampled after this byte ledger was enabled are available; older Mbps graphs are not billing data.",
-            "At most 24 auto-detected ports are continuously tracked, plus separate managed counters."
+            "Up to 64 autodetected or forwarded ports are tracked, plus managed ports; other ports may be absent."
         ]
         if any(x["missing_seconds"] > 1 or x["boundary_uncertain_bytes"] > 0
                or x["overlapping_sources"] for x in grouped):
