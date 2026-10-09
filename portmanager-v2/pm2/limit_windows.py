@@ -51,6 +51,7 @@ def validate(policies):
         invalid("Schedule collection must be a list of at most 64 policies")
     ids = set()
     weekly_occupancy = {}
+    port_timezones = {}
     for rule in policies:
         if not isinstance(rule, dict):
             invalid("Schedule record must be an object")
@@ -88,6 +89,13 @@ def validate(policies):
         # Collision is exact in each local calendar week for rules sharing
         # same port and timezone. It is unsafe to compose overlapping zones.
         protos = ("tcp", "udp") if protocol == "tcp,udp" else (protocol,)
+        for proto in protos:
+            key = (p, proto)
+            other_timezone = port_timezones.setdefault(key, rule["timezone"])
+            if other_timezone != rule["timezone"]:
+                raise PM2Error("E_CONFLICT",
+                               "Different timezone policies on same port/protocol require explicit migration",
+                               {"id": rid, "other_timezone": other_timezone})
         duration = (end - start) % 1440 or 1440   # equal clocks mean 24 hours
         for proto in protos:
             for d in days:
@@ -153,6 +161,9 @@ def preview_json_file(path, utc_timestamp=None):
         invalid("Invalid schedule JSON preview")
     if type(source) is not dict or set(source) != {"schema_version", "policies"} or source["schema_version"] != 1:
         invalid("Schedule JSON must contain schema_version=1 and policies")
-    when = (datetime.fromisoformat(utc_timestamp.replace("Z", "+00:00"))
-            if utc_timestamp is not None else datetime.now(timezone.utc))
+    try:
+        when = (datetime.fromisoformat(utc_timestamp.replace("Z", "+00:00"))
+                if utc_timestamp is not None else datetime.now(timezone.utc))
+    except (TypeError, AttributeError, ValueError) as exc:
+        raise PM2Error("E_VALIDATION", "Invalid ISO 8601 --at timestamp") from exc
     return evaluate(source["policies"], when)
