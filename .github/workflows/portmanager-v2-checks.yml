@@ -571,3 +571,54 @@ jobs:
           assert "PM2_VIEW" not in remaining,remaining
           print("PASS local port auto-monitoring with genuine IPv4 packets and clean owned teardown")
           PY
+
+  all-ports-tc-matchall-ephemeral:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: A single aggregate per-interface IPv4 cap is created, updated, removed safely
+        env:
+          PYTHONPATH: portmanager-v2
+        run: |
+          set -euxo pipefail
+          sudo ip link add pm2cap type veth peer name pm2cappeer
+          trap 'sudo ip link del pm2cap 2>/dev/null || true' EXIT
+          sudo ip link set pm2cap up
+          sudo env PYTHONPATH="$PYTHONPATH" python3 - <<'PY'
+          from datetime import datetime,timezone
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from unittest import mock
+          import subprocess
+          from pm2 import shaping
+          on=datetime(2026,10,9,19,tzinfo=timezone.utc)
+          off=datetime(2026,10,9,12,tzinfo=timezone.utc)
+          schedule={"schema_version":1,"policies":[{
+            "id":"all-eth","port":0,"interface":"pm2cap","protocol":"tcp,udp",
+            "timezone":"UTC","days":list(range(7)),"start":"18:00","end":"22:00",
+            "download_mbps":30,"upload_mbps":30,"enabled":True}]}
+          cfg={"schema_version":1,"generation":0,"tunnels":[]}
+          with TemporaryDirectory() as folder:
+            with (mock.patch.object(shaping,"STATE",Path(folder)/"state.json"),
+                  mock.patch.object(shaping,"PENDING",Path(folder)/"pending.json"),
+                  mock.patch.object(shaping,"_V1",Path(folder)/"no-v1"),
+                  mock.patch.object(shaping,"_LEGACY_ARCHIVE",Path(folder)/"no-archive"),
+                  mock.patch.object(shaping,"schedule_load",return_value=schedule),
+                  mock.patch.object(shaping.config,"load",return_value=cfg)):
+              active=shaping.reconcile(on)
+              assert active["active_filters"]==2,active
+              assert shaping.reconcile(on)["changed"] is False
+              for direction in ("ingress","egress"):
+                value=subprocess.run(["tc","filter","show","dev","pm2cap",direction],
+                   check=True,capture_output=True,text=True).stdout
+                assert "matchall" in value and "police" in value,value
+              assert shaping.reconcile(off)["active_filters"]==0
+              assert shaping.reconcile(on)["active_filters"]==2
+              assert shaping.remove_owned()["changed"]
+          q=subprocess.run(["tc","qdisc","show","dev","pm2cap"],
+             check=True,capture_output=True,text=True).stdout
+          assert "clsact" not in q,q
+          print("PASS aggregate whole-interface matchall police independent of V2 tunnels")
+          PY
