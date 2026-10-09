@@ -455,6 +455,17 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         if once:
                             return 0
                         before, net_before, t0, interval = after, net_after, t2, effective
+                        if use_auto and history_active and now >= next_reload:
+                            # The minute sampler can pick up newly opened ports
+                            # while the viewer remains on screen.
+                            try:
+                                history_ports = history_collector.active_ports()
+                                monitored_ports = history_ports
+                                labels.update({("auto", proto, port): "Local service"
+                                               for proto, port in history_ports})
+                            except PM2Error:
+                                pass
+                            next_reload = now + 30
                         if not use_auto and now >= next_reload:
                             cfg = config.load(transaction.CONFIG)
                             labels = port_labels(cfg["tunnels"])
