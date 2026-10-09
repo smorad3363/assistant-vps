@@ -38,6 +38,11 @@ on a disposable VM: [راهنمای آزمون فارسی](docs/OPERATOR-TEST-FA
   possibly shared live `net.ipv4.ip_forward`.
 - Shaping and quotas are intentionally out of scope for V2 2.0; planned for
   2.1 and must not overwrite any existing `tc` qdisc.
+- A **read-only scheduled-limit preview** is implemented in
+  `pm2/limit_windows.py`, including weekdays, IANA timezone, overnight
+  windows, overlap rejection and DST handling. **It does not actually throttle
+  traffic in 2.0**. 2.1 enforcement must prove exclusive qdisc ownership.
+  See [scheduled-limit ADR](docs/ADR-0003-SCHEDULED-LIMITS.md).
 
 ## Useful CLI (after installing on a disposable VM)
 
@@ -50,7 +55,8 @@ portmanager2 tunnel create --dry-run --name test --listen-ip 192.0.2.11 --interf
 portmanager2 tunnel check --json
 portmanager2 report --window 1h --json
 portmanager2 backup list
-portmanager2 limits list --json     # unavailable/2.1, as expected
+portmanager2 limits list --json     # enforcement unavailable/2.1
+portmanager2 limits schedule-preview --file examples/scheduled-limits.example.json --at 2026-10-12T20:00:00Z --json  # read-only
 sudo portmanager2 uninstall --dry-run
 sudo portmanager2 uninstall --yes   # retains V2 config/data
 ```
@@ -60,6 +66,10 @@ passed static/unit (48 tests per Python), real V1/V2 coexistence, networkns
 TCP+UDP round trip, guard rollback and 120s timer, and activated systemd on
 fresh GitHub Ubuntu VMs. **A full guest reboot, real multi-host reliability,
 IPv6 behavior, legacy iptables and user acceptance are still not certified.**
+
+V1 users seeing CPU spikes after `portmanager live 1` can consult the
+[read-only V1 profiler and lower-overhead viewer](../portmanager-v1/perf/README.fa.md).
+V1's original installer and executable remain frozen.
 
 See [PM2-SPEC-001](docs/PM2-SPEC-001.fa.md),
 [progress checkpoint](docs/PROGRESS.md),
