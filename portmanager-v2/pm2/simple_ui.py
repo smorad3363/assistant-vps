@@ -101,7 +101,7 @@ def _protected_ssh_ports():
 def _mutate(operation, argv):
     from .cli import mutation_lock
     preview = tunnels.handle(operation, [*argv, "--dry-run"], mutation_lock)
-    print(_paint("93", "  Review change to Port Manager-owned tunnel configuration"))
+    print(_paint("93", "  Check the changes before saving this port connection."))
     if not _confirm("Apply?"):
         return
     if operation == "delete":
@@ -125,16 +125,16 @@ def _tunnel_wizard(old=None, all_ports=False):
         print(f"  Interface autodetection failed: {err.message}")
         return
     name_default = old["name"] if old else f"tunnel-{len(config.load(transaction.CONFIG)['tunnels'])+1}"
-    name = _ask("Name", name_default)
+    name = _ask("Name for this port connection", name_default)
     if name is None:
         return
-    target = _ask("Destination server IPv4", old["target_ip"] if old else None)
+    target = _ask("Send traffic to this IP address", old["target_ip"] if old else None)
     if not target:
         return
     listen_ip = old["listen_ip"] if old else ip
     device = old["interface"] if old else iface
     is_all = (old["mode"] == "all-except") if old else all_ports
-    print(_paint("90", f"  Incoming interface {device} / local IP {listen_ip}"))
+    print(_paint("90", f"  Using network {device} on this server ({listen_ip})"))
     argv = ([old["id"]] if old else []) + [
         "--name", name, "--interface", device, "--listen-ip", listen_ip,
         "--target-ip", target,
@@ -143,18 +143,18 @@ def _tunnel_wizard(old=None, all_ports=False):
     ]
     if is_all:
         existing = ",".join(str(p) for p in old["exclude"]) if old else _protected_ssh_ports()
-        excludes = _ask("Protected SSH/admin ports (never tunnel)", existing)
+        excludes = _ask("Ports to keep unchanged (SSH/admin)", existing)
         if excludes is None:
             return
         argv += ["--exclude", excludes, "--ack-all-ports"]
-        print(_paint("91", "  CAUTION: all-except forwarding can disrupt SSH."))
+        print(_paint("91", "  Warning: forwarding almost all ports can break remote login."))
     else:
         if old and old["mapping"]:
             preserved = ",".join(f'{p["listen_port"]}:{p["target_port"]}' for p in old["mapping"])
-            mapping = _ask("Port pairs incoming:destination", preserved)
+            mapping = _ask("Port pairs on this server:destination", preserved)
         else:
-            port_in = _ask("Incoming port")
-            port_out = _ask("Destination port", port_in)
+            port_in = _ask("Port on this server")
+            port_out = _ask("Port on destination server", port_in)
             if not port_in or not port_out:
                 return
             mapping = f"{port_in}:{port_out}"
@@ -263,7 +263,7 @@ def _ui_actions(*choices, selected=0):
             content = _paint("97", content)
         _ui_line(content, width)
     _ui_edge("bottom", width)
-    print(_paint("90", "  ↑↓ Move   │   Enter Choose   │   0 / Esc Back   │   r Refresh"))
+    print(_paint("90", "  ↑↓ Move   │   Enter Choose   │   0 / Esc Back   │   Number + Enter"))
 
 
 def _menu_key(choices, selected):
@@ -411,11 +411,11 @@ def _list_tunnels():
     items = cfg["tunnels"]
     rules, error = system_rules.detect_nat(limit=200)
     _ui_edge("top", width)
-    _ui_line(_paint("96;1", " ▤  EXISTING FIREWALL CONFIGURATION"))
-    _ui_line(_paint("90", "    Port Manager tunnels and existing NAT rules (system-wide view)"))
+    _ui_line(_paint("96;1", " ▤  PORTS AND CONNECTIONS ON THIS SERVER"))
+    _ui_line(_paint("90", "    See where your ports send traffic. Nothing changes on this page."))
     _ui_edge("rule", width)
     if items:
-        _ui_line(_paint("96;1", " ── PORT MANAGER CREATED TUNNELS ──"))
+        _ui_line(_paint("96;1", " ── PORT CONNECTIONS SAVED HERE ──"))
         for i, t in enumerate(items, 1):
             ports = ("ALL except " + ",".join(map(str, t["exclude"]))
                      if t["mode"] == "all-except" else
@@ -428,9 +428,9 @@ def _list_tunnels():
                      _paint("97", _ui_cut(ports, max(10, width - 65))) +
                      "  → " + _paint("95;1", dest) + "  " + state)
     else:
-        _ui_line(_paint("97", f"  {len(items)} tunnels created here  |  {len(rules)} existing NAT rules detected"))
+        _ui_line(_paint("97", f"  {len(items)} saved connections  |  {len(rules)} existing network rules"))
     _ui_line("")
-    _ui_line(_paint("96;1", " ── EXISTING FIREWALL RULES ──"))
+    _ui_line(_paint("96;1", " ── OTHER EXISTING PORT RULES ──"))
     _ui_line(_paint("90", _ui_cut(_ui_header_row(width), width - 5)))
     _ui_edge("rule", width)
     if rules:
@@ -445,7 +445,7 @@ def _list_tunnels():
         _ui_line(_paint("90", "  No existing NAT forwarding rules found."))
     _ui_line("")
     _ui_line(_paint("90", _ui_cut(
-        "  External rules: read-only until verified import. Never auto-delete Docker/UFW rules.",
+        "  Other apps may own these rules. View them here; do not remove them blindly.",
         width - 6)))
     _ui_edge("bottom", width)
     return items
@@ -454,10 +454,10 @@ def _list_tunnels():
 def _ui_ports_intro():
     width = _ui_width()
     _ui_edge("top", width)
-    _ui_line(_paint("96;1", " ▤  PORT FORWARDING & TUNNELS"))
-    _ui_line("  Create or manage TCP/UDP port mappings without editing iptables by hand.")
+    _ui_line(_paint("96;1", " ▤  PORT FORWARDING"))
+    _ui_line("  Send traffic arriving on a port to another server.")
     _ui_line(_paint("90", _ui_cut(
-        "  Existing external NAT rules remain untouched. Changes to V2 require confirmation.",
+        "  Other apps\x27 network rules are kept safe. Changes need confirmation.",
         width - 7)))
     _ui_edge("bottom", width)
 
@@ -500,14 +500,14 @@ def _inspect_existing_rule():
             _ask("Enter to return")
             return
         _ui_edge("top")
-        _ui_line(f"  {len(rules)} NAT rules found  |  read-only inspection")
+        _ui_line(f"  {len(rules)} existing rules found  |  view only")
         for index, rule in enumerate(rules, 1):
             _ui_line("  " + _ui_cut(
                 f"[{index}] {rule['chain']}  {rule['protocol']}:{rule['port']} "
                 f"→ {rule['target']} {rule['destination']}", _ui_width() - 8))
         _ui_line("")
         _ui_line(_paint("93", _ui_cut(
-            "  Editing a Docker/UFW/legacy rule without ownership validation can disconnect the VPS.",
+            "  These rules may belong to other apps. Changing them can break connections.",
             _ui_width() - 8)))
         _ui_edge("bottom")
         selected = _ask("Rule number to inspect / 0 Back", "0")
@@ -521,7 +521,7 @@ def _inspect_existing_rule():
         for key in ("chain", "protocol", "port", "target", "destination", "interface", "source"):
             _ui_line(f"  {key.upper():<16} {_ui_cut(rule.get(key, '-'), _ui_width() - 26)}")
         _ui_line("")
-        _ui_line(_paint("93", "  Existing rule: inspect only; safe import is not configured."))
+        _ui_line(_paint("93", "  From another app: you can view it here, not change it yet."))
         _ui_edge("bottom")
         _ask("Enter to continue")
 
@@ -530,11 +530,10 @@ def _manage():
     while True:
         _title("CONFIG")
         items = _list_tunnels()
-        _ui_actions(("1", "Edit / Delete Port Manager tunnel"),
-                    ("2", "Delete ALL Port Manager tunnels"),
-                    ("3", "Inspect existing external NAT rules"),
-                    ("0", "Back"))
-        choice = _ask("Select", "0")
+        choice = _choose(("1", "Change or remove a saved port"),
+                         ("2", "Remove all saved port connections"),
+                         ("3", "See other existing port rules"),
+                         ("0", "Back to previous menu"))
         if choice in ("0", None):
             return
         if choice and choice.lower() == "r":
@@ -550,8 +549,8 @@ def _manage():
         if not items:
             _title("CONFIG")
             _ui_edge("top")
-            _ui_line("  No tunnels created by Port Manager in this installation.")
-            _ui_line("  Existing firewall rules are shown in option [3].")
+            _ui_line("  No port connections saved in this app yet.")
+            _ui_line("  You can still see existing ports with option [3].")
             _ui_edge("bottom")
             _ask("Enter to continue")
             continue
@@ -560,8 +559,9 @@ def _manage():
             continue
         selected = items[int(value) - 1]
         _title("EDIT TUNNEL")
-        _ui_actions(("1", "Edit tunnel"), ("2", "Delete tunnel"), ("0", "Back"))
-        action = _ask("Select", "0")
+        action = _choose(("1", "Change this port connection"),
+                         ("2", "Remove this port connection"),
+                         ("0", "Go back"))
         if action == "1":
             _tunnel_wizard(selected)
         elif action == "2":
@@ -572,12 +572,11 @@ def _tunnel_page():
     while True:
         _title("PORTS")
         _list_tunnels()
-        _ui_actions(("1", "New port to IP tunnel"),
-                    ("2", "Tunnel ALL ports (protect SSH)"),
-                    ("3", "Edit / Delete managed tunnel"),
-                    ("4", "Inspect all system NAT rules"),
-                    ("0", "Back"))
-        choice = _ask("Select", "0")
+        choice = _choose(("1", "Forward a port to another server"),
+                         ("2", "Forward almost all ports (advanced)"),
+                         ("3", "Change or remove a saved port"),
+                         ("4", "See other existing port rules"),
+                         ("0", "Back to home"))
         if choice in ("0", None):
             return
         if choice and choice.lower() == "r":
@@ -632,15 +631,16 @@ def _limit(port, interface, proto="tcp,udp"):
     title = "ALL interface IPv4 traffic" if port == 0 else f"port {port}"
     _title("SPEED LIMIT")
     _ui_edge("top")
-    _ui_line(f"  Speed limit: {title} on {interface}")
-    _ui_line(_paint("93", "  Requires an explicit confirmation before changing tc."))
+    _ui_line(f"  Selected: {title}  |  Network: {interface}")
+    _ui_line(_paint("93", "  Nothing changes until you save the new speed setting."))
     _ui_edge("bottom")
     if mine:
         for p in mine:
             print(f"   {p['id']}: ↓{p['download_mbps']} ↑{p['upload_mbps']} Mb/s "
                   f"{p['start']}-{p['end']}")
-    _ui_actions(("1", "Set or edit speed limit"), ("2", "Remove limit"), ("0", "Back"))
-    choice = _ask("Select", "0")
+    choice = _choose(("1", "Set or change speed"),
+                     ("2", "Remove the speed limit"),
+                     ("0", "Go back"))
     if choice in ("0", None):
         return
     if choice == "2":
@@ -653,11 +653,14 @@ def _limit(port, interface, proto="tcp,udp"):
         return
     if choice != "1":
         return
-    speed = _ask("Maximum speed in Mbit/s (same ↓/↑)", "20")
+    speed = _ask("Max download and upload speed (Mbps)", "20")
     if not speed or not speed.isdecimal() or not 1 <= int(speed) <= 100000:
         print("  Use a whole number from 1 to 100000.")
         return
-    timing = _ask("[1] Always   [2] Certain hours", "1")
+    _title("WHEN TO LIMIT SPEED")
+    timing = _choose(("1", "All day, every day"),
+                     ("2", "Only at certain hours"),
+                     ("0", "Cancel"))
     if timing not in ("1", "2"):
         return
     if timing == "2":
@@ -830,11 +833,10 @@ def menu():
         raise PM2Error("E_VALIDATION", "Interactive Port Manager requires a terminal")
     while True:
         _title("HOME")
-        _ui_actions(("1", "● LIVE TRAFFIC & SPEED LIMITS"),
-                    ("2", "◆ PORTS / IPTABLES / TUNNELS"),
-                    ("3", "✎ EDIT / DELETE CONFIGURATIONS"),
-                    ("0", "Exit"))
-        choice = _ask("Select", "0")
+        choice = _choose(("1", "See live traffic and control speed"),
+                         ("2", "View and forward ports"),
+                         ("3", "Change or remove port connections"),
+                         ("0", "Exit Port Manager"))
         if choice in ("0", None):
             _clear_screen()
             return 0
