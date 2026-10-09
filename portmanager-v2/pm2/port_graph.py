@@ -401,10 +401,11 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                 if use_auto:
                     labels.update({("auto", proto, port): "Local service"
                                    for proto, port in monitored_ports})
-                    t0 = time.monotonic()
-                    before = accounting.counters(by_port=True, include_v1=True,
-                                                 include_probe=not history_active,
-                                                 include_history=history_active)
+                    if monitored_ports or history_active:
+                        t0 = time.monotonic()
+                        before = accounting.counters(by_port=True, include_v1=True,
+                                                     include_probe=not history_active,
+                                                     include_history=history_active)
                 net_before = auto_monitor.interface_counters()
                 sample_cost = time.monotonic() - t0
                 interval = refresh_interval(refresh, len(before), sample_cost)
