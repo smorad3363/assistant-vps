@@ -62,6 +62,21 @@ block, or throttle packets and do not remove external firewall rules.
 Use `PORTMANAGER2_ENABLE_SERVICES=1` when installing/updating to enable
 persistent collection. Already active timers stay enabled after future updates.
 
+## Simple keyboard menus
+
+Every main menu and speed-setting menu supports Up / Down to move the
+highlighted arrow, Enter to open the highlighted choice, number + Enter as
+a shortcut, and Esc or 0 to go back. A menu is replaced rather than appended
+to SSH scrollback, and longer existing-rule or saved-connection lists are
+paginated with Previous / Next choices. The menu uses a short-lived
+cbreak tty reader and always restores the terminal settings after selecting
+or leaving; ordinary numeric entry remains as a fallback for unsupported TTYs.
+No firewall, routing or bandwidth policy is applied by merely navigating.
+
+Menu titles and traffic/port labels use plain language (forward a port,
+change or remove it, or view rules from other apps). NAT chains and firewall
+rules stay intact; foreign rules remain view-only.
+
 ## Unified terminal navigation and interfaces
 
 Navigation replaces the old terminal page instead of appending menus to SSH
