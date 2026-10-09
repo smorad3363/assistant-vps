@@ -5,6 +5,7 @@ ports on each refresh, never adds firewall rules or changes tc. History persists
 for 10 minutes across viewer restarts in the existing V2-owned SQLite DB.
 """
 from collections import defaultdict
+from datetime import datetime, timezone
 from contextlib import contextmanager, nullcontext
 import json
 import math
@@ -16,7 +17,7 @@ import sqlite3
 import sys
 import time
 
-from . import accounting, auto_monitor, config, sampler, transaction
+from . import accounting, auto_monitor, config, sampler, transaction, shaping, limit_windows
 from .errors import PM2Error
 from .live_screen import LiveScreen
 
@@ -282,6 +283,26 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
             "all_except_note": "All-except without mapping has aggregate counters only"}
 
 
+
+def limit_descriptions(policies, when=None):
+    """Read-only status for TUI; scheduling match does not prove tc is installed."""
+    at = when or datetime.now(timezone.utc)
+    result = []
+    for policy in policies:
+        enabled = policy["enabled"]
+        result.append({
+            "id": policy["id"], "port": policy["port"],
+            "protocol": policy["protocol"], "interface": policy.get("interface"),
+            "download_mbps": policy["download_mbps"],
+            "upload_mbps": policy["upload_mbps"],
+            "enabled": enabled,
+            "scheduled_now": bool(enabled and limit_windows.matches(policy, at)),
+            "start": policy["start"], "end": policy["end"],
+            "days": list(policy["days"]), "timezone": policy["timezone"]
+        })
+    return result
+
+
 def render(data, requested, effective, rules):
     """Compact colorful V1-style terminal dashboard without extra prompts."""
     interactive = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
@@ -410,6 +431,9 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                 sample_cost = time.monotonic() - t0
                 interval = refresh_interval(refresh, len(before), sample_cost)
                 next_reload = time.time() + 30
+                next_limit_reload = 0
+                speed_policies = []
+                speed_policies_error = None
                 while True:
                     try:
                         if screen is not None:
@@ -447,6 +471,20 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                                        now, top=top, active_only=active_only)
                         result["interfaces"] = auto_monitor.interface_rates(
                             net_before, net_after, elapsed)
+                        # Loaded read-only; refresh policies at most twice per
+                        # minute and re-evaluate clock windows on every frame.
+                        if now >= next_limit_reload:
+                            try:
+                                speed_policies = shaping.schedule_load()["policies"]
+                                speed_policies_error = None
+                            except (PM2Error, OSError, ValueError) as exc:
+                                speed_policies = []
+                                speed_policies_error = str(exc)[:130]
+                            next_limit_reload = now + 30
+                        result["speed_limits"] = limit_descriptions(
+                            speed_policies, datetime.fromtimestamp(now, timezone.utc))
+                        if speed_policies_error:
+                            result["speed_limits_error"] = speed_policies_error
                         result.update({"requested_refresh_seconds": refresh,
                                        "effective_refresh_seconds": interval,
                                        "rule_count": len(after),
