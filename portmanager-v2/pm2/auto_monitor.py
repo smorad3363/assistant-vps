@@ -21,6 +21,23 @@ CHAINS = {"down": ("PREROUTING", "PM2_VIEW_RX", "ORIGINAL"),
 HOOK_COMMENT = "pm2view:hook"
 MAX_PORTS = 24
 LOCK_FILE = Path("/run/lock/portmanager2-view.lock")
+
+
+def lock_owner_pid():
+    """Best-effort diagnostic PID; an old file alone never means locked."""
+    try:
+        fd = os.open(LOCK_FILE, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            raw = os.read(fd, 32).decode("ascii", "replace").strip()
+        finally:
+            os.close(fd)
+        if raw.isdecimal() and 1 < int(raw) <= 4194304:
+            pid = int(raw)
+            if Path(f"/proc/{pid}").exists():
+                return pid
+    except (OSError, ValueError):
+        pass
+    return None
 _COMMENT = re.compile(r"^pm2view:(tcp|udp):(\d{1,5}):(up|down)$")
 
 
@@ -236,6 +253,11 @@ class AutoMonitor:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.lock = fd
+            # A PID is only diagnostic: flock, not file existence, controls
+            # exclusivity. Never unlink the lock path while another process
+            # could be waiting on its inode.
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
             self.ports = discover(self.existing)
             if self.ports:
                 _install(self.ports)
@@ -254,6 +276,11 @@ class AutoMonitor:
                 _clear_owned()
         finally:
             if self.lock is not None:
-                os.close(self.lock)
-                self.lock = None
+                # Erase stale PID hint; keep the lock inode itself to prevent
+                # accidental concurrent monitors through unlink/recreate.
+                try:
+                    os.ftruncate(self.lock, 0)
+                finally:
+                    os.close(self.lock)
+                    self.lock = None
         return False
