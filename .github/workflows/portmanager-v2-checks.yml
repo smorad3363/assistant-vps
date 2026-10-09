@@ -217,6 +217,16 @@ jobs:
           sudo ip netns exec pm2relay portmanager2 sample
           sudo ip netns exec pm2relay portmanager2 report --window 1h --json |
             python3 -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d); assert d["upload_bytes"] > 0 and d["download_bytes"] > 0; assert d["coverage_seconds"] > 0'
+          # Real per-port graph: record traffic mid-snapshot, check JSON
+          # contains original TCP/443 and UDP/2053, read-only kernel rules.
+          (
+            sleep 1
+            sudo ip netns exec pm2client python3 portmanager-v2/tests/networkns/client.py
+          ) &
+          traffic_pid=$!
+          sudo ip netns exec pm2relay portmanager2 graph --refresh 3 --once --json |
+            python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["window_seconds"]==600; ports={(r["protocol"],r["listen_port"]) for r in d["rows"]}; assert ("tcp",443) in ports and ("udp",2053) in ports, d; assert d["refresh_is_read_only"]'
+          wait "$traffic_pid"
           sudo ip netns exec pm2relay portmanager2 tunnel apply
           test "$(sudo ip netns exec pm2relay iptables -t nat -S PREROUTING | grep -c 'pm2:owned-hook')" -eq 1
           # Simulate volatile PM2 rules disappearing at boot. Only remove the
