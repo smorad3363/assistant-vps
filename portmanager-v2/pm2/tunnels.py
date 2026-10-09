@@ -75,7 +75,9 @@ def handle(operation, argv, lock):
     if operation == "check":
         cfg, runtime = transaction.state()
         try:
-            report = transaction.preflight(cfg, runtime)
+            if guard._read() is not None:
+                raise PM2Error("E_CONFLICT", "Protected change awaits confirmation")
+            report = transaction.preflight(cfg, runtime, allow_protected=True)
             return {"safe": True, **report}
         except PM2Error as exc:
             return {"safe": False, "code": exc.code, "reason": exc.message}
