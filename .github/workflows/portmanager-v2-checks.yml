@@ -83,7 +83,11 @@ jobs:
           sudo portmanager2 uninstall --yes
           test ! -e /usr/local/bin/portmanager2
           test ! -L /usr/local/bin/portmanager2
-          test -f /etc/portmanager2/config.json
+          sudo test -f /etc/portmanager2/config.json
+          sudo test -f /var/lib/portmanager2/state.json
+          # V2 sensitive directories intentionally deny access to normal users.
+          test "$(stat -c %a /etc/portmanager2)" = 700
+          test "$(stat -c %a /var/lib/portmanager2)" = 700
           if [ "$v1_before" = "ABSENT" ]; then
             test ! -e /usr/local/bin/portmanager
           else
