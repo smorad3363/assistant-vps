@@ -166,6 +166,7 @@ sha = sys.argv[4]
 objects = (
     (etc / "owner.json", {"product": "portmanager2", "schema_version": 1, "source_commit": sha}),
     (etc / "config.json", {"schema_version": 1, "generation": 0, "tunnels": []}),
+    (data / "owner.json", {"product": "portmanager2", "schema_version": 1}),
     (data / "state.json", {"desired_generation": 0, "applied_generation": 0,
                            "last_error": None, "applied_at": None,
                            "backend": None, "interface_snapshot": {}}),
