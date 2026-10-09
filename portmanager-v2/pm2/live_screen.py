@@ -155,7 +155,7 @@ class LiveScreen:
             avg = item[direction + "_sum"] / max(1, item["count"])
             total_gb = item[direction + "_bytes"] / 1e9
             self._write(y + 3, x + 2,
-                        f"Peak {item[direction + '_peak']:.0f}  Avg {avg:.0f}  Total {total_gb:.2f} GB*", 3)
+                        f"Peak {item[direction + '_peak']:.0f}  Avg {avg:.0f}  Session {total_gb:.2f} GB~", 3)
 
     def draw(self, data=None, effective=None):
         if data is not None:
@@ -229,10 +229,13 @@ class LiveScreen:
             down, up = self.untracked_rates(interface, self.last.get("rows", []))
             if down + up >= .1:
                 self._write(height - 5, 2, f"OTHER / UNKNOWN ~  ↓ {down:,.1f}  ↑ {up:,.1f} Mbps", 3, True)
-        self._write(height - 4, 2, "* Partial history / session totals  |  OTHER estimated, may overlap NAT", 3)
+        self._write(height - 4, 2,
+                    "* incomplete period  |  ~ estimated  |  averages in Mb/s (not GB)", 3)
         self._write(height - 3, 1, "╰" + line + "╯", 1)
         self._write(height - 2, 2, "↑↓ scroll  |  a idle ports  |  +/- refresh  |  q select limit")
-        self._write(height - 1, 2, f"{len(rows)} ports shown  •  {interface['interface']}  •  Ctrl+C back", 1)
+        state = "History ON (background)" if self.last and self.last.get("background_history_active") else "History: viewer only"
+        self._write(height - 1, 2,
+                    f"{len(rows)} ports  •  {interface['interface']}  •  {state}  •  Ctrl+C back", 1)
         self.window.refresh()
 
     def wait(self, interval):
