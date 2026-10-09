@@ -52,6 +52,7 @@ def _schedule(ident):
         result = subprocess.run([
             "systemd-run", "--quiet", "--collect",
             "--unit", unit, "--on-active=120s",
+            "--timer-property=AccuracySec=1s",
             "/usr/local/bin/portmanager2", "rollback-pending", ident
         ], timeout=15, capture_output=True, text=True, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
