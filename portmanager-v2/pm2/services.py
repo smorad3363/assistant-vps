@@ -91,6 +91,8 @@ def _read_marker():
         value.get("schema_version") != 1
     ):
         raise PM2Error("E_CONFLICT", "Unrecognized systemd ownership marker")
+    if value.get("activation") not in ("disabled_until_engine_release", "active"):
+        raise PM2Error("E_CONFLICT", "Unrecognized or transitional unit activation state")
     units = value.get("units")
     if not isinstance(units, dict) or set(units) != set(UNIT_NAMES):
         raise PM2Error("E_CONFLICT", "Invalid V2 unit inventory")
@@ -122,10 +124,18 @@ def preflight():
             # systemctl is-enabled returns 0 for enabled and static aliases;
             # static units (sample.service) must not be treated as active.
             val = res.stdout.strip()
-            if kind == "is-enabled" and val not in ("disabled", "static", "indirect"):
-                raise PM2Error("E_CONFLICT", f"V2 unit is not safely disabled ({val}): {name}")
-            if kind == "is-active" and val != "inactive":
-                raise PM2Error("E_CONFLICT", f"V2 unit is not inactive ({val}): {name}")
+            active = marker["activation"] == "active"
+            if kind == "is-enabled":
+                expected = (
+                    ("enabled",) if active and name != "portmanager2-sample.service"
+                    else ("disabled", "static", "indirect")
+                )
+                if val not in expected:
+                    raise PM2Error("E_CONFLICT", f"Unexpected V2 enable state ({val}): {name}")
+            if kind == "is-active":
+                expected = "active" if active and name == "portmanager2-sample.timer" else "inactive"
+                if val != expected:
+                    raise PM2Error("E_CONFLICT", f"Unexpected V2 runtime state ({val}): {name}")
     return marker
 
 
@@ -156,7 +166,10 @@ def _change(operation: str):
     if operation == "install" and old is not None and all(
         old["units"][name] == digest(contents[name]) for name in UNIT_NAMES
     ):
-        return {"units": list(UNIT_NAMES), "changed": False, "enabled": False}
+        return {"units": list(UNIT_NAMES), "changed": False,
+                "enabled": old["activation"] == "active"}
+    if operation == "install" and old is not None and old["activation"] == "active":
+        raise PM2Error("E_CONFLICT", "Upgrade changing enabled units must use an explicit safe lifecycle")
     paths = [SYSTEMD / n for n in UNIT_NAMES] + [MARKER]
     snapshots = {path: path.read_bytes() if path.is_file() else None for path in paths}
     try:
@@ -173,6 +186,13 @@ def _change(operation: str):
             }
             _atomic(MARKER, (json.dumps(marker, sort_keys=True) + "\n").encode(), 0o600)
         else:
+            if old is not None and old["activation"] == "active":
+                for action in (["disable", "--now", "portmanager2-sample.timer"],
+                               ["disable", "portmanager2-restore.service"]):
+                    result = _run(action)
+                    if result.returncode:
+                        raise PM2Error("E_APPLY", "Could not disable owned V2 unit",
+                                       {"command": action, "stderr": result.stderr[-350:]})
             for name in UNIT_NAMES:
                 (SYSTEMD / name).unlink()
             MARKER.unlink()
@@ -180,6 +200,9 @@ def _change(operation: str):
     except Exception as exc:
         try:
             _restore(snapshots)
+            if old is not None and old.get("activation") == "active":
+                _run(["enable", "portmanager2-restore.service"])
+                _run(["enable", "--now", "portmanager2-sample.timer"])
         except Exception as rollback_exc:
             raise PM2Error(
                 "E_ROLLBACK", "systemd unit rollback failed",
@@ -191,7 +214,42 @@ def _change(operation: str):
             "E_APPLY", f"systemd unit {operation} failed",
             {"error": str(exc)}
         ) from exc
-    return {"units": list(UNIT_NAMES), "changed": True, "enabled": False}
+    return {"units": list(UNIT_NAMES), "changed": True,
+            "enabled": old is not None and old.get("activation") == "active" and operation != "remove"}
+
+
+def activate():
+    """Explicitly opt in to persistence after VM-qualified network release.
+
+    Installs only V2 systemd entries; no changes to cron, iptables or V1.
+    Caller must hold the V2 global lock.
+    """
+    _check_root()
+    old = preflight()
+    if old is None:
+        raise PM2Error("E_DEPENDENCY", "Install V2 units before activation")
+    if old["activation"] == "active":
+        return {"enabled": True, "changed": False}
+    pending = dict(old, activation="enabling")
+    _atomic(MARKER, (json.dumps(pending, sort_keys=True) + "\n").encode(), 0o600)
+    try:
+        for action in (["enable", "portmanager2-restore.service"],
+                       ["enable", "--now", "portmanager2-sample.timer"]):
+            result = _run(action)
+            if result.returncode:
+                raise PM2Error("E_APPLY", "Could not activate owned service",
+                               {"command": action, "stderr": result.stderr[-350:]})
+        finished = dict(old, activation="active")
+        _atomic(MARKER, (json.dumps(finished, sort_keys=True) + "\n").encode(), 0o600)
+    except Exception:
+        try:
+            _run(["disable", "--now", "portmanager2-sample.timer"])
+            _run(["disable", "portmanager2-restore.service"])
+            _atomic(MARKER, (json.dumps(old, sort_keys=True) + "\n").encode(), 0o600)
+        except Exception as rollback:
+            raise PM2Error("E_ROLLBACK", "Could not restore original V2 unit activation") from rollback
+        raise
+    return {"enabled": True, "changed": True}
 
 
 def install():
