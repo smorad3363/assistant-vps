@@ -22,7 +22,7 @@ class CLITests(TestCase):
     def test_version(self):
         code, out, _ = self.invoke(["--version"])
         self.assertEqual(code, 0)
-        self.assertIn("2.0.0-dev.1", out)
+        self.assertIn("2.1.0-rc.1", out)
 
     def test_unimplemented_tunnel_fails_closed(self):
         with tempfile.TemporaryDirectory() as t:
@@ -76,7 +76,7 @@ class CLITests(TestCase):
                 self.assertEqual(err, "")
                 obj = json.loads(out)
                 self.assertEqual(set(obj), {"ok", "code", "message", "details", "request_id"})
-                self.assertEqual(obj["details"]["version"], "2.0.0-dev.1")
+                self.assertEqual(obj["details"]["version"], "2.1.0-rc.1")
 
     def test_schedule_preview_is_json_and_does_not_call_tc_or_iptables(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -99,12 +99,15 @@ class CLITests(TestCase):
             self.assertEqual(payload["details"]["would_apply"][0]["port"], 443)
             self.assertEqual(json.loads(path.read_text()), schedule)
 
-    def test_limits_list_never_claims_shaping_support(self):
-        code, out, _ = self.invoke(["limits", "list", "--json"])
+    def test_limits_list_reports_owned_policies_not_foreign_tc(self):
+        with (mock.patch("pm2.shaping.schedule_load", return_value={"schema_version": 1, "policies": []}),
+              mock.patch("pm2.shaping.state_load", return_value={"product": "portmanager2", "interfaces": [], "filters": []})):
+            code, out, _ = self.invoke(["limits", "list", "--json"])
         self.assertEqual(code, 0)
         obj = json.loads(out)
-        self.assertFalse(obj["details"]["supported"])
-        self.assertEqual(obj["details"]["reason"], "planned_for_2.1")
+        self.assertTrue(obj["details"]["supported"])
+        self.assertEqual(obj["details"]["policies"], [])
+        self.assertEqual(obj["details"]["active_filters"], 0)
 
     def test_uninstall_dry_run_has_no_mutations(self):
         with tempfile.TemporaryDirectory() as t:
