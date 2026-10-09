@@ -77,6 +77,7 @@ stage=""
 new_release=""
 old_pointer=""
 swapped=0
+created_launcher=0
 cleanup() {
   local status=$?
   if ((status != 0)); then
@@ -87,6 +88,9 @@ cleanup() {
       else
         rm -f -- "$ROOT/current"
       fi
+    fi
+    if ((created_launcher == 1)) && [[ -L "$BIN" ]] && [[ "$(readlink "$BIN")" == "$LAUNCHER_TARGET" ]]; then
+      rm -f -- "$BIN"
     fi
     if [[ -n "$stage" && -d "$stage" ]]; then rm -rf -- "$stage"; fi
     if [[ -n "$new_release" && -d "$new_release" ]]; then
@@ -190,13 +194,19 @@ swapped=1
 
 if [[ ! -L "$BIN" ]]; then
   ln -s "$LAUNCHER_TARGET" "$BIN"
+  created_launcher=1
 fi
 "$BIN" --version | grep -Fxq "$VERSION" || fatal "Activation smoke test failed"
 "$BIN" doctor --json >/dev/null || fatal "Read-only doctor smoke test failed"
+
+# Services exist but are disabled until their engines are implemented/tested.
+# Service module handles unit preflight, atomic writes and unit rollback.
+PYTHONPATH="$ROOT/current" python3 -m pm2.services install \
+  || fatal "Could not safely install V2 systemd units"
 new_release=""
 swapped=0
 trap - EXIT
 rm -rf -- "$tmp"
 log "Installed DEVELOPMENT $VERSION (commit $SHA)"
 log "Run: portmanager2"
-log "Phase 1 only: no tunnel, NAT, shaping, cron or systemd changes were made."
+log "Phase 1 only: systemd units installed but DISABLED; no NAT, shaping, cron or service start."
