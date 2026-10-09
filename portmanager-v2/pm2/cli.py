@@ -338,6 +338,7 @@ def parser():
     usage.add_argument("--port", type=int)
     usage.add_argument("--protocol", choices=("tcp", "udp"))
     usage.add_argument("--json", action="store_true")
+    usage.add_argument("--csv", action="store_true", help="CSV report to stdout")
     logs_parser = sub.add_parser("logs")
     logs_parser.add_argument("--lines", type=int, default=100)
     for name in ("sample", "restore", "backup", "confirm", "rollback-pending"):
@@ -444,7 +445,9 @@ def main(argv=None):
         elif args.command == "usage":
             payload = usage_ledger.report(args.from_time, args.to_time, args.tz,
                                          args.port, args.protocol)
-            if json_mode:
+            if args.csv:
+                print(usage_ledger.to_csv(payload), end="")
+            elif json_mode:
                 response(True, "OK", "Recorded per-port byte usage", payload, True)
             else:
                 print(usage_ledger.pretty(payload))
