@@ -18,6 +18,25 @@ SCHEDULE = Path(os.environ.get("PM2_ETC", "/etc/portmanager2")) / "schedules.jso
 STATE = Path(os.environ.get("PM2_DATA", "/var/lib/portmanager2")) / "shaping.json"
 PENDING = Path(os.environ.get("PM2_DATA", "/var/lib/portmanager2")) / "shaping-pending.json"
 _V1 = Path("/usr/local/bin/portmanager")
+_MAIN_V2 = "/opt/portmanager2/current/bin/portmanager2"
+_LEGACY_ARCHIVE = Path("/var/lib/portmanager2/legacy-v1/archive.json")
+
+
+def legacy_conflict():
+    """A V2-owned primary symlink is NOT a live V1 installation."""
+    if _V1.is_symlink() and os.readlink(_V1) == _MAIN_V2:
+        # A migrated V1 might have live HTB 1: root rules until reboot or
+        # controlled migration. Never silently compound V1 and V2 limits.
+        if _LEGACY_ARCHIVE.exists():
+            try:
+                qs = _tc_json(["qdisc", "show"])
+            except PM2Error:
+                raise PM2Error("E_CONFLICT", "Cannot inspect archived V1 tc state")
+            if any(row.get("kind") == "htb" and str(row.get("handle", "")).startswith("1:")
+                   for row in qs):
+                raise PM2Error("E_CONFLICT", "Legacy V1 HTB qdisc remains active; review before enabling V2 limits")
+        return False
+    return _V1.exists() or _V1.is_symlink()
 _IFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 
 
@@ -141,7 +160,7 @@ def preflight(before, desired, allow_kernel_reset=False, allow_v1_cleanup=False)
     _safe(PENDING)
     if PENDING.exists():
         raise PM2Error("E_CONFLICT", "Unconfirmed shaping mutation; preserve recovery journal")
-    if not allow_v1_cleanup and (_V1.exists() or _V1.is_symlink()):
+    if not allow_v1_cleanup and legacy_conflict():
         raise PM2Error("E_CONFLICT", "V1 installation may own tc; V2 shaping cannot coexist")
     known = set(before["interfaces"])
     by_iface = {x["iface"] for x in desired} | known
@@ -273,7 +292,7 @@ def install_schedule(path):
         raise PM2Error("E_VALIDATION", "Schedule schema_version must be 1")
     limit_windows.validate(data["policies"])
     # A disabled or future-dated plan still needs isolated V2-only tc ownership.
-    if data["policies"] and (_V1.exists() or _V1.is_symlink()):
+    if data["policies"] and legacy_conflict():
         raise PM2Error("E_CONFLICT", "V1 is installed; V2 cannot safely manage its tc")
     cfg = config.load(transaction.CONFIG)
     # Validate all scheduled bindings in advance, even if none active right now.
