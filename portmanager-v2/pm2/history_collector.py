@@ -217,8 +217,17 @@ def _select_ports(existing_monitored=()):
             if item not in known and item not in forwarded:
                 forwarded.append(item)
     local = auto_monitor.discover(existing=known | set(forwarded))
+    # Discover() intentionally returns only its busiest 24 candidates. Do
+    # not evict a quieter previously monitored listener merely because it
+    # now ranks 25th, which would reset every persistent counter chain.
+    try:
+        all_listeners = auto_monitor.parse_listeners(
+            auto_monitor.run(["ss", "-H", "-lntu"], timeout=12))
+    except PM2Error:
+        all_listeners = set(local)
     candidates = list(dict.fromkeys(forwarded + local))
-    preferred = [p for p in sorted(existing_monitored) if p in candidates]
+    existing_alive = set(forwarded) | all_listeners
+    preferred = [p for p in sorted(existing_monitored) if p in existing_alive]
     return set((preferred + [p for p in candidates if p not in preferred])[:MAX_PORTS])
 
 
