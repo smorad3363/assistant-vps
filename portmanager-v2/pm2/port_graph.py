@@ -429,7 +429,9 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         effective = refresh_interval(refresh, len(after), t2 - t1)
                         now = time.time()
                         rates = deltas(before, after, elapsed, labels)
-                        if not history_active:
+                        # If the background timer started after this Live
+                        # screen opened, avoid duplicate auto-port samples.
+                        if not history_active and not history_collector.healthy(db):
                             record(db, now, elapsed, rates)
                         if use_auto:
                             labels.update(saved_auto_labels(db, now))
