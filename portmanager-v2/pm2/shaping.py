@@ -30,7 +30,10 @@ def schedule_load():
     _safe(SCHEDULE)
     if not SCHEDULE.exists():
         return {"schema_version": 1, "policies": []}
-    data = json.loads(SCHEDULE.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(SCHEDULE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PM2Error("E_CONFLICT", "Unreadable or malformed schedule plan") from exc
     if type(data) is not dict or set(data) != {"schema_version", "policies"} or data["schema_version"] != 1:
         raise PM2Error("E_VALIDATION", "Unsupported schedule schema")
     limit_windows.validate(data["policies"])
@@ -134,11 +137,11 @@ def _kernel(iface):
     return clsact, filters
 
 
-def preflight(before, desired, allow_kernel_reset=False):
+def preflight(before, desired, allow_kernel_reset=False, allow_v1_cleanup=False):
     _safe(PENDING)
     if PENDING.exists():
         raise PM2Error("E_CONFLICT", "Unconfirmed shaping mutation; preserve recovery journal")
-    if _V1.exists() or _V1.is_symlink():
+    if not allow_v1_cleanup and (_V1.exists() or _V1.is_symlink()):
         raise PM2Error("E_CONFLICT", "V1 installation may own tc; V2 shaping cannot coexist")
     known = set(before["interfaces"])
     by_iface = {x["iface"] for x in desired} | known
@@ -168,9 +171,13 @@ def preflight(before, desired, allow_kernel_reset=False):
                 expected_f = expected[pref]
                 keys = row.get("options", {}).get("keys", {})
                 portkey = "dst_port" if direction == "ingress" else "src_port"
-                if str(keys.get(portkey)) != str(expected_f["port"]) or keys.get("ip_proto") not in (
-                    expected_f["proto"], {"tcp": 6, "udp": 17}[expected_f["proto"]]):
+                if str(keys.get(portkey)) != str(expected_f["port"]) or str(keys.get("ip_proto")) not in (
+                    expected_f["proto"], str({"tcp": 6, "udp": 17}[expected_f["proto"]])):
                     raise PM2Error("E_CONFLICT", "V2 tc filter match drift",
+                                   {"interface": iface, "pref": pref})
+                actions = row.get("options", {}).get("actions", [])
+                if not any(a.get("kind") == "police" for a in actions if isinstance(a, dict)):
+                    raise PM2Error("E_CONFLICT", "V2 tc filter police action drift",
                                    {"interface": iface, "pref": pref})
 
 
@@ -196,6 +203,9 @@ def reconcile(at=None, allow_kernel_reset=False):
     cfg = config.load(transaction.CONFIG)
     desired = desired_filters(plan, cfg["tunnels"], at)
     if not desired and not before["interfaces"]:
+        _safe(PENDING)
+        if PENDING.exists():
+            raise PM2Error("E_CONFLICT", "Incomplete shaping journal requires recovery")
         return {"changed": False, "active_filters": 0}
     preflight(before, desired, allow_kernel_reset=allow_kernel_reset)
     target_ifaces = sorted({x["iface"] for x in desired} | set(before["interfaces"]))
@@ -286,6 +296,7 @@ def remove_owned():
     before = state_load()
     if not before["interfaces"]:
         return {"changed": False}
+    preflight(before, [], allow_v1_cleanup=True)
     # Temporarily bypass V1-presence restriction *only for removing exact
     # recorded owner filters* during uninstall. Never add new filters.
     _safe(PENDING)
