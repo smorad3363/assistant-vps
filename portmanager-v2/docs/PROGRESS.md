@@ -1,5 +1,45 @@
 # Port Manager V2 — checkpoint for any AI contributor
 
+## 2026-10-09 — Default V2 `portmanager` and reversible V1 cut-over (PR #2)
+
+User specifically requires:
+- Same original one-line installer with no arg: V2 becomes **`portmanager`** (while `portmanager2` remains an alias).
+- Same original installer piped through `sudo bash -s -- v1`: switches to the original V1, not parallel V1+V2 installations.
+- Existing V1 installation upgrades into V2 without discarding V1 backups/settings, with option to downgrade exactly to previous V1.
+- `sudo bash v1` is not valid for piped installers.
+
+Implementation:
+- New `pm2/migration.py`: fail-closed preflight; recognizes only original V1
+  binary (and V2-owned alias), snapshots SHA256 archived V1 executable under
+  `/var/lib/portmanager2/legacy-v1/`, preserves V1 config/data and exact
+  root crontab entries, disables only verified V1 `sample/apply` jobs and
+  atomically replaces the public `portmanager` command with V2.
+  V1 iptables and tc rules deliberately survive migration (no network break).
+- Original V1 restoration in `portmanager-v1/install.sh`: before uninstalling
+  V2 it verifies the preserved archive and rejects enabled V2 tunnels;
+  refuses unknown aliases; safely removes only V2-owned network/services via
+  `portmanager2 uninstall --yes`; restores exact archived V1 binary + old
+  cron jobs. V2 config/data remain preserved for later reupgrade.
+- `pm2/cli.py`: V2 uninstall removes its owned public symlink only and
+  prevents `--purge` if a V1 archive exists.
+- `pm2/shaping.py`: recognizes V2 primary command symlink (not treated as
+  active V1) and detects live V1 HTB 1: qdisc after migration, rejecting
+  conflicting shaping without silently deleting legacy tc.
+- CI: unit `test_migration.py`, ephemeral V1->V2->V1 router, lifecycle,
+  destructive purge protection, real TC and namespace tests.
+
+**IMPORTANT:** This cut-over is about selecting the app executable and
+disabling old cron. It does not automatically convert old V1 rate policies
+to V2's configuration or delete old kernel firewall/tc rules. An operator
+must review those for real server migration. A V1 rollback with any enabled
+V2 tunnels is refused to prevent dropping SSH or service access.
+This is a safety boundary, not an implementation bug.
+
+Release gate: 13 GitHub jobs at the exact final head SHA must pass. PR #2
+should merge to master only after the matching head's CI is green; future
+changes require revalidation.
+
+
 ## 2026-10-09 — New version-router and 2.1 RC release candidate
 
 User has explicitly changed installer requirements:
