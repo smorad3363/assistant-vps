@@ -116,7 +116,8 @@ def doctor():
     owner = read_json(ETC / "owner.json")
     try:
         units = services.preflight()
-        unit_state = "installed_disabled" if units else "not_installed"
+        unit_state = ("installed_active" if units and units.get("activation") == "active"
+                      else "installed_disabled" if units else "not_installed")
         unit_error = None
     except PM2Error as exc:
         unit_state = "conflict"
