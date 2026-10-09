@@ -258,7 +258,7 @@ def _ui_actions(*choices, selected=0):
         content = ("▶ " if chosen else "  ") + text
         content += " " * max(0, inner_width - _ui_len(content))
         if chosen:
-            content = _paint("30;46;1", content) if os.isatty(1) and not os.getenv("NO_COLOR") else content
+            content = _paint("96;1", content)  # contrast-friendly; no solid background
         else:
             content = _paint("97", content)
         _ui_line(content, width)
