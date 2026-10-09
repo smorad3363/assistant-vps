@@ -134,10 +134,10 @@ def _install(ports, inspected):
 def _schema(db):
     port_graph.init_history(db)
     db.execute("""CREATE TABLE IF NOT EXISTS pm2_history_last (
-        protocol TEXT NOT NULL, listen_port INTEGER NOT NULL,
-        direction TEXT NOT NULL, total_bytes INTEGER NOT NULL,
-        sampled_at REAL NOT NULL,
-        PRIMARY KEY(protocol,listen_port,direction)
+        tunnel_id TEXT NOT NULL, protocol TEXT NOT NULL,
+        listen_port INTEGER NOT NULL, direction TEXT NOT NULL,
+        total_bytes INTEGER NOT NULL, sampled_at REAL NOT NULL,
+        PRIMARY KEY(tunnel_id,protocol,listen_port,direction)
     )""")
     db.execute("""CREATE TABLE IF NOT EXISTS pm2_history_health (
         id INTEGER PRIMARY KEY CHECK(id=1), sampled_at REAL NOT NULL
@@ -171,10 +171,10 @@ def active_ports():
 
 
 def _history_counters():
-    snapshot = accounting.counters(by_port=True, include_history=True)
-    return {(proto, port, direction): n
-            for (tid, proto, direction, port), n in snapshot.items()
-            if tid == "auto" and port}
+    snapshot = accounting.counters(by_port=True, include_v1=True,
+                                   include_history=True)
+    return {(tid, proto, 0 if port is None else port, direction): n
+            for (tid, proto, direction, port), n in snapshot.items()}
 
 
 def _tracked_elsewhere():
@@ -207,31 +207,34 @@ def collect(timestamp=None):
         _schema(db)
         inspected = _inspect()
         current_ports = inspected[1]
-        valid_old = current_ports and all(row[2] for row in inspected[0])
-        current = _history_counters() if valid_old else {}
-        previous = {(proto, port, direction): (total, end)
-                    for proto, port, direction, total, end in db.execute(
-                        "SELECT protocol, listen_port, direction, total_bytes, sampled_at "
-                        "FROM pm2_history_last")}
+        valid_old = all(row[2] for row in inspected[0])
+        # Tunnel/V1 rules are persistent independently of our auto-port hooks.
+        # One background job records all three sources on the same clock.
+        current = _history_counters()
+        previous = {(tid, proto, port, direction): (total, end)
+                    for tid, proto, port, direction, total, end in db.execute(
+                        "SELECT tunnel_id, protocol, listen_port, direction, "
+                        "total_bytes, sampled_at FROM pm2_history_last")}
         rates = {}
-        for proto, port in sorted(current_ports):
-            old_down = previous.get((proto, port, "down"))
-            old_up = previous.get((proto, port, "up"))
-            down_total = current.get((proto, port, "down"))
-            up_total = current.get((proto, port, "up"))
+        elapsed = None
+        keys = {(tid, proto, port) for tid, proto, port, _direction in current}
+        for tid, proto, port in sorted(keys):
+            down_key, up_key = ((tid, proto, port, d) for d in ("down", "up"))
+            old_down, old_up = previous.get(down_key), previous.get(up_key)
+            down_total, up_total = current.get(down_key), current.get(up_key)
             if not old_down or not old_up or down_total is None or up_total is None:
                 continue
-            elapsed = now - max(old_down[1], old_up[1])
-            if not 0 < elapsed <= 120 or down_total < old_down[0] or up_total < old_up[0]:
+            dt = now - max(old_down[1], old_up[1])
+            if not 0 < dt <= 120 or down_total < old_down[0] or up_total < old_up[0]:
                 continue
-            rates[("auto", proto, port)] = {
-                "down": (down_total - old_down[0]) * 8 / elapsed / 1e6,
-                "up": (up_total - old_up[0]) * 8 / elapsed / 1e6}
+            if elapsed is None:
+                elapsed = dt
+            if abs(elapsed - dt) > 0.001:
+                continue
+            rates[(tid, proto, port)] = {
+                "down": (down_total - old_down[0]) * 8 / dt / 1e6,
+                "up": (up_total - old_up[0]) * 8 / dt / 1e6}
         if rates:
-            # One interval per direction/port; weighted averages use the
-            # *actual* interval length and never invent coverage in outages.
-            elapsed = now - max(previous[(proto, port, "down")][1]
-                                for _tid, proto, port in rates)
             port_graph.record(db, now, elapsed, rates)
         try:
             wanted = set(auto_monitor.discover(existing=_tracked_elsewhere()))
@@ -240,12 +243,12 @@ def collect(timestamp=None):
             wanted = current_ports
         if wanted != current_ports or not valid_old:
             _install(wanted, inspected)
-            current = _history_counters() if wanted else {}
+            current = _history_counters()
         with db:
             db.execute("DELETE FROM pm2_history_last")
-            for (proto, port, direction), count in current.items():
-                db.execute("INSERT INTO pm2_history_last VALUES(?,?,?,?,?)",
-                           (proto, port, direction, count, now))
+            for (tid, proto, port, direction), count in current.items():
+                db.execute("INSERT INTO pm2_history_last VALUES(?,?,?,?,?,?)",
+                           (tid, proto, port, direction, count, now))
             db.execute("INSERT OR REPLACE INTO pm2_history_health VALUES(1,?)",
                        (now,))
         return {"monitored_ports": len(wanted), "samples_written": len(rates),
