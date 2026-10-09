@@ -1,14 +1,15 @@
 # Port Manager V2 — resumable implementation checkpoint
 
 **Branch:** `feat/portmanager-v2-roadmap` (base `64842968c85f85afdad4e11c3ed4adfce65f5d22`).
+**Draft PR:** https://github.com/smorad3363/assistant-vps/pull/1
 **Contract:** PM2-SPEC-001 v1.0.0 (2026-10-09).
 **Stable V1:** do not edit `portmanager-dashboard/**`.
 **Release state:** development; **DO NOT deploy on production**.
 
 ## Implementation phases
 - [x] Phase 0 — pinned baseline/source audit and ownership model documented.
-- [ ] Phase 1 — V1 alias, independent V2 installer/bootstrap, CLI, local tests,
-      CI and PR verification (see outstanding checks below).
+- [ ] Phase 1 — V1 alias, independent V2 installer/bootstrap and CLI have been
+      committed; completing CI, installer tests and VM coexistence validation.
 - [ ] Phase 2 — IPv4 DNAT/SNAT, strict ownership, CRUD and rollback.
 - [ ] Phase 3 — all-except, port/SSH guard, 120-second rollback.
 - [ ] Phase 4 — sampling, live dashboard, SQLite reports.
@@ -35,6 +36,19 @@
 4. Update this file at every meaningful checkpoint; preserve acceptance IDs.
 5. Do not merge development PR to master until all mandatory gates pass.
 6. A missing privileged VM test must be marked **NOT TESTED**, not passed.
+
+## Testing status as of 2026-10-09
+
+- GitHub Actions includes a frozen-V1 diff check, Bash syntax, SHA256 manifest,
+  Python compilation, isolated CLI unit tests and ShellCheck.
+- A CI unit assertion originally rejected the harmless `iptables-restore`
+  *dependency name* and was corrected to detect execution instead.
+- CI pass must be **re-verified** on the latest commit; previous failure does
+  not mean networking was modified.
+- All actual `iptables`, systemd, reboot, root install/uninstall and V1/V2
+  coexistence tests are still **NOT TESTED** on an isolated VM.
+- No phase 2, 3, 4 or 5 network functionality should be described as working.
+- Resumption: check fresh workflow runs for the current HEAD and fix failures.
 
 ## Mandatory test matrix
 AT-001..AT-007 installs/coexistence; AT-008..AT-022 NAT/safety/rollback;
