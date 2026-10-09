@@ -3,7 +3,7 @@ import argparse
 import json
 import os
 import sys
-from . import config, firewall, transaction, guard
+from . import config, firewall, transaction, guard, shaping
 from .errors import PM2Error
 from .validation import make_tunnel
 
@@ -96,6 +96,14 @@ def handle(operation, argv, lock):
         if args.dry_run:
             return {"dry_run": True, "candidate": candidate,
                     "owned_rules": firewall.compile_rules(candidate)}
+        if operation in ("update", "enable", "disable", "delete") and candidate != cfg:
+            # Avoid stale live tc filters matching an old port/interface if a
+            # scheduled policy remains configured. Require explicit schedule
+            # removal before changing a tunnel's network binding.
+            schedules = shaping.schedule_load()
+            if any(p["enabled"] for p in schedules["policies"]):
+                raise PM2Error("E_CONFLICT",
+                               "Remove V2 port schedules before changing tunnel bindings")
         if os.geteuid():
             raise PM2Error("E_PERMISSION", "Tunnel mutations require root")
         if operation == "delete" and not args.yes:
