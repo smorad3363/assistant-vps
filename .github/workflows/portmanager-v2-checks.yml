@@ -446,7 +446,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Exact public URL semantics: V2 default, v1 archived rollback, V2 re-upgrade
+      - name: "Exact public URL semantics: V2 default, v1 archived rollback, V2 re-upgrade"
         env:
           REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
