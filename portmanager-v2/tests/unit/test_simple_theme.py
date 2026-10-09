@@ -82,7 +82,7 @@ class NewThemeTest(unittest.TestCase):
 
     def test_iptables_nat_includes_old_rules_but_only_readonly(self):
         text = (
-            "-A PREROUTING -p tcp -m tcp --dport 8080 -j DNAT "
+            "-A PREROUTING -i eth0 -p tcp -m tcp --dport 8080 -j DNAT "
             "--to-destination 203.0.113.1:80\n"
             "-A POSTROUTING -j MASQUERADE\n"
             "-A PREROUTING -p tcp --dport 22 -j ACCEPT\n")
@@ -92,6 +92,7 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(rules[0]["destination"], "203.0.113.1:80")
         self.assertEqual(rules[1]["target"], "MASQUERADE")
         self.assertEqual(rules[0]["source"], "iptables (read-only)")
+        self.assertEqual(rules[0]["interface"], "eth0")
 
     def test_menu_lists_detected_rule_even_if_v2_has_no_configs(self):
         fake = {"tunnels": []}
