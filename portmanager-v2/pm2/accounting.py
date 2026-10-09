@@ -12,9 +12,13 @@ def counters():
     output = run(["iptables-save", "-c", "-t", "mangle"])
     data = {}
     for line in output.splitlines():
-        if not line.startswith("-A PM2_ACCOUNT "):
-            continue
         args = shlex.split(line)
+        # iptables-save -c may print counter token before "-A".
+        if "-A" not in args:
+            continue
+        index = args.index("-A")
+        if index + 1 >= len(args) or args[index + 1] != "PM2_ACCOUNT":
+            continue
         match = next((s for s in args if _COUNTER.fullmatch(s)), None)
         if match is None:
             raise PM2Error("E_CONFLICT", "Missing mangle rule counters")
