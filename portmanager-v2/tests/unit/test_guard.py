@@ -42,6 +42,15 @@ class GuardTests(unittest.TestCase):
             apply.assert_not_called()
         self.assertFalse(self.protected.exists())
 
+    def test_timer_has_strict_accuracy(self):
+        from types import SimpleNamespace
+        with mock.patch.object(guard.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout="", stderr="")) as command:
+            guard._schedule("22a56f9a-029c-4c13-baaa-81316dc50d0d")
+        argv = command.call_args.args[0]
+        self.assertIn("--on-active=120s", argv)
+        self.assertIn("--timer-property=AccuracySec=1s", argv)
+
     def test_timer_armed_before_apply(self):
         def apply_after_timer(*_args, **_kwargs):
             self.assertTrue(self.protected.is_file())
