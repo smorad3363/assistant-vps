@@ -1,5 +1,38 @@
 # Port Manager V2 — checkpoint for any AI contributor
 
+## 2026-10-09 — Debian zero-counter regression and minimal TUI (PR #3)
+
+A Debian VPS showed `0 rules` in graph despite substantial interface
+throughput. Root cause: V2 counted **only explicitly managed V2 tunnels**
+and V1's remaining mangle counters; no local TCP/UDP listening services
+such as Xray/Sing-box were discovered. The UI incorrectly implied
+no traffic instead of distinguishing unknown port attribution.
+
+On branch `fix/pm2-autodetect-live-ports-v1-ui`:
+- `pm2/auto_monitor.py` discovers TCP/UDP IPv4 listeners once, ranks by
+  established connections, monitors at most 24 ports with owned, ephemeral
+  mangle chains and removes exact-owned rules on exit. No V1 iptables/tc
+  chains mutated, no accept/drop rule written by this monitor.
+- `pm2/port_graph.py` always includes honest `/proc/net/dev` interface
+  rates, and tracks rolling 10m / 1h / 8h / 24h observed means with
+  explicit per-window coverage. Display sorts by observed 10m usage.
+- `pm2/simple_ui.py` replaces nine technical options with just Live &
+  Limits; IPTABLES Port/All Tunnel; Edit/Delete Config. Select a live
+  port or ALL after exiting Live, then configure one rate and always/hourly
+  mode using simple prompts.
+- `pm2/limit_windows.py` accepts optional explicit interface or `port=0`
+  (all IPv4). `pm2/shaping.py` can attach per-interface **aggregate**
+  `tc matchall` ingress/egress filters, rejecting conflicts with local/V2
+  individual port policies. This throttles whole-interface traffic
+  including SSH, so explicit warning and approval are mandatory.
+- Test suite adds auto-listener parsing, 4 windows, interface-wide cap,
+  owned kernel rules integration on isolated Ubuntu veth namespaces.
+- **Release gate:** repeat unit + actual auto-monitor/TC + Debian 12 CI on
+  exact final SHA, fix discovered failures before merge. Do not pretend
+  the 24h average exists without 24h of recorded samples or invent
+  per-port usage from interface totals.
+
+
 ## 2026-10-09 — Default V2 `portmanager` and reversible V1 cut-over (PR #2)
 
 User specifically requires:

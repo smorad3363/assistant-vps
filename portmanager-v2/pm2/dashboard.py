@@ -273,41 +273,6 @@ def _doctor():
 
 
 def menu():
-    if not sys.stdin.isatty():
-        raise PM2Error("E_VALIDATION", "Interactive dashboard requires a TTY; use --help")
-    while True:
-        width = max(35, min(78, shutil.get_terminal_size((48, 20)).columns))
-        print("\n" + "=" * width)
-        print(" PORT MANAGER 2 | Tunnel Edition")
-        print("=" * width)
-        for key, title in MAIN:
-            print(f" [{key}] {title}")
-        try:
-            choice = _ask("Select menu item")
-            if choice is None:
-                return 0
-            choice = choice.zfill(2)
-            if choice == "00":
-                return 0
-            if choice in ("02", "03"):
-                _tunnel_page()
-            elif choice in ("01", "06"):
-                _reports()
-            elif choice == "07":
-                _doctor()
-            elif choice == "08":
-                _backup_page()
-            elif choice == "05":
-                _limits_page()
-            elif choice == "04":
-                _live_graph()
-            elif choice == "09":
-                from . import VERSION
-                print("Version", VERSION, "| IPv4 NAT forwarding, NOT encrypted VPN")
-            else:
-                print("Unknown choice")
-        except KeyboardInterrupt:
-            print("\nInterrupted; no pending input applied.")
-            return 130
-        except PM2Error as error:
-            print(f"[{error.code}] {error.message}")
+    """Only three user-facing choices. Keep validated CLI backend intact."""
+    from .simple_ui import menu as friendly_menu
+    return friendly_menu()

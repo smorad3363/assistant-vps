@@ -90,8 +90,8 @@ jobs:
             esac
           done
           sudo test -f /etc/portmanager2/systemd-owner.json
-          sudo portmanager2 --version | grep -Fx '2.1.0-rc.1'
-          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager2 --version | grep -Fx '2.1.0-rc.2'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.2'
           sudo test -L /usr/local/bin/portmanager
           sudo portmanager2 doctor --json
           # Failure injection: refuse deletion if an owned unit was tampered.
@@ -299,7 +299,7 @@ jobs:
             sort > "$RUNNER_TEMP/v1-files-before"
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
           sudo test -L /usr/local/bin/portmanager
-          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.2'
           test "$before" = "$(sudo sha256sum /var/lib/portmanager2/legacy-v1/portmanager.v1 | cut -d' ' -f1)"
           sudo test -f /var/lib/portmanager2/legacy-v1/archive.json
           sudo crontab -l > "$RUNNER_TEMP/v1-cron-after-upgrade"
@@ -405,7 +405,7 @@ jobs:
           sudo bash portmanager-v1/legacy-install.sh
           before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
-          test "$(sudo portmanager --version)" = '2.1.0-rc.1'
+          test "$(sudo portmanager --version)" = '2.1.0-rc.2'
           sudo portmanager2 uninstall --dry-run
           set +e
           sudo portmanager2 uninstall --yes --purge > "$RUNNER_TEMP/pm2-purge.out" 2>&1
@@ -454,7 +454,7 @@ jobs:
           sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh v1
           before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh
-          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.2'
           sudo test -L /usr/local/bin/portmanager2
           test "$before" = "$(sudo sha256sum /var/lib/portmanager2/legacy-v1/portmanager.v1 | cut -d' ' -f1)"
           # With a piped installer the correct explicit argument is bash -s -- v1.
@@ -464,7 +464,7 @@ jobs:
           test "$before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           test ! -e /usr/local/bin/portmanager2
           sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh
-          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.2'
           sudo portmanager2 uninstall --yes
           test ! -L /usr/local/bin/portmanager
           sudo test -f /var/lib/portmanager2/legacy-v1/archive.json
@@ -521,4 +521,104 @@ jobs:
           q=subprocess.run(["tc","qdisc","show","dev","relay0"],capture_output=True,text=True,check=True).stdout
           assert "clsact" not in q,q
           print("PASS timed per-port TCP/UDP upload/download clsact police lifecycle")
+          PY
+
+  autodetect-ports-debian-style-netns:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Live local service port traffic must appear without any V2 tunnel
+        env:
+          PYTHONPATH: portmanager-v2
+        run: |
+          set -euxo pipefail
+          sudo ip netns add pm2server
+          sudo ip netns add pm2client
+          cleanup() {
+            sudo ip netns pids pm2server | xargs -r sudo kill || true
+            sudo ip netns del pm2client 2>/dev/null || true
+            sudo ip netns del pm2server 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          sudo ip link add pm2v0 type veth peer name pm2v1
+          sudo ip link set pm2v0 netns pm2server
+          sudo ip link set pm2v1 netns pm2client
+          sudo ip -n pm2server addr add 10.205.0.1/24 dev pm2v0
+          sudo ip -n pm2client addr add 10.205.0.2/24 dev pm2v1
+          sudo ip -n pm2server link set pm2v0 up
+          sudo ip -n pm2client link set pm2v1 up
+          sudo ip -n pm2server link set lo up
+          sudo ip -n pm2client link set lo up
+          sudo ip netns exec pm2server python3 -m http.server 18443 --bind 10.205.0.1 > "$RUNNER_TEMP/autoserver.log" 2>&1 &
+          sleep 2
+          sudo env PYTHONPATH="$PYTHONPATH" ip netns exec pm2server python3 - <<'PY'
+          from pm2 import auto_monitor as am, accounting
+          import subprocess
+          with am.AutoMonitor() as monitor:
+              assert ("tcp",18443) in monitor.ports,monitor.ports
+              before=accounting.counters(by_port=True,include_probe=True)
+              subprocess.run(["ip","netns","exec","pm2client","python3","-c",
+                "from urllib.request import urlopen; urlopen('http://10.205.0.1:18443').read()"],
+                check=True,timeout=15)
+              after=accounting.counters(by_port=True,include_probe=True)
+              key=("auto","tcp","down",18443)
+              assert after.get(key,0)>before.get(key,0),(before,after)
+          # The viewer must only delete its own temporary accounting chains.
+          remaining=subprocess.run(["ip","netns","exec","pm2server","iptables",
+                 "-t","mangle","-S"],capture_output=True,text=True,check=True).stdout
+          assert "PM2_VIEW" not in remaining,remaining
+          print("PASS local port auto-monitoring with genuine IPv4 packets and clean owned teardown")
+          PY
+
+  all-ports-tc-matchall-ephemeral:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: A single aggregate per-interface IPv4 cap is created, updated, removed safely
+        env:
+          PYTHONPATH: portmanager-v2
+        run: |
+          set -euxo pipefail
+          sudo ip link add pm2cap type veth peer name pm2cappeer
+          trap 'sudo ip link del pm2cap 2>/dev/null || true' EXIT
+          sudo ip link set pm2cap up
+          sudo env PYTHONPATH="$PYTHONPATH" python3 - <<'PY'
+          from datetime import datetime,timezone
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from unittest import mock
+          import subprocess
+          from pm2 import shaping
+          on=datetime(2026,10,9,19,tzinfo=timezone.utc)
+          off=datetime(2026,10,9,12,tzinfo=timezone.utc)
+          schedule={"schema_version":1,"policies":[{
+            "id":"all-eth","port":0,"interface":"pm2cap","protocol":"tcp,udp",
+            "timezone":"UTC","days":list(range(7)),"start":"18:00","end":"22:00",
+            "download_mbps":30,"upload_mbps":30,"enabled":True}]}
+          cfg={"schema_version":1,"generation":0,"tunnels":[]}
+          with TemporaryDirectory() as folder:
+            with (mock.patch.object(shaping,"STATE",Path(folder)/"state.json"),
+                  mock.patch.object(shaping,"PENDING",Path(folder)/"pending.json"),
+                  mock.patch.object(shaping,"_V1",Path(folder)/"no-v1"),
+                  mock.patch.object(shaping,"_LEGACY_ARCHIVE",Path(folder)/"no-archive"),
+                  mock.patch.object(shaping,"schedule_load",return_value=schedule),
+                  mock.patch.object(shaping.config,"load",return_value=cfg)):
+              active=shaping.reconcile(on)
+              assert active["active_filters"]==2,active
+              assert shaping.reconcile(on)["changed"] is False
+              for direction in ("ingress","egress"):
+                value=subprocess.run(["tc","filter","show","dev","pm2cap",direction],
+                   check=True,capture_output=True,text=True).stdout
+                assert "matchall" in value and "police" in value,value
+              assert shaping.reconcile(off)["active_filters"]==0
+              assert shaping.reconcile(on)["active_filters"]==2
+              assert shaping.remove_owned()["changed"]
+          q=subprocess.run(["tc","qdisc","show","dev","pm2cap"],
+             check=True,capture_output=True,text=True).stdout
+          assert "clsact" not in q,q
+          print("PASS aggregate whole-interface matchall police independent of V2 tunnels")
           PY
