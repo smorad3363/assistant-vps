@@ -17,11 +17,16 @@ def record(event, *, level="INFO", code="OK", generation=None):
         "level": level, "component": "pm2", "event_code": event,
         "code": code, "generation": generation
     }
-    fd = os.open(PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
     try:
-        os.write(fd, (json.dumps(data, sort_keys=True) + "\n").encode())
-    finally:
-        os.close(fd)
+        fd = os.open(PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, (json.dumps(data, sort_keys=True) + "\n").encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        # A failed optional log write MUST NOT turn an already-applied
+        # network operation into a misleading CLI failure.
+        return
 
 
 def tail(lines=100):
