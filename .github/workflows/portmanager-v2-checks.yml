@@ -242,6 +242,9 @@ jobs:
           sudo ip netns exec pm2client python3 -c 'import socket; c=socket.create_connection(("198.18.0.2",8443),timeout=5); c.sendall(b"all-except"); assert c.recv(2048)==b"TCP:all-except";c.close()'
           sudo ip netns exec pm2relay portmanager2 confirm "$pending"
           sudo test ! -e /var/lib/portmanager2/protected.json
+          sudo ip netns exec pm2relay portmanager2 tunnel apply
+          sudo ip netns exec pm2relay portmanager2 tunnel check --json |
+            python3 -c 'import json,sys; d=json.load(sys.stdin)["details"]; assert d["safe"], d'
           guarded_id="$(sudo ip netns exec pm2relay portmanager2 tunnel list --json |
             python3 -c 'import json,sys;print(json.load(sys.stdin)["details"]["tunnels"][0]["id"])')"
           # Protected update intentionally NOT confirmed; manually invoke the
