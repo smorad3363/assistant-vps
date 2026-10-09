@@ -18,7 +18,7 @@ import uuid
 
 from . import VERSION
 from .errors import PM2Error
-from . import services, tunnels
+from . import services, tunnels, sampler, persistence, bandwidth, dashboard
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -151,7 +151,7 @@ def status():
 
 
 def limit_list():
-    return {"supported": False, "reason": "planned_for_2.1", "limits": []}
+    return bandwidth.list_limits()
 
 
 def uninstall(args):
@@ -238,7 +238,9 @@ def parser():
 def main(argv=None):
     p = parser()
     args = p.parse_args(argv)
-    if args.command is None or args.command == "help":
+    if args.command is None:
+        return dashboard.menu() if sys.stdin.isatty() else (p.print_help() or 0)
+    if args.command == "help":
         p.print_help()
         return 0
     json_mode = bool(getattr(args, "json", False)) or (
@@ -253,8 +255,30 @@ def main(argv=None):
         elif args.command == "tunnel":
             details = tunnels.handle(args.operation, args.args, mutation_lock)
             response(True, "OK", "Tunnel operation complete", details, json_mode)
-        elif args.command == "limits" and args.operation == "list":
-            response(True, "OK", "Bandwidth changes are unavailable in 2.0", limit_list(), json_mode)
+        elif args.command == "limits":
+            if args.operation == "list":
+                response(True, "OK", "Bandwidth changes are unavailable in 2.0", limit_list(), json_mode)
+            elif args.operation in ("set", "remove"):
+                bandwidth.mutation()
+            else:
+                raise PM2Error("E_VALIDATION", "Unknown limits command")
+        elif args.command == "sample":
+            with mutation_lock():
+                payload = sampler.sample()
+            response(True, "OK", "Traffic counters sampled", payload, json_mode)
+        elif args.command == "restore":
+            with mutation_lock():
+                payload = persistence.restore()
+            response(True, "OK", "V2-owned rules reconciled after reboot", payload, json_mode)
+        elif args.command == "report":
+            argv = args.args or []
+            if "--window" not in argv:
+                raise PM2Error("E_VALIDATION", "report requires --window 1h|24h|7d")
+            idx = argv.index("--window")
+            if idx + 1 >= len(argv):
+                raise PM2Error("E_VALIDATION", "Missing report window")
+            payload = sampler.report(argv[idx + 1])
+            response(True, "OK", "Traffic report", payload, json_mode)
         elif args.command == "uninstall":
             if args.dry_run:
                 details = uninstall(args)
