@@ -90,7 +90,11 @@ def weighted(history, now, window=WINDOW):
     used = 0.0
     up = down = 0.0
     for end, duration, u, d in history:
-        overlap = min(end, now) - max(end - duration, cutoff)
+        # A historical moving-average point cannot use a sample that had
+        # not completed at that point in time (avoid look-ahead bias).
+        if end > now:
+            continue
+        overlap = end - max(end - duration, cutoff)
         overlap = max(0.0, min(duration, overlap))
         if overlap > 0:
             used += overlap
