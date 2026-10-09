@@ -217,9 +217,10 @@ fi
 # Service module handles unit preflight, atomic writes and unit rollback.
 PYTHONPATH="$ROOT/current" python3 -m pm2.services install \
   || fatal "Could not safely install V2 systemd units"
-# Continuous 10m/1h/8h/24h history requires an active minute timer.
-# Opt out explicitly with PORTMANAGER2_ENABLE_SERVICES=0.
-if [[ "${PORTMANAGER2_ENABLE_SERVICES:-1}" == "1" ]]; then
+# Continuous 10m/1h/8h/24h history requires the minute timer.
+# Opt in explicitly with PORTMANAGER2_ENABLE_SERVICES=1, keeping other
+# installations inert by default and preserving safe VM/uninstall behavior.
+if [[ "${PORTMANAGER2_ENABLE_SERVICES:-0}" == "1" ]]; then
   PYTHONPATH="$ROOT/current" python3 -c 'from pm2.services import activate; print(activate())' \
     || fatal "Could not safely activate V2-only systemd units"
 fi
