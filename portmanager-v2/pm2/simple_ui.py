@@ -161,29 +161,194 @@ def _tunnel_wizard(old=None, all_ports=False):
     _mutate("update" if old else "create", argv)
 
 
+
+# Read-only, reference-style port configuration screen. Network operations
+# stay in the existing tunnel/transaction functions; UI only renders data.
+def _ui_width():
+    import shutil
+    return max(46, min(138, shutil.get_terminal_size((118, 30)).columns - 2))
+
+
+def _ui_clean(value):
+    # Protect terminal output against control characters in names/rule values.
+    return "".join(c if c >= " " and c != "\x7f" else "?" for c in str(value))
+
+
+def _ui_cut(value, width):
+    import unicodedata
+    value = _ui_clean(value)
+    used = 0
+    result = ""
+    for char in value:
+        size = 0 if unicodedata.combining(char) else (
+            2 if unicodedata.east_asian_width(char) in ("W", "F") else 1)
+        if used + size > width:
+            return result[:-1] + "…" if result else ""
+        result += char
+        used += size
+    return result
+
+
+def _ui_len(value):
+    import unicodedata
+    raw = re.sub(r"\x1b\[[0-9;]*m", "", value)
+    return sum(0 if unicodedata.combining(c) else (
+        2 if unicodedata.east_asian_width(c) in ("W", "F") else 1) for c in raw)
+
+
+def _ui_line(text="", width=None):
+    width = width or _ui_width()
+    usable = width - 4
+    # Display text can contain our own ANSI styling; truncate fields first.
+    extra = max(0, usable - _ui_len(text))
+    print(_paint("96", "║") + " " + text + " " * extra +
+          " " + _paint("96", "║"))
+
+
+def _ui_edge(kind, width=None):
+    width = width or _ui_width()
+    left, right = {"top": ("╔", "╗"), "bottom": ("╚", "╝"),
+                   "rule": ("╟", "╢")}[kind]
+    print(_paint("96", left + ("═" if kind != "rule" else "─") *
+                 (width - 2) + right))
+
+
+def _ui_header(page):
+    from . import VERSION
+    import socket
+    width = _ui_width()
+    label = f" ◆  PORT MANAGER  │  {page}"
+    host = _ui_cut(socket.gethostname(), 18)
+    right = f"● LIVE  │  {_ui_cut(VERSION, 18)}  │  {host}"
+    room = width - 4
+    if len(label) + len(right) + 1 > room:
+        right = f"● LIVE  │  {_ui_cut(VERSION, 12)}"
+    gap = max(1, room - len(label) - len(right))
+    print()
+    _ui_edge("top", width)
+    _ui_line(_paint("96;1", label) + " " * gap + _paint("92;1", right), width)
+    _ui_edge("bottom", width)
+    try:
+        interface, _ = _network_defaults()
+    except (PM2Error, OSError, ValueError):
+        interface = "unknown"
+    interface = _ui_cut(interface, 14)
+    _ui_edge("top", width)
+    status = (" Interface: " + _paint("92;1", interface) +
+              "   │   Refresh: " + _paint("93", "manual") +
+              "   │   Mode: " + _paint("92;1", "interactive") +
+              "   │   System: " + _paint("92;1", "Local"))
+    if _ui_len(status) > width - 4:
+        status = " Interface: " + _paint("92;1", interface) + "  │  Interactive"
+    _ui_line(status, width)
+    _ui_edge("bottom", width)
+
+
+def _ui_actions(*choices):
+    width = _ui_width()
+    _ui_edge("top", width)
+    for index, (hotkey, label) in enumerate(choices):
+        marker = _paint("96;1", f"[{hotkey}]")
+        pointer = _paint("96;1", " ›") if index == 0 else "  "
+        content = f"  {marker}   " + _ui_cut(label, width - 20)
+        if index == 0:
+            content = _paint("96", "▸ ") + content
+        else:
+            content = "  " + content
+        _ui_line(content + " " * max(0, width - 5 - _ui_len(content) - 2) +
+                 pointer, width)
+    _ui_edge("bottom", width)
+    print(_paint("90", "  0 Back    │    number + Enter Select    │    r Refresh"))
+
+
+def _ui_header_row(width):
+    if width >= 105:
+        return "  #  CHAIN          PROTO:PORT       ACTION    TARGET                              INTERFACE"
+    if width >= 79:
+        return "  #  CHAIN          PROTO:PORT       ACTION    TARGET"
+    return "  #   PROTO:PORT  →  TARGET"
+
+
+def _ui_record(index, chain, proto, action, destination, external=True):
+    width = _ui_width()
+    chain = _ui_clean(chain)
+    proto = _ui_clean(proto)
+    action = _ui_clean(action)
+    destination = _ui_clean(destination)
+    if width >= 105:
+        row = (f" {index:>2}  " + _paint("93", "●") + "  " +
+               f"{_ui_cut(chain, 14):<14}  " +
+               _paint("96;1", f"{_ui_cut(proto, 14):<14}") + "  " +
+               _paint("97", f"{_ui_cut(action, 8):<8}") + "  " +
+               _paint("95;1", f"{_ui_cut(destination, 34):<34}") +
+               "  " + _paint("90", "[external]" if external else "[managed]"))
+    elif width >= 79:
+        row = (f" {index:>2}  " + _paint("93", "●") + " " +
+               f"{_ui_cut(chain, 14):<14}  " +
+               _paint("96;1", f"{_ui_cut(proto, 14):<14}") + "  " +
+               f"{_ui_cut(action, 8):<8}  " +
+               _paint("95;1", _ui_cut(destination, max(12, width - 65))))
+    else:
+        row = (f" {index:>2}  " + _paint("93", "●") + "  " +
+               _paint("96;1", _ui_cut(proto, 14)) + " → " +
+               _paint("95;1", _ui_cut(destination, max(10, width - 31))))
+    _ui_line(row)
+
+
 def _list_tunnels():
+    width = _ui_width()
     cfg = config.load(transaction.CONFIG)
     items = cfg["tunnels"]
-    for i, t in enumerate(items, 1):
-        ports = "ALL except " + ",".join(map(str, t["exclude"])) if t["mode"] == "all-except" else (
-            ",".join(f'{p["listen_port"]}→{p["target_port"]}' for p in t["mapping"]))
-        print(f"  {i}. {_paint('92' if t['enabled'] else '90', t['name'][:18])}"
-              f"  {ports[:25]}  → {t['target_ip']}  {'●' if t['enabled'] else '○'}")
-    if not items:
-        print("  No tunnels managed by V2.")
-    # Show pre-existing kernel rules, even if they were installed with V1,
-    # Docker or another script. Foreign rules are NEVER editable/deletable.
+    _ui_edge("top", width)
+    _ui_line(_paint("96;1", " ▤  EXISTING FIREWALL CONFIGURATION"))
+    _ui_line(_paint("90", "    Managed tunnels and system NAT rules (read-only for external rules)"))
+    _ui_edge("rule", width)
+    if items:
+        _ui_line(_paint("96;1", " ── MANAGED V2 TUNNELS ──"))
+        for i, t in enumerate(items, 1):
+            ports = ("ALL except " + ",".join(map(str, t["exclude"]))
+                     if t["mode"] == "all-except" else
+                     ",".join(f'{p["listen_port"]}→{p["target_port"]}'
+                              for p in t["mapping"]))
+            name = _ui_cut(t.get("name", "tunnel"), 20)
+            dest = _ui_cut(t.get("target_ip", "?"), 32)
+            state = _paint("92;1", "● ACTIVE") if t["enabled"] else _paint("90", "○ DISABLED")
+            _ui_line(f"  {i:>2}. " + _paint("96;1", name) + "  " +
+                     _paint("97", _ui_cut(ports, max(10, width - 65))) +
+                     "  → " + _paint("95;1", dest) + "  " + state)
+    else:
+        _ui_line(_paint("97", "  No tunnels managed by V2."))
+    _ui_line("")
+    _ui_line(_paint("96;1", " ── EXISTING SYSTEM RULES (read-only) ──"))
+    _ui_line(_paint("90", _ui_cut(_ui_header_row(width), width - 5)))
+    _ui_edge("rule", width)
     rules, error = system_rules.detect_nat()
     if rules:
-        print(_paint("96;1", "  ── EXISTING SYSTEM RULES (read-only) ──"))
-        for r in rules:
-            print(f"  {_paint('93', '•')} {r['chain'][:14]}  "
-                  f"{r['protocol']}:{r['port']} → "
-                  f"{r['target']} {r['destination'][:35]}  [external]")
-        print(_paint("90", "  External rules are shown for visibility; only V2 rules can be edited."))
+        for i, rule in enumerate(rules, 1):
+            _ui_record(i, rule["chain"],
+                       f'{rule["protocol"]}:{rule["port"]}',
+                       rule["target"], rule["destination"])
     elif error:
-        print(_paint("93", "  " + error))
+        _ui_line(_paint("93", "  " + _ui_cut(error, width - 8)))
+    else:
+        _ui_line(_paint("90", "  No existing NAT forwarding rules found."))
+    _ui_line("")
+    _ui_line(_paint("90", _ui_cut(
+        "  External rules are visible only; only V2-managed tunnels can be edited.",
+        width - 6)))
+    _ui_edge("bottom", width)
     return items
+
+
+def _ui_ports_intro():
+    width = _ui_width()
+    _ui_edge("top", width)
+    _ui_line(_paint("96;1", " ▤  PORT FORWARDING & TUNNELS"))
+    _ui_line("  Create or manage TCP/UDP port mappings without editing iptables by hand.")
+    _ui_line(_paint("90", _ui_cut(
+        "  Existing external NAT rules remain untouched. Changes to V2 require confirmation.",
+        width - 7)))
+    _ui_edge("bottom", width)
 
 
 def _delete_all():
@@ -216,12 +381,16 @@ def _delete_all():
 
 def _manage():
     while True:
-        _title("CONFIG")
+        _ui_header("CONFIG")
         items = _list_tunnels()
-        _options("[1] Edit/Delete V2 tunnel", "[2] Delete ALL V2", "[0] Back")
+        _ui_actions(("1", "Edit / Delete V2 tunnel"),
+                    ("2", "Delete ALL V2 tunnels"),
+                    ("0", "Back"))
         choice = _ask("Select", "0")
         if choice in ("0", None):
             return
+        if choice and choice.lower() == "r":
+            continue
         if choice == "2":
             _delete_all()
             continue
@@ -240,14 +409,17 @@ def _manage():
 
 def _tunnel_page():
     while True:
-        _title("IPTABLES")
-        _options("[1] New port → IP tunnel",
-                 "[2] Tunnel ALL ports (protect SSH)",
-                 "[3] Edit / Delete current tunnels",
-                 "[0] Back")
+        _ui_header("PORTS")
+        _ui_ports_intro()
+        _ui_actions(("1", "New port → IP tunnel"),
+                    ("2", "Tunnel ALL ports (protect SSH)"),
+                    ("3", "Edit / Delete current tunnels"),
+                    ("0", "Back"))
         choice = _ask("Select", "0")
         if choice in ("0", None):
             return
+        if choice and choice.lower() == "r":
+            continue
         if choice == "1":
             _tunnel_wizard()
         elif choice == "2":
