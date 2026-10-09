@@ -17,6 +17,9 @@ from . import accounting, config, sampler, transaction
 from .errors import PM2Error
 
 WINDOW = 600
+# A 10-minute history OF the trailing 10-minute moving average needs
+# 20 minutes of underlying samples, not just the last 10 minutes.
+RETENTION = WINDOW * 2
 SPARK = "▁▂▃▄▅▆▇█"
 
 
@@ -100,19 +103,17 @@ def weighted(history, now, window=WINDOW):
 
 
 def sparkline(history, now, direction, buckets=24, window=WINDOW):
-    """Draw trailing 10 minutes of sampled throughput, gaps remain blank."""
+    """History OF trailing 10-minute averages (not raw bucket rates).
+
+    The previous ten minutes of chart endpoints require up to twenty minutes
+    of raw counter intervals to compute each endpoint's honest 600s mean.
+    """
     bucket_size = window / buckets
     points = []
     for i in range(buckets):
-        start = now - window + i * bucket_size
-        end = start + bucket_size
-        num = den = 0.0
-        for stamp, duration, up, down in history:
-            overlap = max(0.0, min(stamp, end) - max(stamp - duration, start))
-            if overlap > 0:
-                num += (up if direction == "up" else down) * overlap
-                den += overlap
-        points.append(num / den if den else None)
+        end = now - window + (i + 1) * bucket_size
+        rolling = weighted(history, end, window)
+        points.append(rolling[direction])
     maxval = max((x for x in points if x is not None), default=0)
     return "".join(" " if x is None else
                    SPARK[min(7, int((x / maxval) * 7))] if maxval else SPARK[0]
@@ -145,7 +146,7 @@ def record(db, timestamp, elapsed, rates):
         # Bounded history: only trailing 10 minutes, retain records overlapping
         # a bucket at the cutoff, and do not accumulate forever.
         db.execute("DELETE FROM port_live_samples WHERE sample_end < ?",
-                   (timestamp - WINDOW - 60,))
+                   (timestamp - RETENTION - 60,))
 
 
 def history(db, timestamp, labels):
@@ -155,7 +156,7 @@ def history(db, timestamp, labels):
         "SELECT sample_end,tunnel_id,protocol,listen_port,duration_seconds,"
         "up_mbps,down_mbps FROM port_live_samples "
         "WHERE sample_end >= ? AND sample_end <= ? ORDER BY sample_end",
-        (timestamp - WINDOW, timestamp)):
+        (timestamp - RETENTION, timestamp)):
         key = (tid, proto, port)
         if key in labels:
             series[key].append((end, duration, up, down))
@@ -171,7 +172,8 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
         recent = rates.get(key, {"up": 0.0, "down": 0.0})
         # Active means transferred bytes during the last rolling 10m, not
         # merely an open TCP listener/advertised port.
-        moving = any(up > 0 or down > 0 for _, _, up, down in data)
+        moving = any((up > 0 or down > 0) and end > timestamp - WINDOW
+                     for end, _, up, down in data)
         if active_only and not moving:
             continue
         tid, proto, port = key
@@ -197,8 +199,8 @@ def render(data, requested, effective, rules):
     width = max(65, min(shutil.get_terminal_size((90, 28)).columns, 140))
     print(f"PORT MANAGER 2 | LIVE PORTS | 10m rolling graph | "
           f"refresh {effective:g}s (requested {requested:g}s) | {rules} rules")
-    print("Last 10 minutes: left=oldest, right=latest; "
-          "UP=outbound, DOWN=inbound; units Mbit/s")
+    print("Last 10 minutes of the rolling 10m average: left=oldest, "
+          "right=latest; UP=outbound, DOWN=inbound; Mbit/s")
     if not data["rows"]:
         print("No port traffic yet. Use --all-ports to show idle configured ports.")
     for row in data["rows"]:
