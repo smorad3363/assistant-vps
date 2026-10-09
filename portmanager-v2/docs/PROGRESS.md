@@ -68,9 +68,21 @@
 - Added nonblocking mutation lock shared between V2 installer and uninstaller.
 - Added full normative `docs/PM2-SPEC-001.fa.md` to this repository, making
   the plan portable across chats/assistants.
-- **NEXT:** Refresh SHA256 manifest; run latest CI; fix all failures; then
-  run V1-installed isolated VM fingerprint/coexistence validation. Only after
-  that may Phase 1 be marked complete.
+- **VERIFIED**: workflow
+  https://github.com/smorad3363/assistant-vps/actions/runs/37935515165
+  on SHA `6782c771c73d847f71ebff87a37aaabeb78076ad`.
+  Python 3.10 and 3.12 each passed **19 unit tests**. Static checks,
+  V1 alias delegation stub, actual V2 clean/repeat install, disabled systemd
+  lifecycle, uninstall and normalized iptables/qdisc fingerprint all PASSED
+  on a disposable Ubuntu 24.04 GitHub VM.
+- A false negative in the kernel snapshot test was caused by live
+  iptables-save timestamps/counters, not rule edits. Normalize those fields
+  before comparing structural rule sets. Fixed SHA `6782c771...`.
+- **NEW CHECK pending latest CI:** tamper with a V2-owned systemd unit;
+  uninstall must fail with E_CONFLICT, leave V2 installed, then verified
+  restoration + normal uninstall must succeed.
+- **NEXT:** verify latest workflow, then conduct real V1-installed isolated
+  VM fingerprint/coexistence, purge and reboot tests before Phase 1 closes.
 - Prior V2-only root install/reinstall/uninstall checks passed on the GitHub
   ephemeral Ubuntu 24.04 VM. The **new** disabled systemd tests and kernel
   snapshots still require latest CI verification.
@@ -102,3 +114,5 @@ R06 high: destructive reinstall/uninstall (strict path ownership).
 - Unit tests: own/foreign/masked/active/symlink/rollback and lock contention.
 - CI: V1 alias stub test, kernel iptables/tc snapshots, systemd unit lifecycle.
 - Preserve Draft PR #1; no merge/deploy until Gate A..F pass.
+- Installation into a genuine running-V1 environment and reboot remain
+  untested. Never claim AT-001,002,004,006,007,017 or Gate D passed.
