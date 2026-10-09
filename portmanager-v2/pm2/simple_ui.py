@@ -336,7 +336,7 @@ def _list_tunnels():
         _ui_line(_paint("90", "  No existing NAT forwarding rules found."))
     _ui_line("")
     _ui_line(_paint("90", _ui_cut(
-        "  Existing third-party rules are visible; edit requires verified ownership/import.",
+        "  External rules: read-only until verified import. Never auto-delete Docker/UFW rules.",
         width - 6)))
     _ui_edge("bottom", width)
     return items
@@ -575,12 +575,29 @@ def _limit(port, interface, proto="tcp,udp"):
     _persist_policy(plan)
 
 
+def _choose_limit_interface(links):
+    """A global overview cannot be passed to tc as a real network interface."""
+    choices = [str(link["interface"]) for link in links]
+    if not choices:
+        print(_paint("93", "  No network interfaces detected."))
+        return None
+    if len(choices) == 1:
+        return choices[0]
+    _title("CHOOSE INTERFACE")
+    _ui_edge("top")
+    _ui_line("  Select one actual interface before applying speed limits.")
+    _ui_line(_paint("93", "  ALL is a display mode, not a Linux network interface."))
+    for index, name in enumerate(choices, 1):
+        _ui_line(f"  [{index}] " + _ui_cut(name, _ui_width() - 12))
+    _ui_edge("bottom")
+    choice = _ask("Interface number / 0 Back", "0")
+    if choice and choice.isdecimal() and 1 <= int(choice) <= len(choices):
+        return choices[int(choice) - 1]
+    return None
+
+
 def _live():
-    _title("LIVE")
-    refresh = _ask("Refresh every N seconds", "5")
-    if not refresh or not refresh.isdecimal() or not 2 <= int(refresh) <= 60:
-        print("  Refresh must be 2..60 seconds.")
-        return
+    # Live opens directly in the fixed-screen UI; +/- changes refresh.
     latest = {}
     picked = {}
     def capture(frame):
@@ -590,8 +607,7 @@ def _live():
         # Store a read-only selection; actual traffic shaping is requested
         # only after curses/monitor contexts have safely unwound.
         picked.update({"row": row, "interface": interface})
-    print(_paint("90", "  Arrows choose port; Enter/q set limit; Tab selects NIC; Ctrl+C opens manual selection."))
-    result = port_graph.watch(refresh=int(refresh), top=24, active_only=False,
+    result = port_graph.watch(refresh=5, top=100, active_only=False,
                               on_frame=capture, on_select=choose)
     if not latest:
         return
@@ -600,7 +616,11 @@ def _live():
     if picked:
         row = picked["row"]
         if row is None:
-            _limit(0, picked["interface"])
+            iface = picked["interface"]
+            if iface == "ALL":
+                iface = _choose_limit_interface(links)
+            if iface:
+                _limit(0, iface)
             return
         selected_port = row.get("listen_port")
         if not selected_port:
@@ -611,22 +631,16 @@ def _live():
         # Esc returns without changing limits. Ctrl+C retains manual fallback.
         return
     else:
+        _title("SELECT PORT")
         print("\n  Enter a port shown in Live, or ALL for the entire interface.")
         print("  [0] Return without changes")
         selected = _ask("Port / ALL", "0")
         if not selected or selected == "0":
             return
         if selected.upper() == "ALL":
-            if len(links) > 1:
-                print("  Available interfaces: " +
-                      ", ".join(link["interface"] for link in links))
-                interface = _ask("Interface", default_iface)
-                if interface not in [link["interface"] for link in links]:
-                    print("  Interface not found; no limit changed.")
-                    return
-            else:
-                interface = default_iface
-            _limit(0, interface)
+            interface = _choose_limit_interface(links)
+            if interface:
+                _limit(0, interface)
             return
         if not selected.isdecimal() or not 1 <= int(selected) <= 65535:
             return
@@ -636,7 +650,7 @@ def _live():
             print("  Port not in the displayed list; no change made.")
             return
         row = matching[0]
-        selected_interface = default_iface
+        selected_interface = "ALL" if len(links) > 1 else default_iface
     # Use the tunnel's explicit interface when known. Auto/V1
     # counters can span multiple interfaces, so use the UI-selected NIC.
     interface = selected_interface
@@ -646,6 +660,10 @@ def _live():
             if tunnel["id"] == row["tunnel_id"]:
                 interface = tunnel["interface"]
                 break
+    if interface == "ALL" or not interface:
+        interface = _choose_limit_interface(links)
+    if not interface:
+        return
     proto = row["protocol"] if row["protocol"] in ("tcp", "udp") else "tcp,udp"
     _limit(selected_port, interface, proto)
 
@@ -656,7 +674,7 @@ def menu():
     while True:
         _title("HOME")
         _ui_actions(("1", "● LIVE TRAFFIC & SPEED LIMITS"),
-                    ("2", "◆ PORTS / TUNNELS / EXISTING RULES"),
+                    ("2", "◆ PORTS / IPTABLES / TUNNELS"),
                     ("3", "✎ EDIT / DELETE CONFIGURATIONS"),
                     ("0", "Exit"))
         choice = _ask("Select", "0")
