@@ -115,11 +115,22 @@ def _kernel(iface):
     filters = {}
     for direction in ("ingress", "egress"):
         rows = _tc_json(["filter", "show", "dev", iface, direction])
-        filters[direction] = [r for r in rows if r.get("kind") == "flower"]
-        # Any filter type outside ours also constitutes foreign ownership.
-        if len(filters[direction]) != len(rows):
-            raise PM2Error("E_CONFLICT", "Foreign tc filter in V2-controlled clsact",
-                           {"interface": iface, "direction": direction})
+        concrete = []
+        for row in rows:
+            if row.get("kind") != "flower":
+                raise PM2Error("E_CONFLICT", "Foreign tc filter in V2-controlled clsact",
+                               {"interface": iface, "direction": direction})
+            # iproute2 emits one bare flower descriptor followed by a second
+            # fully-qualified descriptor for the *same* filter priority.
+            # Only the concrete (keys + actions) entry is a separate filter.
+            options = row.get("options")
+            if isinstance(options, dict) and options.get("keys"):
+                concrete.append(row)
+            elif not isinstance(options, dict) and row.get("pref") is not None:
+                continue
+            else:
+                raise PM2Error("E_CONFLICT", "Unexpected incomplete flower filter")
+        filters[direction] = concrete
     return clsact, filters
 
 
@@ -144,8 +155,11 @@ def preflight(before, desired, allow_kernel_reset=False):
             actual = {}
             for r in rows:
                 pref = r.get("pref")
+                if isinstance(pref, str) and pref.isdecimal():
+                    pref = int(pref)
                 if type(pref) is not int or pref in actual:
-                    raise PM2Error("E_CONFLICT", "Ambiguous tc filter priority")
+                    raise PM2Error("E_CONFLICT", "Ambiguous tc filter priority",
+                                   {"row": str(r)[:250]})
                 actual[pref] = r
             if clsact and set(actual) != set(expected):
                 raise PM2Error("E_CONFLICT", "Foreign or missing tc filter detected",
