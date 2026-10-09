@@ -99,23 +99,22 @@ def main(argv=None):
     binaries = ["iptables-save"] if args.ipv4_only else ["iptables-save", "ip6tables-save"]
     try:
         previous, count, spent = snapshot(binaries)
+        sample_time = time.monotonic()
         if count > 1024 and args.interval < 10:
             print(f"High V1 rule count ({count}). Increase --interval to >=10 s "
                   "and audit packet-path CPU costs.", file=sys.stderr)
         while True:
             time.sleep(args.interval)
             now, count, cost = snapshot(binaries)
-            elapsed = args.interval + min(cost, args.interval)
-            # Actual monotonic elapsed is computed from capture boundaries.
-            # Snapshot duration must not be hidden when calculating rates.
-            # A separate timer is added below to keep the rate denominator exact.
+            next_time = time.monotonic()
+            elapsed = max(0.001, next_time - sample_time)
             rows = delta(previous, now, elapsed)
             print(f"\nV1 FAST LIVE — {args.interval:g}s target, {count} counter rules "
                   f"({cost:.3f}s read-only snapshot)")
             print("   PORT   DL Mbit/s   UL Mbit/s")
             for port, down, up in rows[:args.top]:
                 print(f"{port:7d} {down:11.2f} {up:11.2f}")
-            previous = now
+            previous, sample_time = now, next_time
             if args.once:
                 break
     except KeyboardInterrupt:
