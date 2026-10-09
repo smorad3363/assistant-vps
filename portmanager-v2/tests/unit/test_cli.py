@@ -35,11 +35,13 @@ class CLITests(TestCase):
                 self.assertFalse((Path(t) / "etc").exists())
 
     def test_unimplemented_admin_operations_fail_closed(self):
-        for args in (["limits", "set", "--tunnel", "abc"],
-                     ["confirm", "nonexistent"]):
-            code, _, err = self.invoke(args)
-            self.assertIn(code, (5, 8), args)
-            self.assertTrue("E_UNSUPPORTED" in err or "E_CONFLICT" in err)
+        code, _, err = self.invoke(["limits", "set", "--tunnel", "abc"])
+        self.assertIn(code, (5, 8))
+        self.assertTrue("E_UNSUPPORTED" in err or "E_CONFLICT" in err)
+        with mock.patch("pm2.guard.os.geteuid", return_value=1000):
+            code, _, err = self.invoke(["confirm", "nonexistent"])
+        self.assertEqual(code, 3)
+        self.assertIn("E_PERMISSION", err)
         with mock.patch("pm2.backup.os.geteuid", return_value=1000):
             code, _, err = self.invoke(["backup", "create"])
         self.assertEqual(code, 3)
