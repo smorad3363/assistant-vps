@@ -88,8 +88,13 @@ class LiveScreen:
             pass  # Rightmost column / very small terminal.
 
     @staticmethod
-    def _metric(value, coverage):
-        return f"{value:6.1f}" if value is not None and coverage else "    --"
+    def _metric(value, coverage, period_seconds):
+        if value is None or not coverage:
+            return "    --"
+        # Never present a few seconds of traffic as a fully observed 24h
+        # average. Mark incomplete windows with '*' in the compact table.
+        return (f"{value:5.1f}*" if coverage < period_seconds
+                else f"{value:6.1f}")
 
     def _candidate_rows(self):
         rows = list(self.last.get("rows", [])) if self.last else []
@@ -142,7 +147,10 @@ class LiveScreen:
                     up = data_.get("up_mbps")
                     down = data_.get("down_mbps")
                     total = up + down if up is not None and down is not None else None
-                    nums.append(self._metric(total, data_.get("coverage_seconds", 0)))
+                    nums.append(self._metric(
+                        total, data_.get("coverage_seconds", 0),
+                        data_.get("requested_seconds",
+                                  {"10m": 600, "1h": 3600, "8h": 28800, "24h": 86400}[period])))
                 now = (row.get("now_up_mbps", 0) + row.get("now_down_mbps", 0))
                 trend = (row.get("graph_up", "").rstrip() or " ") [-15:]
                 line = (f"{proto}:{port:<6} {now:8.1f} " +
@@ -157,9 +165,9 @@ class LiveScreen:
         if self.last:
             coverage = self.last.get("port_coverage", "configured")
             self._write(footer + 1, 1,
-                        f"Visible {min(len(rows), available)} / {len(rows)}    "
-                        f"Source: {coverage}    "
-                        f"{'Idle included' if self.show_idle else 'Active only'}")
+                        f"Ports {min(len(rows), available)}/{len(rows)}"
+                        f"  {('Idle included' if self.show_idle else 'Active only')}"
+                        f"  * partial history (no invented 24h data)")
         self._write(height - 1, 1,
                     "q/Esc: choose port   a: idle ports   +/-: refresh   up/down: scroll", 1)
         self.window.refresh()
