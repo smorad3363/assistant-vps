@@ -14,13 +14,14 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 
 from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
-from . import backup
+from . import backup, guard
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -35,17 +36,22 @@ LOCK = Path("/run/lock/portmanager2.lock")
 
 
 @contextlib.contextmanager
-def mutation_lock():
-    """Coordinate V2 installers, future firewall writers and uninstall."""
+def mutation_lock(wait=False):
+    """Coordinate V2 writers; watchdog may wait for a bounded 180 seconds."""
     try:
         fd = os.open(LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     except OSError as exc:
         raise PM2Error("E_APPLY", "Cannot open V2 mutation lock") from exc
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise PM2Error("E_LOCKED", "Another Port Manager V2 operation is running") from exc
+        deadline = time.monotonic() + 180 if wait else time.monotonic()
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                if not wait or time.monotonic() >= deadline:
+                    raise PM2Error("E_LOCKED", "Another Port Manager V2 operation is running") from exc
+                time.sleep(1)
         yield
     finally:
         os.close(fd)
@@ -162,6 +168,8 @@ def uninstall(args):
         raise PM2Error("E_PERMISSION", "Uninstall requires root")
     owner_check()
     service_marker = services.preflight()
+    if guard._read() is not None:
+        raise PM2Error("E_CONFLICT", "Pending guarded change must be confirmed/rolled back before uninstall")
     if BIN.is_symlink():
         if os.readlink(BIN) != "/opt/portmanager2/current/bin/portmanager2":
             raise PM2Error("E_CONFLICT", "Unrecognized portmanager2 launcher")
@@ -265,7 +273,7 @@ def parser():
     report = sub.add_parser("report")
     report.add_argument("--window", choices=("1h", "24h", "7d"), required=True)
     report.add_argument("--json", action="store_true")
-    for name in ("live", "sample", "restore", "backup", "logs", "confirm"):
+    for name in ("live", "sample", "restore", "backup", "logs", "confirm", "rollback-pending"):
         cmd = sub.add_parser(name)
         cmd.add_argument("args", nargs=argparse.REMAINDER)
     return p
@@ -298,6 +306,18 @@ def main(argv=None):
                 bandwidth.mutation()
             else:
                 raise PM2Error("E_VALIDATION", "Unknown limits command")
+        elif args.command == "confirm":
+            if not args.args:
+                raise PM2Error("E_VALIDATION", "confirm requires change UUID")
+            with mutation_lock():
+                payload = guard.confirm(args.args[0])
+            response(True, "OK", "Protected change confirmed", payload, json_mode)
+        elif args.command == "rollback-pending":
+            if not args.args:
+                raise PM2Error("E_VALIDATION", "rollback-pending requires change UUID")
+            with mutation_lock(wait=True):
+                payload = guard.rollback(args.args[0])
+            response(True, "OK", "Protected change rolled back", payload, json_mode)
         elif args.command == "sample":
             with mutation_lock():
                 payload = sampler.sample()
