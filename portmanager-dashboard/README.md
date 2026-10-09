@@ -1,7 +1,7 @@
 # Port Manager — shared version selector
 
-The original one-line URL now installs **V2 by default**, and the same URL
-with an explicit `v1` argument installs the frozen original Port Manager V1.
+The original one-line URL now installs **22 by default**, and the same URL
+with an explicit `v1` argument installs the frozen original Port Manager 21.
 
 **V2 (default)**
 
