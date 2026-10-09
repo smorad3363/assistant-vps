@@ -1,5 +1,21 @@
 # ADR-0003 — Scheduled per-port bandwidth limits
 
+## New all-ports and local-port limit mode
+
+- A JSON schedule record can optionally contain `interface`, a kernel
+  interface name. This enables policing a local listening TCP/UDP port even
+  when it has no V2 NAT tunnel.
+- `port=0`, `protocol=tcp,udp` and required `interface` selects a
+  **single aggregate** whole-interface IPv4 police via `tc matchall`, for
+  both ingress and egress. This may include SSH and other IPv4 services.
+  It is **not** one independent police quota for every possible port.
+- All-port policies conflict with individual port policies on the same
+  interface; remove old policies first, do not stack rate policers silently.
+- Live CLI picks a default interface from measured interface traffic and
+  asks for explicit confirmation before applying an all-port cap.
+- No V1 root qdisc, global iptables table or non-V2 clsact is touched.
+  V1 installations or foreign qdisc ownership remain blocked.
+
 ## 2.1.0-rc.1 implementation update
 
 A V2-owned `tc clsact` **police/drop** implementation is available in
