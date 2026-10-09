@@ -71,7 +71,7 @@ class LiveScreenTests(unittest.TestCase):
         self.assertEqual(screen.window.refreshes, 2)
         text = "\n".join(v for _, _, v in screen.window.writes)
         self.assertIn("TCP:8080", text)
-        self.assertNotIn("TCP:8085", text)
+        self.assertIn("TCP:8085", text)  # idle ports visible by default
         self.assertIn("550.0", text)
         self.assertIn("10 min", text)
 
