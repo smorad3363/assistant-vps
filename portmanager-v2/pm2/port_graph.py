@@ -344,7 +344,7 @@ def render(data, requested, effective, rules):
 
 
 def watch(refresh=5, tunnel=None, top=20, active_only=True,
-          once=False, json_mode=False, on_frame=None):
+          once=False, json_mode=False, on_frame=None, on_select=None):
     """Auto-detect Xray/Sing-box local TCP/UDP ports if no managed rules exist.
 
     Reuse existing V2/V1 counters as-is. Only if *none* exist, enable up
@@ -415,8 +415,15 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         if screen is not None:
                             action = screen.wait(interval)
                             refresh = screen.requested
+                            if action in ("select", "global"):
+                                if on_select is not None:
+                                    row, interface = screen.selection(
+                                        whole_interface=action == "global")
+                                    if row is not None or action == "global":
+                                        on_select(row, interface)
+                                return 0
                             if action == "quit":
-                                return 130
+                                return 0
                         else:
                             time.sleep(interval)
                         t1 = time.monotonic()
