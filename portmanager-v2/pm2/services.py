@@ -24,6 +24,8 @@ UNIT_NAMES = (
 SOURCE = Path(__file__).resolve().parents[1] / "systemd"
 SYSTEMD = Path("/etc/systemd/system")
 MARKER = Path("/etc/portmanager2/systemd-owner.json")
+FLAGS = (MARKER.parent / "enable-restore", MARKER.parent / "enable-sample")
+FLAG_BYTES = b"portmanager2-owned-activation\\n"
 
 
 def digest(content: bytes) -> str:
@@ -104,6 +106,17 @@ def _read_marker():
 def preflight():
     """Verify *all* files before any removal, replacement or daemon reload."""
     marker = _read_marker()
+    for flag in FLAGS:
+        if flag.is_symlink():
+            raise PM2Error("E_CONFLICT", "Symlinked V2 activation flag")
+        if flag.exists() and flag.read_bytes() != FLAG_BYTES:
+            raise PM2Error("E_CONFLICT", "Unknown V2 activation flag owner")
+    if marker is not None:
+        active = marker["activation"] == "active"
+        if active and not all(f.is_file() for f in FLAGS):
+            raise PM2Error("E_CONFLICT", "Enabled V2 service missing owned activation flag")
+        if not active and any(f.exists() for f in FLAGS):
+            raise PM2Error("E_CONFLICT", "Disabled V2 service has stale activation flags")
     for name in UNIT_NAMES:
         path = SYSTEMD / name
         if path.is_symlink():
@@ -145,7 +158,7 @@ def _restore(snapshots):
             if path.exists():
                 path.unlink()
         else:
-            _atomic(path, original, 0o600 if path == MARKER else 0o644)
+            _atomic(path, original, 0o600 if path == MARKER or path in FLAGS else 0o644)
     _reload()
 
 
@@ -170,7 +183,7 @@ def _change(operation: str):
                 "enabled": old["activation"] == "active"}
     if operation == "install" and old is not None and old["activation"] == "active":
         raise PM2Error("E_CONFLICT", "Upgrade changing enabled units must use an explicit safe lifecycle")
-    paths = [SYSTEMD / n for n in UNIT_NAMES] + [MARKER]
+    paths = [SYSTEMD / n for n in UNIT_NAMES] + [MARKER] + list(FLAGS)
     snapshots = {path: path.read_bytes() if path.is_file() else None for path in paths}
     try:
         if operation == "install":
@@ -193,6 +206,9 @@ def _change(operation: str):
                     if result.returncode:
                         raise PM2Error("E_APPLY", "Could not disable owned V2 unit",
                                        {"command": action, "stderr": result.stderr[-350:]})
+            for flag in FLAGS:
+                if flag.exists():
+                    flag.unlink()
             for name in UNIT_NAMES:
                 (SYSTEMD / name).unlink()
             MARKER.unlink()
@@ -233,6 +249,10 @@ def activate():
     pending = dict(old, activation="enabling")
     _atomic(MARKER, (json.dumps(pending, sort_keys=True) + "\n").encode(), 0o600)
     try:
+        for flag in FLAGS:
+            if flag.exists():
+                raise PM2Error("E_CONFLICT", "Unexpected preexisting activation flag")
+            _atomic(flag, FLAG_BYTES, 0o600)
         for action in (["enable", "portmanager2-restore.service"],
                        ["enable", "--now", "portmanager2-sample.timer"]):
             result = _run(action)
@@ -245,6 +265,9 @@ def activate():
         try:
             _run(["disable", "--now", "portmanager2-sample.timer"])
             _run(["disable", "portmanager2-restore.service"])
+            for flag in FLAGS:
+                if flag.is_file() and flag.read_bytes() == FLAG_BYTES:
+                    flag.unlink()
             _atomic(MARKER, (json.dumps(old, sort_keys=True) + "\n").encode(), 0o600)
         except Exception as rollback:
             raise PM2Error("E_ROLLBACK", "Could not restore original V2 unit activation") from rollback
