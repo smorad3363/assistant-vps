@@ -27,12 +27,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: V1 baseline must remain frozen
+      - name: V1 implementation must remain frozen; legacy URL now dispatches versions
         run: |
-          git diff --exit-code 64842968c85f85afdad4e11c3ed4adfce65f5d22 HEAD -- portmanager-dashboard/
+          git show 64842968c85f85afdad4e11c3ed4adfce65f5d22:portmanager-dashboard/install.sh | cmp - portmanager-v1/legacy-install.sh
+          git diff --exit-code 64842968c85f85afdad4e11c3ed4adfce65f5d22 HEAD -- portmanager-dashboard/portmanager.sh.gz.b64
+          grep -q 'v1|1)' portmanager-dashboard/install.sh
+          grep -q 'v2|2|' portmanager-dashboard/install.sh
       - name: Bash parser checks
         run: |
-          bash -n portmanager-v1/install.sh portmanager-v2/install.sh portmanager-v2/bin/portmanager2
+          bash -n portmanager-dashboard/install.sh portmanager-v1/install.sh portmanager-v1/legacy-install.sh portmanager-v2/install.sh portmanager-v2/bin/portmanager2
       - name: Manifest verification
         run: cd portmanager-v2 && sha256sum --check --strict manifest.sha256
       - name: Python compilation
@@ -50,7 +53,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck portmanager-v1/install.sh portmanager-v2/install.sh portmanager-v2/bin/portmanager2
+          shellcheck portmanager-dashboard/install.sh portmanager-v1/install.sh portmanager-v1/legacy-install.sh portmanager-v2/install.sh portmanager-v2/bin/portmanager2
 
   integration-not-yet-enabled:
     runs-on: ubuntu-24.04
@@ -156,7 +159,7 @@ jobs:
           set -e
           test "$code" -eq 37
           grep -Fx 'TEST-V1-ALIAS' "$tmp/out"
-          grep -Fx 'https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh' "$tmp/curl-args"
+          grep -Fx 'https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-v1/legacy-install.sh' "$tmp/curl-args"
           test ! -e /usr/local/bin/portmanager2
           echo 'V1 alias contract PASS; full V1 coexistence still NOT TESTED'
 
@@ -285,7 +288,7 @@ jobs:
         run: |
           set -euo pipefail
           # Runs exclusively on a fresh disposable GitHub VM, not user VPS.
-          sudo bash portmanager-dashboard/install.sh
+          sudo bash portmanager-v1/legacy-install.sh
           sudo test -s /usr/local/bin/portmanager
           v1_executable_before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           sudo bash portmanager-v1/install.sh
@@ -394,14 +397,14 @@ jobs:
           REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          sudo bash portmanager-dashboard/install.sh
+          sudo bash portmanager-v1/legacy-install.sh
           before="$(sha256sum /usr/local/bin/portmanager | awk '{print $1}')"
           sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-before" || true
           sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-iptables-before" || true
           sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-before"
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
           # Re-running the unmodified original installer must not remove V2.
-          sudo bash portmanager-dashboard/install.sh
+          sudo bash portmanager-v1/legacy-install.sh
           sudo test -L /usr/local/bin/portmanager2
           test "$before" = "$(sha256sum /usr/local/bin/portmanager | awk '{print $1}')"
           # --purge requires a real terminal, not --yes alone.
