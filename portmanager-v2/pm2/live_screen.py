@@ -153,8 +153,9 @@ class LiveScreen:
         self._write(y + 2, x + 2, f"{rate:,.1f} Mbps", color, True)
         if item:
             avg = item[direction + "_sum"] / max(1, item["count"])
+            total_gb = item[direction + "_bytes"] / 1e9
             self._write(y + 3, x + 2,
-                        f"Peak {item[direction + '_peak']:.0f}   Avg {avg:.0f} Mbps", 3)
+                        f"Peak {item[direction + '_peak']:.0f}  Avg {avg:.0f}  Total {total_gb:.2f} GB*", 3)
 
     def draw(self, data=None, effective=None):
         if data is not None:
@@ -166,7 +167,7 @@ class LiveScreen:
             return
         self.window.erase()
         height, width = self.window.getmaxyx()
-        if height < 13 or width < 68:
+        if height < 19 or width < 68:
             self._write(0, 1, "PORT MANAGER | LIVE", 1, True)
             self._write(2, 1, "Enlarge terminal (min 68 columns x 13 rows).")
             self._write(4, 1, "q / Esc: return", 3)
@@ -228,7 +229,7 @@ class LiveScreen:
             down, up = self.untracked_rates(interface, self.last.get("rows", []))
             if down + up >= .1:
                 self._write(height - 5, 2, f"OTHER / UNKNOWN ~  ↓ {down:,.1f}  ↑ {up:,.1f} Mbps", 3, True)
-        self._write(height - 4, 2, "* Partial history  |  OTHER is an estimate (NAT/forward/unknown)", 3)
+        self._write(height - 4, 2, "* Partial history / session totals  |  OTHER estimated, may overlap NAT", 3)
         self._write(height - 3, 1, "╰" + line + "╯", 1)
         self._write(height - 2, 2, "↑↓ scroll  |  a idle ports  |  +/- refresh  |  q select limit")
         self._write(height - 1, 2, f"{len(rows)} ports shown  •  {interface['interface']}  •  Ctrl+C back", 1)
