@@ -14,7 +14,11 @@ def restore():
         raise PM2Error("E_PERMISSION", "Boot restore requires root")
     cfg, current = transaction.state()
     if transaction.PENDING.exists():
-        raise PM2Error("E_CONFLICT", "Unconfirmed V2 transaction: investigate before restore")
+        raise PM2Error("E_CONFLICT", "Incomplete V2 apply: manual recovery needed")
+    from . import guard
+    pending = guard._read()
+    if pending is not None:
+        return guard.rollback(pending["change_id"])
     inventory = current.get("firewall", {})
     expected_backend = current.get("backend")
     backend = discovery.backend()
