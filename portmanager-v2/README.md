@@ -62,6 +62,26 @@ block, or throttle packets and do not remove external firewall rules.
 Use `PORTMANAGER2_ENABLE_SERVICES=1` when installing/updating to enable
 persistent collection. Already active timers stay enabled after future updates.
 
+## Unified terminal navigation and interfaces
+
+Navigation replaces the old terminal page instead of appending menus to SSH
+scrollback. Live opens immediately with a 5-second refresh (use + / - to
+adjust). By default, all measured non-loopback network interfaces are listed,
+and all discovered ports including idle entries are visible. The ALL overview
+shows a **sum of interfaces**, not de-duplicated physical bandwidth:
+bridges, NAT and tunnels can count packets twice. Use Tab / left / right to
+switch to one exact NIC; long interface lists page without discarding data.
+Use ↑ / ↓ to highlight a port and Enter / q for a speed limit. From ALL
+overview, choosing a limit requires choosing an actual NIC first. Press g
+for an interface-wide limit, Esc to leave, or Ctrl+C for manual port entry.
+
+The Ports screen now shows existing NAT rules directly, alongside tunnels
+created by Port Manager. Previously created third-party or legacy NAT rules
+can be inspected regardless of V2 ownership. **Editing or deleting foreign
+iptables rules is intentionally blocked** pending a verified, reversible
+import: Docker/UFW/manual rules cannot safely be adopted or modified on
+sight. No third-party firewall rule is changed by the inspection screens.
+
 ## Live monitor lock and exit
 
 `q`/Enter chooses the highlighted port for a speed limit; `g` chooses
