@@ -78,9 +78,13 @@
 - A false negative in the kernel snapshot test was caused by live
   iptables-save timestamps/counters, not rule edits. Normalize those fields
   before comparing structural rule sets. Fixed SHA `6782c771...`.
-- **NEW CHECK pending latest CI:** tamper with a V2-owned systemd unit;
-  uninstall must fail with E_CONFLICT, leave V2 installed, then verified
-  restoration + normal uninstall must succeed.
+- **VERIFIED:** workflow
+  https://github.com/smorad3363/assistant-vps/actions/runs/37935898792
+  on commit `9e1525f431c263cd61fe79365d9872c4387cb231`.
+  Both Python versions, V1 alias stub, real V2 bootstrap install/reinstall,
+  disabled systemd units, kernel rule/qdisc fingerprints, **and tampered-unit
+  uninstall failure injection (E_CONFLICT)** PASSED. Other NAT and V1 coexistence
+  release gates remain NOT TESTED.
 - **NEXT:** verify latest workflow, then conduct real V1-installed isolated
   VM fingerprint/coexistence, purge and reboot tests before Phase 1 closes.
 - Prior V2-only root install/reinstall/uninstall checks passed on the GitHub
