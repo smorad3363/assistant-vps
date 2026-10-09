@@ -38,8 +38,9 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 
 ## Persistent per-port history (10m / 1h / 8h / 24h)
 
-The same install/update command now activates the owned
-`portmanager2-sample.timer` by default. Every ~60 seconds it snapshots
+When the installer is run with `PORTMANAGER2_ENABLE_SERVICES=1`, it
+activates the owned `portmanager2-sample.timer`; installations without
+this flag retain the original disabled-by-default safety behavior. Every ~60 seconds it snapshots
 TCP/UDP port counters (up to 24 selected local-service or externally
 DNAT-forwarded ports, plus existing V1/V2 tracked ports) into `traffic.sqlite3`, without opening Live.
 This is a *rate history* in Mb/s, not a claim of full-day transferred bytes.
@@ -58,8 +59,8 @@ journalctl -u portmanager2-sample.service -n 40 --no-pager
 Only owned, validated `PM2_HIST_RX` / `PM2_HIST_TX` mangle counters
 are installed for long-term local-port tracking. They do not forward,
 block, or throttle packets and do not remove external firewall rules.
-`PORTMANAGER2_ENABLE_SERVICES=0` explicitly disables automatic
-activation for new installations (and does not disable an already active timer).
+Use `PORTMANAGER2_ENABLE_SERVICES=1` when installing/updating to enable
+persistent collection. Already active timers stay enabled after future updates.
 
 ## Live monitor lock and exit
 
