@@ -39,8 +39,14 @@ def parse_nat(text, limit=20):
             if option in args and args.index(option) + 1 < len(args):
                 dest = args[args.index(option) + 1]
                 break
+        interface = "-"
+        for flag in ("-i", "-o"):
+            if flag in args and args.index(flag) + 1 < len(args):
+                interface = args[args.index(flag) + 1]
+                break
         rows.append({"chain": chain, "protocol": proto, "port": port,
                      "target": target, "destination": dest or "-",
+                     "interface": interface,
                      "source": "iptables (read-only)"})
     return rows[:limit]
 
