@@ -183,10 +183,12 @@ def reconcile(at=None, allow_kernel_reset=False):
     desired = desired_filters(plan, cfg["tunnels"], at)
     if not desired and not before["interfaces"]:
         return {"changed": False, "active_filters": 0}
-    if desired == before["filters"]:
-        return {"changed": False, "active_filters": len(desired)}
     preflight(before, desired, allow_kernel_reset=allow_kernel_reset)
     target_ifaces = sorted({x["iface"] for x in desired} | set(before["interfaces"]))
+    missing = ({iface for iface in before["interfaces"] if not _kernel(iface)[0]}
+               if allow_kernel_reset else set())
+    if desired == before["filters"] and not missing:
+        return {"changed": False, "active_filters": len(desired)}
     journal = {"product": "portmanager2", "before": before,
                "desired": desired, "interfaces": target_ifaces}
     config.atomic_json(PENDING, journal)
@@ -202,8 +204,9 @@ def reconcile(at=None, allow_kernel_reset=False):
                 _tc(["qdisc", "add", "dev", iface, "clsact"])
                 created.append(iface)
         for f in before["filters"]:
-            _filter_delete(f)
-            removed.append(f)
+            if f["iface"] not in missing:
+                _filter_delete(f)
+                removed.append(f)
         for f in desired:
             _filter_add(f)
             added.append(f)
@@ -219,7 +222,8 @@ def reconcile(at=None, allow_kernel_reset=False):
             for f in removed:
                 _filter_add(f)
             for iface in created:
-                # No owned filter left; only remove qdiscs created by this transaction.
+                # Only remove qdiscs created by this transaction, after
+                # confirmed V2 filter cleanup.
                 _tc(["qdisc", "del", "dev", iface, "clsact"])
             config.atomic_json(STATE, before)
             PENDING.unlink()
