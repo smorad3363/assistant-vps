@@ -1,35 +1,28 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Primary Port Manager installer. Default: V2. Pass "v1" explicitly to install
+# the original V1, unchanged. Do NOT use "sudo bash v1": bash treats it as a file.
+set -Eeuo pipefail
 
-REPO="smorad3363/assistant-vps"
-BRANCH="master"
-BASE="https://raw.githubusercontent.com/$REPO/$BRANCH/portmanager-dashboard"
-BIN="/usr/local/bin/portmanager"
-
-[ "$(id -u)" -eq 0 ] || { echo "Run as root: curl ... | sudo bash"; exit 1; }
-
-for cmd in curl base64 gzip bash install ip iptables tc crontab awk sed grep sort; do
-  command -v "$cmd" >/dev/null 2>&1 || MISSING=1
-done
-
-if [ "${MISSING:-0}" = 1 ] && command -v apt-get >/dev/null 2>&1; then
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl coreutils gzip iproute2 iptables cron gawk >/dev/null
-fi
-
+REF="${PORTMANAGER_INSTALL_REF:-master}"
+case "${1:-v2}" in
+  v2|2|"") TARGET="portmanager-v2/install.sh" ;;
+  v1|1) TARGET="portmanager-v1/install.sh" ;;
+  *)
+    printf '%s\n' 'Usage:'       '  curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash'       '  curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- v1' >&2
+    exit 2
+    ;;
+esac
+[[ "$(id -u)" -eq 0 ]] || { echo "Please run through sudo/root" >&2; exit 1; }
+[[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "Invalid source ref" >&2; exit 2; }
+command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
-
-echo "[1/3] Downloading Port Manager..."
-curl -fsSL "$BASE/portmanager.sh.gz.b64" | base64 -d | gzip -d > "$tmp"
-
-echo "[2/3] Validating..."
+trap 'rm -f -- "$tmp"' EXIT
+url="https://raw.githubusercontent.com/smorad3363/assistant-vps/$REF/$TARGET"
+curl --proto '=https' --tlsv1.2 -fsSL --retry 3 "$url" -o "$tmp"
+[[ -s "$tmp" ]] || { echo "Empty installer payload" >&2; exit 1; }
 bash -n "$tmp"
-install -m 0755 "$tmp" "$BIN"
-
-echo "[3/3] Installing rules/cron..."
-"$BIN" install
-
-echo
-echo "Installed successfully."
-echo "Run: portmanager"
+if [[ "$TARGET" == "portmanager-v2/install.sh" ]]; then
+  PORTMANAGER2_REF="${PORTMANAGER2_REF:-$REF}" bash "$tmp"
+else
+  PORTMANAGER_INSTALL_REF="$REF" bash "$tmp"
+fi
