@@ -15,6 +15,7 @@ import uuid
 
 from . import VERSION
 from .errors import PM2Error
+from . import services
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -128,12 +129,7 @@ def uninstall(args):
     if os.geteuid() != 0 and not args.dry_run:
         raise PM2Error("E_PERMISSION", "Uninstall requires root")
     owner_check()
-    if any(Path(f"/etc/systemd/system/{PREFIX}{name}").exists()
-           for name in ("restore.service", "sample.service", "sample.timer")):
-        raise PM2Error(
-            "E_CONFLICT",
-            "V2 systemd units exist: this bootstrap uninstaller cannot remove them safely"
-        )
+    service_marker = services.preflight()
     if BIN.is_symlink():
         if os.readlink(BIN) != "/opt/portmanager2/current/bin/portmanager2":
             raise PM2Error("E_CONFLICT", "Unrecognized portmanager2 launcher")
@@ -150,6 +146,9 @@ def uninstall(args):
     elif current.exists():
         raise PM2Error("E_CONFLICT", "V2 release pointer is not a symlink")
     paths = [str(BIN), str(OPT)]
+    if service_marker is not None:
+        paths += [str(services.SYSTEMD / name) for name in services.UNIT_NAMES]
+        paths.append(str(services.MARKER))
     if args.purge:
         paths += [str(ETC), str(DATA), str(LOG)]
     if args.dry_run:
@@ -166,6 +165,8 @@ def uninstall(args):
             raise PM2Error("E_VALIDATION", "Purge requires an additional interactive confirmation")
         if input("Type PURGE-V2-DATA to delete V2 data: ").strip() != "PURGE-V2-DATA":
             raise PM2Error("E_VALIDATION", "Purge cancelled")
+    # Stop before touching the launcher if a unit was modified or enabled.
+    services.remove()
     if BIN.is_symlink():
         BIN.unlink()
     shutil.rmtree(OPT)
