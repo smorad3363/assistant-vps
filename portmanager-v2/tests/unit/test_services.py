@@ -92,6 +92,18 @@ class ServicesTests(TestCase):
                 services.remove()
         self.assertEqual(error.exception.code, "E_CONFLICT")
 
+    def test_masked_unit_blocks_deletion(self):
+        services.install()
+        def masked(args):
+            if args[0] == "is-enabled":
+                return SimpleNamespace(returncode=1, stdout="masked\\n", stderr="")
+            return fake_systemctl(args)
+        with mock.patch.object(services, "_run", side_effect=masked):
+            with self.assertRaises(PM2Error) as error:
+                services.remove()
+        self.assertEqual(error.exception.code, "E_CONFLICT")
+        self.assertTrue(services.MARKER.is_file())
+
     def test_daemon_reload_failure_restores_units_and_marker(self):
         def failed(args):
             if args == ["daemon-reload"]:
