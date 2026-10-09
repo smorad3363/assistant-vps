@@ -580,6 +580,60 @@ def _limit(port, interface, proto="tcp,udp"):
     _persist_policy(plan)
 
 
+def _resolve_port_interface(row, links, chosen="ALL"):
+    """Pick ingress NIC for a selected port without prompting unnecessarily.
+
+    Port counters are not per-interface, so resolve from an explicit user NIC,
+    owned tunnel configuration, foreign NAT -i binding, or physical VPS route.
+    Never silently choose docker0 merely because it appears among interfaces.
+    """
+    names = {str(link.get("interface", "")) for link in links}
+    # Tab/arrow-selected NIC is an intentional manual override of ALL view.
+    if chosen and chosen != "ALL" and chosen in names:
+        return chosen
+    port = row.get("listen_port")
+    proto = row.get("protocol")
+    owner = row.get("tunnel_id")
+    if not port or proto not in ("tcp", "udp"):
+        return None
+    if owner not in ("auto", "v1", None):
+        cfg = config.load(transaction.CONFIG)
+        for tunnel in cfg["tunnels"]:
+            if tunnel["id"] == owner:
+                iface = tunnel.get("interface")
+                return iface if iface in names else None
+
+    # Foreign NAT may explicitly bind packets to one incoming NIC (-i).
+    rules, error = system_rules.detect_nat(limit=200)
+    if not error:
+        matches = {rule.get("interface") for rule in rules
+                   if rule.get("chain") == "PREROUTING"
+                   and rule.get("target") in ("DNAT", "REDIRECT")
+                   and rule.get("protocol") == proto
+                   and str(rule.get("port")) == str(port)
+                   and rule.get("interface") not in (None, "-", "")}
+        if len(matches) > 1:
+            return None  # conflicting interfaces: require explicit choice
+        if len(matches) == 1:
+            iface = next(iter(matches))
+            return iface if iface in names else None
+
+    # No explicit -i: choose the primary physical VPS NIC; unlike choosing
+    # links[0], this cannot select docker0 merely due to naming/sort order.
+    try:
+        iface, _address = _network_defaults()
+        if iface in names and iface != "lo" and not iface.startswith(
+                ("docker", "veth", "br-", "virbr")):
+            return iface
+    except (PM2Error, OSError, ValueError):
+        pass
+    physical = [name for name in names
+                if re.match(r"^(eth|ens|enp|eno)[0-9a-z_.-]*$", name)]
+    if len(physical) == 1:
+        return physical[0]
+    return None  # still ambiguous: fail closed before offering manual choice
+
+
 def _choose_limit_interface(links):
     """A global overview cannot be passed to tc as a real network interface."""
     choices = [str(link["interface"]) for link in links]
@@ -656,16 +710,10 @@ def _live():
             return
         row = matching[0]
         selected_interface = "ALL" if len(links) > 1 else default_iface
-    # Use the tunnel's explicit interface when known. Auto/V1
-    # counters can span multiple interfaces, so use the UI-selected NIC.
-    interface = selected_interface
-    if row["tunnel_id"] not in ("auto", "v1"):
-        cfg = config.load(transaction.CONFIG)
-        for tunnel in cfg["tunnels"]:
-            if tunnel["id"] == row["tunnel_id"]:
-                interface = tunnel["interface"]
-                break
-    if interface == "ALL" or not interface:
+    # AUTO when Live is on ALL; honor an explicitly selected NIC if any.
+    interface = _resolve_port_interface(row, links, selected_interface)
+    if not interface:
+        print(_paint("93", "  Interface ambiguous; choose one manually."))
         interface = _choose_limit_interface(links)
     if not interface:
         return
