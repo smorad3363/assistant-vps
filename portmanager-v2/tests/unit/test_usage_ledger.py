@@ -97,6 +97,19 @@ class PortUsageTests(unittest.TestCase):
                 self.assertFalse(usage_ledger.baseline_matches(db, "boot-b"))
                 db.close()
 
+    def test_background_collector_can_track_more_than_24_ports(self):
+        with (mock.patch.object(history_collector, "_tracked_elsewhere", return_value=set()),
+              mock.patch.object(history_collector.system_rules, "detect_nat",
+                                return_value=([], None)),
+              mock.patch.object(history_collector.auto_monitor, "discover",
+                                return_value=[("tcp", p) for p in range(1, 51)])
+                                as discovery,
+              mock.patch.object(history_collector.auto_monitor, "run",
+                                return_value="")):
+            result = history_collector._select_ports()
+        self.assertEqual(len(result), 50)
+        discovery.assert_called_once_with(existing=set(), limit=64)
+
     def test_stable_port_selection_avoids_reinstall_on_busy_rank_changes(self):
         with (mock.patch.object(history_collector, "_tracked_elsewhere", return_value=set()),
               mock.patch.object(history_collector.system_rules, "detect_nat",
