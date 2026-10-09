@@ -125,7 +125,7 @@ jobs:
           trap 'rm -rf "$tmp"' EXIT
           cat > "$tmp/curl" <<'SH'
           #!/usr/bin/env bash
-          printf '%s\\n' "$@" > "${PM2_TEST_DIR}/curl-args"
+          printf '%s\n' "$@" > "${PM2_TEST_DIR}/curl-args"
           out=""
           while [ "$#" -gt 0 ]; do
             if [ "$1" = "-o" ]; then
@@ -135,7 +135,7 @@ jobs:
             shift
           done
           test -n "$out" || exit 88
-          printf '#!/usr/bin/env bash\\necho TEST-V1-ALIAS\\nexit 37\\n' > "$out"
+          printf '#!/usr/bin/env bash\necho TEST-V1-ALIAS\nexit 37\n' > "$out"
           SH
           chmod +x "$tmp/curl"
           set +e
