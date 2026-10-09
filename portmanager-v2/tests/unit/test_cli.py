@@ -22,7 +22,7 @@ class CLITests(TestCase):
     def test_version(self):
         code, out, _ = self.invoke(["--version"])
         self.assertEqual(code, 0)
-        self.assertIn("2.1.0-rc.3", out)
+        self.assertIn("2.1.0-rc.4", out)
 
     def test_unimplemented_tunnel_fails_closed(self):
         with tempfile.TemporaryDirectory() as t:
@@ -76,7 +76,7 @@ class CLITests(TestCase):
                 self.assertEqual(err, "")
                 obj = json.loads(out)
                 self.assertEqual(set(obj), {"ok", "code", "message", "details", "request_id"})
-                self.assertEqual(obj["details"]["version"], "2.1.0-rc.3")
+                self.assertEqual(obj["details"]["version"], "2.1.0-rc.4")
 
     def test_schedule_preview_is_json_and_does_not_call_tc_or_iptables(self):
         with tempfile.TemporaryDirectory() as tmp:

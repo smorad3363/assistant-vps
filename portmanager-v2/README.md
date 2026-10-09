@@ -1,4 +1,4 @@
-# oort Manager V2 — Tunnel Edition (`2.1.0-rc.3`)
+# oort Manager V2 — Tunnel Edition (`2.1.0-rc.4`)
 
 oort Manager V2 has its own binary (`portmanager2`), configuration, firewall
 chains, SQLite accounting database and optional services. It does not alter
@@ -20,6 +20,21 @@ curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/por
 
 `sudo bash v1` is not valid for piped script arguments. Use `-s -- v1`.
 See [version router guide](docs/RELEASE-ROUTER.fa.md).
+
+## Small live-screen and existing-rules fix (2.1.0-rc.4)
+
+- Reference-style live terminal: separate download/upload cards with
+  current Mbps, peak, sampled average and session total; a clean per-port
+  10m/1h/8h/24h table and small footer.
+- A clearly labelled **OTHER / UNKNOWN ~** row estimates directional
+  interface bytes not accounted for by displayed port rules. This is
+  **not an exact per-port attribution**: NAT, bridges and overlapping
+  counters can make interface and port totals incomparable.
+- The edit/delete menu shows **already existing NAT rules**, including
+  unmanaged/legacy ones, read-only. V2-only managed tunnel rules can be
+  changed; unknown Docker/UFW/external rules are never deleted by the menu.
+- The same cyan-bordered compact menu cards are used for Home, IPtables
+  and Configuration.
 
 ## Included features
 
