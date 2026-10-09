@@ -73,6 +73,18 @@ class ShapingTests(unittest.TestCase):
                 shaping.preflight(before, [rule])
         self.assertEqual(err.exception.code, "E_CONFLICT")
 
+    def test_iproute2_json_flower_header_is_not_duplicate_filter(self):
+        header = {"protocol": "ip", "pref": 41000, "kind": "flower"}
+        concrete = {"protocol": "ip", "pref": 41000, "kind": "flower",
+                    "options": {"keys": {"ip_proto": "tcp", "dst_port": 443},
+                                "actions": [{"kind": "police"}]}}
+        with mock.patch.object(shaping, "_tc_json", side_effect=[
+                [{"kind": "clsact"}], [header, concrete], []]):
+            has_clsact, rows = shaping._kernel("relay0")
+        self.assertTrue(has_clsact)
+        self.assertEqual(len(rows["ingress"]), 1)
+        self.assertEqual(rows["ingress"][0]["options"]["keys"]["dst_port"], 443)
+
     def test_idempotent_reconcile_and_cleanup(self):
         with (mock.patch.object(shaping.os, "geteuid", return_value=0),
               mock.patch.object(shaping, "schedule_load", return_value=plan()),
