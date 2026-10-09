@@ -1,0 +1,72 @@
+name: Port Manager V1 CPU audit (read only)
+on:
+  push:
+    branches: [feat/portmanager-v2-roadmap]
+    paths:
+      - '.github/workflows/portmanager-v1-cpu-audit.yml'
+      - 'portmanager-v1/perf/**'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode immutable V1 executable and show live-sampling hotspots without execution
+        run: |
+          python3 - <<'PY'
+          import base64
+          import gzip
+          import re
+          from pathlib import Path
+          packed=Path('portmanager-dashboard/portmanager.sh.gz.b64').read_bytes()
+          source=gzip.decompress(base64.b64decode(packed)).decode('utf-8')
+          lines=source.splitlines()
+          print('V1 decoded lines:',len(lines))
+          hints = ('live', 'sample', 'iptables', 'iptables-save', 'ss ', 'tc ',
+                   'conntrack', 'sleep', '/proc/net', 'awk', 'while true',
+                   'net_', 'read_bytes', 'filter', 'window')
+          matches=[]
+          for i,line in enumerate(lines):
+              lowered=line.lower()
+              if any(x in lowered for x in hints):
+                  matches.append(i)
+          windows=set()
+          for idx in matches:
+              for j in range(max(0,idx-2),min(len(lines),idx+4)):
+                  windows.add(j)
+          print('\nV1 read-only source review with hotspots:\n')
+          for idx in sorted(windows):
+              print(f'{idx+1:03d}: {lines[idx]}')
+          print('\nEXPENSIVE KERNEL RULE PATH, ALL LINES 190..270:')
+          for i in range(189, min(270,len(lines))):
+              print(f'{i+1:03d}: {lines[i]}')
+          print('\nSHELL SYNTAX CHECK:')
+          Path('/tmp/portmanager-v1-audit.sh').write_text(source)
+          PY
+          bash -n /tmp/portmanager-v1-audit.sh
+      - name: Pure regression tests for lower-overhead V1 read-only counter monitor
+        run: |
+          python3 -m py_compile portmanager-v1/perf/fast_live.py
+          python3 -m unittest discover -v -s portmanager-v1/perf -p 'test_*.py'
+
+  fast-live-actual-v1-kernel:
+    runs-on: ubuntu-24.04
+    needs: audit
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert real V1 counter readout leaves kernel mangle/tc and cron unchanged
+        run: |
+          set -euo pipefail
+          sudo bash portmanager-dashboard/install.sh
+          sudo iptables -t mangle -S PORTMANAGER_ACCT > "$RUNNER_TEMP/mangle-before"
+          sudo tc qdisc show > "$RUNNER_TEMP/tc-before"
+          sudo crontab -l > "$RUNNER_TEMP/cron-before"
+          sudo python3 portmanager-v1/perf/fast_live.py --interval 2 --once --ipv4-only
+          sudo iptables -t mangle -S PORTMANAGER_ACCT > "$RUNNER_TEMP/mangle-after"
+          sudo tc qdisc show > "$RUNNER_TEMP/tc-after"
+          sudo crontab -l > "$RUNNER_TEMP/cron-after"
+          diff -u "$RUNNER_TEMP/mangle-before" "$RUNNER_TEMP/mangle-after"
+          diff -u "$RUNNER_TEMP/tc-before" "$RUNNER_TEMP/tc-after"
+          diff -u "$RUNNER_TEMP/cron-before" "$RUNNER_TEMP/cron-after"
+          echo "PASS: read-only V1 fast-live on real accounting kernel rules"
