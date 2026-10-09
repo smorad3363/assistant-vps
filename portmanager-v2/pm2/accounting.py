@@ -7,9 +7,10 @@ from .errors import PM2Error
 
 _COUNTER = re.compile(r"^\[(\d+):(\d+)\]$")
 _COMMENT = re.compile(r"^pm2:([a-f0-9-]{36}):(up|down)$")
+_V1_COMMENT = re.compile(r"^pm-(ul|dl):([0-9]{1,5})$")
 
 
-def parse_counters(output, by_port=False):
+def parse_counters(output, by_port=False, include_v1=False):
     """Parse one iptables-save -c -t mangle snapshot.
 
     Existing default returns (tunnel_id, proto, direction) -> bytes, preserving
@@ -24,7 +25,12 @@ def parse_counters(output, by_port=False):
         if "-A" not in args:
             continue
         index = args.index("-A")
-        if index + 1 >= len(args) or args[index + 1] != "PM2_ACCOUNT":
+        if index + 1 >= len(args):
+            continue
+        chain = args[index + 1]
+        if chain not in ("PM2_ACCOUNT", "PORTMANAGER_ACCT"):
+            continue
+        if chain == "PORTMANAGER_ACCT" and not (include_v1 and by_port):
             continue
         counted = next((x for x in args if _COUNTER.fullmatch(x)), None)
         if counted is None:
@@ -34,6 +40,21 @@ def parse_counters(output, by_port=False):
         i = args.index("--comment")
         if i + 1 >= len(args):
             raise PM2Error("E_CONFLICT", "Truncated V2 accounting comment")
+        if chain == "PORTMANAGER_ACCT":
+            v1 = _V1_COMMENT.fullmatch(args[i + 1])
+            if v1 is None:
+                # Other V1 accounting rules should not block read-only V2.
+                continue
+            direction = "up" if v1.group(1) == "ul" else "down"
+            original_port = int(v1.group(2))
+            if not 1 <= original_port <= 65535:
+                continue
+            proto = args[args.index("-p") + 1] if "-p" in args else "all"
+            if proto not in ("tcp", "udp"):
+                proto = "all"
+            key = ("v1", proto, direction, original_port)
+            data[key] = data.get(key, 0) + int(_COUNTER.fullmatch(counted).group(2))
+            continue
         owner = _COMMENT.fullmatch(args[i + 1])
         if owner is None:
             raise PM2Error("E_CONFLICT", "Unrecognized V2 accounting owner")
@@ -59,7 +80,7 @@ def parse_counters(output, by_port=False):
     return data
 
 
-def counters(by_port=False):
+def counters(by_port=False, include_v1=False):
     # One read-only kernel snapshot, not one iptables call per monitored port.
     output = run(["iptables-save", "-c", "-t", "mangle"])
-    return parse_counters(output, by_port=by_port)
+    return parse_counters(output, by_port=by_port, include_v1=include_v1)
