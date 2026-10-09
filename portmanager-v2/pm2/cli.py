@@ -18,7 +18,7 @@ import uuid
 
 from . import VERSION
 from .errors import PM2Error
-from . import services
+from . import services, tunnels
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -142,7 +142,7 @@ def status():
     return {
         "version": VERSION,
         "release_status": "development_bootstrap",
-        "tunnel_engine": "not_implemented",
+        "tunnel_engine": "development_phase2_network_engine",
         "tunnels": len(config.get("tunnels", [])) if config else 0,
         "generation": config.get("generation", 0) if config else 0,
         "v1_installed": V1_BIN.exists(),
@@ -250,6 +250,9 @@ def main(argv=None):
             response(True, "OK", "Read-only development diagnostics", data, json_mode)
         elif args.command == "status":
             response(True, "OK", "Development bootstrap status", status(), json_mode)
+        elif args.command == "tunnel":
+            details = tunnels.handle(args.operation, args.args, mutation_lock)
+            response(True, "OK", "Tunnel operation complete", details, json_mode)
         elif args.command == "limits" and args.operation == "list":
             response(True, "OK", "Bandwidth changes are unavailable in 2.0", limit_list(), json_mode)
         elif args.command == "uninstall":
