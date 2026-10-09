@@ -51,8 +51,12 @@ def apply(candidate, allow_protected=False):
     if os.geteuid():
         raise PM2Error("E_PERMISSION", "Applying V2 tunnels requires root")
     original, runtime = state()
-    report = preflight(candidate, runtime, allow_protected=allow_protected)
-    if candidate == original and runtime.get("applied_generation") == original["generation"]:
+    already_committed = (candidate == original and
+                         runtime.get("applied_generation") == original["generation"])
+    # A confirmed all-except configuration must be re-checkable/idempotent.
+    # The verified owned inventory still enforces actual kernel safety.
+    report = preflight(candidate, runtime, allow_protected=allow_protected or already_committed)
+    if already_committed:
         return {"changed": False, "generation": original["generation"], **report}
     previous = runtime.get("firewall", {})
     compiled = firewall.compile_rules(candidate)
