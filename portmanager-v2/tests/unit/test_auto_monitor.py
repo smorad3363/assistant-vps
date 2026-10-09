@@ -126,6 +126,40 @@ class AutoMonitorTests(unittest.TestCase):
             simple_ui._live()
         limits.assert_called_once_with(2053, "eth0", "udp")
 
+    def test_live_q_selection_sets_exact_port_on_selected_nic(self):
+        frame = {"rows": [{"listen_port": 2053, "protocol": "udp",
+                           "tunnel_id": "auto", "name": "Local"}],
+                 "interfaces": [{"interface": "eth0", "rx_mbps": 2,
+                                 "tx_mbps": 3},
+                                {"interface": "wgcf", "rx_mbps": 1,
+                                 "tx_mbps": 1}]}
+        def simulate(**kwargs):
+            kwargs["on_frame"](frame)
+            kwargs["on_select"](frame["rows"][0], "wgcf")
+            return 0
+        with (mock.patch.object(simple_ui, "_ask", return_value="5") as asked,
+              mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulate),
+              mock.patch.object(simple_ui, "_limit") as limits,
+              mock.patch.object(simple_ui, "_title")):
+            simple_ui._live()
+        limits.assert_called_once_with(2053, "wgcf", "udp")
+        asked.assert_called_once()
+
+    def test_live_g_sets_entire_selected_interface_limit(self):
+        frame = {"rows": [], "interfaces": [
+            {"interface": "eth0", "rx_mbps": 1, "tx_mbps": 2},
+            {"interface": "wgcf", "rx_mbps": 2, "tx_mbps": 1}]}
+        def simulate(**kwargs):
+            kwargs["on_frame"](frame)
+            kwargs["on_select"](None, "wgcf")
+            return 0
+        with (mock.patch.object(simple_ui, "_ask", return_value="5"),
+              mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulate),
+              mock.patch.object(simple_ui, "_limit") as limits,
+              mock.patch.object(simple_ui, "_title")):
+            simple_ui._live()
+        limits.assert_called_once_with(0, "wgcf")
+
     def test_warp_default_route_does_not_hide_physical_eth0(self):
         def run(argv, timeout=5):
             if argv[:3] == ["ip", "-4", "route"]:
