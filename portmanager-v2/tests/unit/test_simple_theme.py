@@ -59,6 +59,28 @@ class NewThemeTest(unittest.TestCase):
             [{"now_down_mbps": 150, "now_up_mbps": 130}])
         self.assertEqual((down, up), (0, 0))
 
+    def test_terminal_navigation_clears_previous_screen(self):
+        with (mock.patch.object(simple_ui.os, "isatty", return_value=True),
+              mock.patch.dict(simple_ui.os.environ, {"TERM": "xterm-256color"}),
+              redirect_stdout(io.StringIO()) as output):
+            simple_ui._clear_screen()
+        self.assertEqual(output.getvalue(), "\\033[2J\\033[H".replace(
+            "\\033", "\\x1b"))  # ANSI screen reset, not a newline flood
+
+    def test_ports_menu_displays_nat_without_entering_config(self):
+        old = {"chain": "PREROUTING", "protocol": "tcp", "port": "1001",
+               "target": "DNAT", "destination": "203.0.113.1:4343"}
+        with (mock.patch.object(simple_ui.config, "load",
+                                return_value={"tunnels": []}),
+              mock.patch.object(simple_ui.system_rules, "detect_nat",
+                                return_value=([old], None)),
+              mock.patch.object(simple_ui, "_ask", return_value="0"),
+              redirect_stdout(io.StringIO()) as output):
+            simple_ui._tunnel_page()
+        self.assertIn("tcp:1001", output.getvalue())
+        self.assertIn("203.0.113.1:4343", output.getvalue())
+        self.assertIn("0 tunnels created here", output.getvalue())
+
     def test_iptables_nat_includes_old_rules_but_only_readonly(self):
         text = (
             "-A PREROUTING -p tcp -m tcp --dport 8080 -j DNAT "
