@@ -90,8 +90,8 @@ jobs:
             esac
           done
           sudo test -f /etc/portmanager2/systemd-owner.json
-          sudo portmanager2 --version | grep -Fx '2.1.0-rc.1'
-          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager2 --version | grep -Fx '2.1.0-rc.2'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.2'
           sudo test -L /usr/local/bin/portmanager
           sudo portmanager2 doctor --json
           # Failure injection: refuse deletion if an owned unit was tampered.
@@ -299,7 +299,7 @@ jobs:
             sort > "$RUNNER_TEMP/v1-files-before"
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
           sudo test -L /usr/local/bin/portmanager
-          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.2'
           test "$before" = "$(sudo sha256sum /var/lib/portmanager2/legacy-v1/portmanager.v1 | cut -d' ' -f1)"
           sudo test -f /var/lib/portmanager2/legacy-v1/archive.json
           sudo crontab -l > "$RUNNER_TEMP/v1-cron-after-upgrade"
@@ -405,7 +405,7 @@ jobs:
           sudo bash portmanager-v1/legacy-install.sh
           before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
-          test "$(sudo portmanager --version)" = '2.1.0-rc.1'
+          test "$(sudo portmanager --version)" = '2.1.0-rc.2'
           sudo portmanager2 uninstall --dry-run
           set +e
           sudo portmanager2 uninstall --yes --purge > "$RUNNER_TEMP/pm2-purge.out" 2>&1
@@ -454,7 +454,7 @@ jobs:
           sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh v1
           before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh
-          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.2'
           sudo test -L /usr/local/bin/portmanager2
           test "$before" = "$(sudo sha256sum /var/lib/portmanager2/legacy-v1/portmanager.v1 | cut -d' ' -f1)"
           # With a piped installer the correct explicit argument is bash -s -- v1.
@@ -464,7 +464,7 @@ jobs:
           test "$before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           test ! -e /usr/local/bin/portmanager2
           sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh
-          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.2'
           sudo portmanager2 uninstall --yes
           test ! -L /usr/local/bin/portmanager
           sudo test -f /var/lib/portmanager2/legacy-v1/archive.json
