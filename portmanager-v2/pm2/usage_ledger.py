@@ -214,6 +214,29 @@ def format_bytes(amount):
     return f"{amount / (1024 ** 3):.4f} GiB ({amount / 1e9:.4f} GB)"
 
 
+def to_csv(result):
+    """Spreadsheet-compatible read-only export; one row per measured port."""
+    import csv
+    from io import StringIO
+    out = StringIO(newline="")
+    writer = csv.writer(out)
+    writer.writerow(["from", "to", "timezone", "protocol", "port",
+                     "download_bytes_lower", "download_bytes_upper",
+                     "upload_bytes_lower", "upload_bytes_upper",
+                     "missing_seconds", "boundary_uncertain_bytes",
+                     "overlapping_sources", "not_provider_billable"])
+    for row in result["ports"]:
+        writer.writerow([
+            result["from"], result["to"], result["timezone"],
+            row["protocol"], row["port"],
+            row["download_bytes_lower"], row["download_bytes_upper"],
+            row["upload_bytes_lower"], row["upload_bytes_upper"],
+            row["missing_seconds"], row["boundary_uncertain_bytes"],
+            row["overlapping_sources"], True
+        ])
+    return out.getvalue()
+
+
 def pretty(result):
     from datetime import timedelta
     lines = [
