@@ -69,6 +69,12 @@ jobs:
           REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           # This is an ephemeral GitHub-hosted VM, NOT a user/production server.
+          set -x
+          if [ -e /usr/local/bin/portmanager ]; then
+            v1_before="$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          else
+            v1_before="ABSENT"
+          fi
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
           sudo portmanager2 --version | grep -Fx '2.0.0-dev.1'
           sudo portmanager2 doctor --json
@@ -76,5 +82,11 @@ jobs:
           sudo portmanager2 uninstall --dry-run
           sudo portmanager2 uninstall --yes
           test ! -e /usr/local/bin/portmanager2
+          test ! -L /usr/local/bin/portmanager2
           test -f /etc/portmanager2/config.json
-          test ! -e /usr/local/bin/portmanager
+          if [ "$v1_before" = "ABSENT" ]; then
+            test ! -e /usr/local/bin/portmanager
+          else
+            test "$v1_before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          fi
+          echo "V2 bootstrap install/reinstall/uninstall checks PASS"
