@@ -1,4 +1,4 @@
-# oort Manager V2 — Tunnel Edition (`2.1.0-rc.4`)
+# oort Manager V2 — Tunnel Edition (`2.1.0-rc.5`)
 
 oort Manager V2 has its own binary (`portmanager2`), configuration, firewall
 chains, SQLite accounting database and optional services. It does not alter
@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/por
 `sudo bash v1` is not valid for piped script arguments. Use `-s -- v1`.
 See [version router guide](docs/RELEASE-ROUTER.fa.md).
 
-## Small live-screen and existing-rules fix (2.1.0-rc.4)
+## Small live-screen and existing-rules fix (2.1.0-rc.5)
 
 - Reference-style live terminal: separate download/upload cards with
   current Mbps, peak, sampled average and session total; a clean per-port
@@ -35,6 +35,19 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
   changed; unknown Docker/UFW/external rules are never deleted by the menu.
 - The same cyan-bordered compact menu cards are used for Home, IPtables
   and Configuration.
+
+## Live monitor lock and exit
+
+`q` / Esc / Ctrl+C exits Live and releases its exclusive `flock`; the
+monitor is **not** a persistent background service. An independent scheduled
+sample timer may continue running after the menu closes.
+
+If `E_LOCKED` appears, another **running** Live window holds the monitor
+lock (the lock file's mere existence is normal). The error includes a
+possible PID. Check it using `ps -fp PID`, exit that Live window, or send
+SIGTERM only to the confirmed old viewer. SIGTERM now unwinds the monitor,
+restores the terminal and removes only its own ephemeral counter rules.
+**Never** remove `/run/lock/portmanager2-view.lock` to bypass a live lock.
 
 ## Included features
 
