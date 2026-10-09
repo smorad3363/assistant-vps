@@ -14,15 +14,20 @@ V2 bootstrap, real V1+V2 coexistence, networkns TCP+UDP, activated V2 systemd,
 | AT-001 original V1 installer, AT-002 alias | PASS (Ubuntu 24.04 VM) | Real V1 and V1 alias invoked separately |
 | AT-003 V2 install/doctor/version, AT-005 reinstall | PASS (Ubuntu VM) | Root install and idempotence |
 | AT-004/006 real V1+V2 install/uninstall | PASS (Ubuntu VM) | V1 binary/data/cron/accounting/tc fingerprints unchanged |
-| AT-007 purge with V1 present | NOT TESTED | Destructive purge requires a dedicated manual VM |
+| AT-007 purge with V1 present | PASS (ephemeral Ubuntu VM) | `v1-reinstall-v2-purge`, run 37961638987; interactive PTY confirmation, V1 checksums unchanged |
 | AT-008..021 network/SSH-specific variants | PARTIAL | TCP+UDP, SNAT, reverse return, all-except and confirm tested; not exhaustive |
 | AT-022 dry-run no mutation | PARTIAL | Tunnel preview/installer dry run, not all error injections |
 | AT-023..027 reporting/shaping | PARTIAL | Two real samples, positive upload/download/rates; shaping deliberately unsupported |
-| AT-028..040 failure/reboot/compatibility | PARTIAL | Unit tamper, networkns kernel-rule reset+restore, real 120s timer; full OS reboot/legacy backend unsupported |
+| AT-028..040 failure/reboot/compatibility | PARTIAL | AT-032 V1 reinstall passed on run 37961638987; unit tamper, networkns kernel-rule reset+restore, real 120s timer; full OS reboot/legacy backend unsupported |
 | C — NAT/SSH safety | PARTIAL | Isolated network success; real SSH port-change/lockout safety still unverified |
 | D — V1/V2 coexistence | PASS on fresh Ubuntu runner | Other distributions, long-lived V1 configs still unverified |
 | E — failure injection and reboot | PARTIAL | Simulated rule loss works; full reboot and true loss-of-connectivity need VM |
 | F — publication gate | BLOCKED | User acceptance, remaining AT IDs, explicit release review |
+
+Additional acceptance evidence: [run 37961638987](https://github.com/smorad3363/assistant-vps/actions/runs/37961638987)
+(`v1-reinstall-v2-purge`): original V1 reinstalled with V2 present, then
+V2 interactive `--purge` removed only V2 paths and preserved V1 executable,
+root cron, mangle accounting chain and tc state.
 
 **Scope of claims matters.** Successful GitHub jobs do **not** prove V2 safe
 on an arbitrary active VPS with Docker, UFW, custom SSH ports or `tc` shaping.
