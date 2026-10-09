@@ -5,6 +5,9 @@ are complete. Never silently 'succeed' at a tunnel or bandwidth mutation.
 """
 
 import argparse
+import contextlib
+import errno
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -26,6 +29,25 @@ BIN = Path(os.environ.get("PM2_BIN", "/usr/local/bin/portmanager2"))
 V1_BIN = Path("/usr/local/bin/portmanager")
 REQUIRED = ("python3", "ip", "iptables", "iptables-save", "iptables-restore", "ss", "tc")
 PREFIX = "portmanager2-"
+LOCK = Path("/run/lock/portmanager2.lock")
+
+
+@contextlib.contextmanager
+def mutation_lock():
+    """Coordinate V2 installers, future firewall writers and uninstall."""
+    try:
+        fd = os.open(LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        raise PM2Error("E_APPLY", "Cannot open V2 mutation lock") from exc
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise PM2Error("E_LOCKED", "Another Port Manager V2 operation is running") from exc
+        yield
+    finally:
+        os.close(fd)
+
 
 
 def response(ok, code, message, details, json_mode):
@@ -223,8 +245,13 @@ def main(argv=None):
         elif args.command == "limits" and args.operation == "list":
             response(True, "OK", "Bandwidth changes are unavailable in 2.0", limit_list(), json_mode)
         elif args.command == "uninstall":
+            if args.dry_run:
+                details = uninstall(args)
+            else:
+                with mutation_lock():
+                    details = uninstall(args)
             response(True, "OK", "V2 removed" if not args.dry_run else "Uninstall preview",
-                     uninstall(args), json_mode)
+                     details, json_mode)
         else:
             raise PM2Error(
                 "E_UNSUPPORTED",
