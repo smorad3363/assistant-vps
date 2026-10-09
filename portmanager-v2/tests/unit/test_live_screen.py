@@ -85,6 +85,11 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIn("8085", after)
         self.assertEqual(screen.window.refreshes, 2)
 
+    def test_partial_history_is_not_claimed_as_complete_24h(self):
+        self.assertEqual(live_screen.LiveScreen._metric(100.0, 10, 86400), "100.0*")
+        self.assertEqual(live_screen.LiveScreen._metric(100.0, 86400, 86400), " 100.0")
+        self.assertEqual(live_screen.LiveScreen._metric(None, 0, 86400), "    --")
+
     def test_keyboard_quits_without_waiting_full_refresh(self):
         screen = self.make_view([ord("q")])
         screen.draw(sample())
