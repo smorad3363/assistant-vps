@@ -16,6 +16,7 @@ portmanager2 tunnel list --json
 portmanager2 tunnel show <uuid> --json
 portmanager2 tunnel check --json
 portmanager2 limits list --json
+portmanager2 limits schedule-preview --file examples/scheduled-limits.example.json --at 2026-10-12T20:00:00Z --json
 portmanager2 report --window 1h --json
 portmanager2 report --window 24h --json
 portmanager2 report --window 7d --json
@@ -67,7 +68,10 @@ sudo portmanager2 uninstall --purge    # requires interactive extra confirmation
 `portmanager2-restore.service` and `portmanager2-sample.timer`.
 `portmanager2` does not modify V1 `portmanager` or `PORTMANAGER_ACCT`.
 Bandwidth shaping mutations intentionally return an error; 2.0 has no `tc`
-root/ingress changes. JSON responses use `ok`, `code`, `message`,
+root/ingress changes. Scheduled bandwidth enforcement is planned for 2.1.
+`schedule-preview` validates time windows and reports
+`network_mutation:false`; no port limit is actually applied. See
+[ADR-0003](ADR-0003-SCHEDULED-LIMITS.md). JSON responses use `ok`, `code`, `message`,
 `details`, `request_id`; see the spec for the error codes.
 
 A refused `E_CONFLICT` / `E_ROLLBACK` must never be worked around with
