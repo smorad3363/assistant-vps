@@ -33,6 +33,24 @@ COMMIT
         self.assertEqual(aggregated[(TID, "tcp", "up")], 3200)
         self.assertEqual(len(keyed), 4)
 
+    def test_v1_monitored_ports_visible_without_v1_mutation(self):
+        raw = (
+            '[5:1000] -A PORTMANAGER_ACCT -p tcp -m comment --comment pm-ul:443\n'
+            '[7:2100] -A PORTMANAGER_ACCT -p tcp -m comment --comment pm-dl:443\n'
+            '[3:1200] -A PORTMANAGER_ACCT -m comment --comment pm-ul:2083\n'
+        )
+        counters = accounting.parse_counters(raw, by_port=True, include_v1=True)
+        self.assertEqual(counters[("v1", "tcp", "up", 443)], 1000)
+        self.assertEqual(counters[("v1", "tcp", "down", 443)], 2100)
+        self.assertEqual(counters[("v1", "all", "up", 2083)], 1200)
+        self.assertEqual(accounting.parse_counters(raw, by_port=True), {})
+        labels = port_graph.add_v1_labels({}, counters)
+        self.assertEqual(labels[("v1", "tcp", 443)], "V1 monitored")
+        self.assertEqual(port_graph.add_v1_labels({}, counters, "some-other-tunnel"), {})
+        baseline = {k: v - 100 for k, v in counters.items()}
+        rates = port_graph.deltas(baseline, counters, 2.0, labels)
+        self.assertGreater(rates[("v1", "tcp", 443)]["up"], 0)
+
     def test_counter_reset_and_first_seen_never_spike(self):
         label = {(TID, "tcp", 443): "mytunnel"}
         key = (TID, "tcp", "up", 443)
