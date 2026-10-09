@@ -36,6 +36,31 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 - The same cyan-bordered compact menu cards are used for Home, IPtables
   and Configuration.
 
+## Persistent per-port history (10m / 1h / 8h / 24h)
+
+The same install/update command now activates the owned
+`portmanager2-sample.timer` by default. Every ~60 seconds it snapshots
+TCP/UDP port counters (up to 24 autodetected local service ports plus existing
+V1/V2 tracked ports) into `traffic.sqlite3`, without opening Live.
+This is a *rate history* in Mb/s, not a claim of full-day transferred bytes.
+First minute establishes a baseline; after a reboot, counter reset, newly
+discovered port, or gap over two minutes, unavailable time is not fabricated.
+An asterisk denotes an incomplete observation window. The Live cards' `Session
+GB~` are estimates *from the currently open viewer*, not totals since boot.
+History can't recover periods before continuous sampling was enabled.
+
+```bash
+systemctl is-active portmanager2-sample.timer
+systemctl list-timers --all portmanager2-sample.timer
+journalctl -u portmanager2-sample.service -n 40 --no-pager
+```
+
+Only owned, validated `PM2_HIST_RX` / `PM2_HIST_TX` mangle counters
+are installed for long-term local-port tracking. They do not forward,
+block, or throttle packets and do not remove external firewall rules.
+`PORTMANAGER2_ENABLE_SERVICES=0` explicitly disables automatic
+activation for new installations (and does not disable an already active timer).
+
 ## Live monitor lock and exit
 
 `q` / Esc / Ctrl+C exits Live and releases its exclusive `flock`; the
