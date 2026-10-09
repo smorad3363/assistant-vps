@@ -1,83 +1,66 @@
-# Port Manager V2 command reference — 2.0.0-dev.1
+# Port Manager V2 — 2.1.0-rc.1
 
-The authoritative user story is
-[PM2-SPEC-001](PM2-SPEC-001.fa.md). CLI commands work only on an isolated
-test VM while V2 is in development. A plain `portmanager2` opens the
-interactive text menu on a TTY.
-
-## Read-only
+## Install
 
 ```bash
-portmanager2 --version
-portmanager2 help
-portmanager2 doctor --json
-portmanager2 status --json
-portmanager2 tunnel list --json
-portmanager2 tunnel show <uuid> --json
-portmanager2 tunnel check --json
-portmanager2 graph --refresh 5 --window 10m         # interactive live 10-min graphs
-portmanager2 graph --refresh 10 --all-ports         # include idle configured ports
-portmanager2 graph --refresh 5 --once --json        # machine-readable one refresh
-portmanager2 live --interval 5                      # alias for per-port viewer
-portmanager2 limits list --json
-portmanager2 limits schedule-preview --file examples/scheduled-limits.example.json --at 2026-10-12T20:00:00Z --json
-portmanager2 report --window 1h --json
-portmanager2 report --window 24h --json
-portmanager2 report --window 7d --json
-portmanager2 logs --lines 100
-portmanager2 live --interval 1
-portmanager2 backup list
-portmanager2 uninstall --dry-run
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash
+# Original V1 instead:
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- v1
 ```
 
-## Tunnel changes (root; network mutation unless `--dry-run`)
+## Network and tunnel management
 
 ```bash
+sudo portmanager2
+sudo portmanager2 doctor --json
+sudo portmanager2 tunnel list --json
 sudo portmanager2 tunnel create --name demo --listen-ip 192.0.2.11 --interface eth0 --protocol tcp,udp --mode ports --mapping 443:8443,2053:2053 --target-ip 198.51.100.10 --dry-run
 sudo portmanager2 tunnel create --name demo --listen-ip 192.0.2.11 --interface eth0 --protocol tcp,udp --mode ports --mapping 443:8443,2053:2053 --target-ip 198.51.100.10
-sudo portmanager2 tunnel update <uuid> --name demo --listen-ip 192.0.2.11 --interface eth0 --protocol tcp,udp --mode ports --mapping 443:8443 --target-ip 198.51.100.10
-sudo portmanager2 tunnel enable <uuid>
-sudo portmanager2 tunnel disable <uuid>
-sudo portmanager2 tunnel delete <uuid> --yes
+sudo portmanager2 tunnel check --json
 sudo portmanager2 tunnel apply
+sudo portmanager2 tunnel delete <uuid> --yes
 ```
 
-`all-except` example (test VM only; port 22 **must** be excluded,
-additional real SSH/service ports should be excluded):
+All-except requires `--ack-all-ports` and dedicated exclusions for SSH/admin
+ports, and produces a unique 120-second rollback confirmation token.
+
+## Per-port 10-minute live graph
 
 ```bash
-sudo portmanager2 tunnel create --name wide --listen-ip 192.0.2.11 --interface eth0 --protocol tcp,udp --mode all-except --exclude 22,2222,443 --target-ip 198.51.100.10 --ack-all-ports
-# Save pending_confirmation from the response and confirm ONLY after testing access:
-sudo portmanager2 confirm <pending_confirmation-uuid>
-# Or explicitly revert:
-sudo portmanager2 rollback-pending <pending_confirmation-uuid>
+sudo portmanager2 graph --refresh 5 --window 10m
+sudo portmanager2 graph --refresh 10 --all-ports
+sudo portmanager2 graph --refresh 5 --once --json
+sudo portmanager2 live --interval 5
+sudo portmanager2 report --window 1h --json
 ```
 
-Network-protected operations prearm a 120-second rollback watchdog.
-Never enable a new all-except rule without independent console access.
+## Timed upload/download port limits
 
-## Lifecycle, traffic, backup and removal
+Use menu option **05** or create a JSON schedule with fields listed in
+[ADR-0003](ADR-0003-SCHEDULED-LIMITS.md).
 
 ```bash
-sudo portmanager2 sample
-sudo portmanager2 restore
+sudo portmanager2 limits list --json
+sudo portmanager2 limits schedule-preview --file /tmp/my-schedule.json --json
+sudo portmanager2 limits schedule-install --file /tmp/my-schedule.json --json
+sudo portmanager2 limits schedule-list --json
+sudo portmanager2 limits schedule-apply
+```
+
+The installer automatically activates V2 systemd sample timer on a successful
+schedule installation. A **V1 installation** or foreign clsact/filters causes
+an explicit ownership conflict and no rate write. Policing may DROP packets.
+
+## Lifecycle and rollback
+
+```bash
 sudo portmanager2 backup create
-sudo portmanager2 backup restore <backup-id> --dry-run
-sudo portmanager2 backup restore <backup-id>
+sudo portmanager2 backup list
+sudo portmanager2 confirm <pending-uuid>
+sudo portmanager2 rollback-pending <pending-uuid>
+sudo portmanager2 uninstall --dry-run
 sudo portmanager2 uninstall --yes
-sudo portmanager2 uninstall --purge    # requires interactive extra confirmation
+sudo portmanager2 uninstall --purge   # requires interactive second confirmation
 ```
 
-`PORTMANAGER2_ENABLE_SERVICES=1` opt-in at install activates only owned
-`portmanager2-restore.service` and `portmanager2-sample.timer`.
-`portmanager2` does not modify V1 `portmanager` or `PORTMANAGER_ACCT`.
-Bandwidth shaping mutations intentionally return an error; 2.0 has no `tc`
-root/ingress changes. Scheduled bandwidth enforcement is planned for 2.1.
-`schedule-preview` validates time windows and reports
-`network_mutation:false`; no port limit is actually applied. See
-[ADR-0003](ADR-0003-SCHEDULED-LIMITS.md). JSON responses use `ok`, `code`, `message`,
-`details`, `request_id`; see the spec for the error codes.
-
-A refused `E_CONFLICT` / `E_ROLLBACK` must never be worked around with
-global `iptables -F`. Preserve configuration/journal/iptables evidence and
-investigate ownership on the isolated VM.
+Never use broad `iptables -F` or `tc qdisc del ... root` to repair V2.
