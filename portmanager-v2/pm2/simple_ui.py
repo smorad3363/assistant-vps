@@ -7,9 +7,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .errors import PM2Error
-from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules
+from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules, usage_ledger
 
 
 def _paint(code, text):
@@ -887,6 +889,85 @@ def _live():
     _limit(selected_port, interface, proto)
 
 
+def _usage_report():
+    """Friendly date/hour report, using only recorded byte intervals."""
+    _title("PORT USAGE")
+    _ui_edge("top")
+    _ui_line("  Check recorded upload and download for any date and time.")
+    _ui_line(_paint("93", "  Not the provider bill: missing samples and partial minutes are marked."))
+    _ui_edge("bottom")
+    zone_name = _ask("Time zone (for example Asia/Tehran)", "Asia/Tehran")
+    if not zone_name:
+        return
+    try:
+        zone = ZoneInfo(zone_name)
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
+        print("  Unknown time zone. Try UTC or Asia/Tehran.")
+        _ask("Enter to return")
+        return
+    now = datetime.now(zone).replace(second=0, microsecond=0)
+    start_default = now.replace(hour=0, minute=0)
+    start = _ask("From date/time (YYYY-MM-DD HH:MM)",
+                 start_default.strftime("%Y-%m-%d %H:%M"))
+    end = _ask("Until date/time (YYYY-MM-DD HH:MM)",
+               now.strftime("%Y-%m-%d %H:%M"))
+    port_text = _ask("Port number (ALL for all ports)", "ALL")
+    if start is None or end is None or port_text is None:
+        return
+    if port_text.upper() == "ALL":
+        port = None
+    elif port_text.isdecimal() and 1 <= int(port_text) <= 65535:
+        port = int(port_text)
+    else:
+        print("  Use ALL or a port from 1 to 65535.")
+        _ask("Enter to return")
+        return
+    result = usage_ledger.report(start, end, zone_name, port=port)
+    rows = result["ports"]
+    page = 0
+    page_size = max(3, min(8, shutil.get_terminal_size((100, 28)).lines - 16))
+    while True:
+        _title("PORT USAGE")
+        _ui_edge("top")
+        _ui_line("  " + _ui_cut(f"{start} → {end} ({zone_name})", _ui_width()-8))
+        _ui_line(_paint("96;1", "  DOWNLOAD / UPLOAD  =  recorded bytes, NOT an estimated Mbps average"))
+        _ui_line(_paint("93", "  LOWER: full samples only | UPPER: includes uncertain boundary samples"))
+        _ui_line(_paint("93", "  Missing minutes mean data unavailable, NOT zero usage."))
+        _ui_edge("rule")
+        if not rows:
+            _ui_line("  No stored byte measurements for that time.")
+            _ui_line("  Records only begin after the updated sampler starts collecting.")
+        else:
+            for item in rows[page*page_size:(page+1)*page_size]:
+                label = f'{item["protocol"].upper()}:{item["port"]}'
+                _ui_line(_paint("96;1", f"  {label:<12}") +
+                         "  ↓ " + f'{item["download_bytes_lower"]/1e9:.4f}–{item["download_bytes_upper"]/1e9:.4f} GB' +
+                         "  ↑ " + f'{item["upload_bytes_lower"]/1e9:.4f}–{item["upload_bytes_upper"]/1e9:.4f} GB')
+                _ui_line(_paint("90",
+                         f'      Unrecorded: {item["missing_seconds"]/60:.1f} min'
+                         + ("  • Partial edge" if item["boundary_uncertain_bytes"] else "")
+                         + ("  • Source overlap" if item["overlapping_sources"] else "")))
+        _ui_edge("bottom")
+        if len(rows) > page_size:
+            print(_paint("90", f"  Page {page+1}/{(len(rows)+page_size-1)//page_size}"))
+        choices = []
+        if page:
+            choices.append(("1", "Previous page"))
+        if (page+1)*page_size < len(rows):
+            choices.append(("2", "Next page"))
+        choices.extend([("3", "Choose another date or time"),
+                        ("0", "Back to home")])
+        selected = _choose(*choices)
+        if selected == "1" and page:
+            page -= 1
+        elif selected == "2" and (page+1)*page_size < len(rows):
+            page += 1
+        elif selected == "3":
+            return _usage_report()
+        else:
+            return
+
+
 def menu():
     if not os.isatty(0):
         raise PM2Error("E_VALIDATION", "Interactive Port Manager requires a terminal")
@@ -895,6 +976,7 @@ def menu():
         choice = _choose(("1", "See live traffic and control speed"),
                          ("2", "View and forward ports"),
                          ("3", "Change or remove port connections"),
+                         ("4", "See port usage by date and time"),
                          ("0", "Exit Port Manager"))
         if choice in ("0", None):
             _clear_screen()
@@ -906,6 +988,8 @@ def menu():
                 _tunnel_page()
             elif choice == "3":
                 _manage()
+            elif choice == "4":
+                _usage_report()
         except PM2Error as exc:
             print(_paint("91", f"  {exc.code}: {exc.message}"))
             _ask("Enter to continue")
