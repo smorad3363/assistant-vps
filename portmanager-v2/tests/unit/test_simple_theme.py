@@ -1,5 +1,6 @@
 """Regression checks for requested simple UI, unknown traffic and NAT rule visibility."""
 import io
+import os
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -78,7 +79,76 @@ class NewThemeTest(unittest.TestCase):
             simple_ui._tunnel_page()
         self.assertIn("tcp:1001", output.getvalue())
         self.assertIn("203.0.113.1:4343", output.getvalue())
-        self.assertIn("0 tunnels created here", output.getvalue())
+        self.assertIn("0 saved connections", output.getvalue())
+
+    def test_keyboard_down_then_enter_selects_second_option(self):
+        import termios
+        import tty
+        keys = [b"\x1b", b"[", b"B", b"\n"]
+        choices = (("1", "Traffic"), ("2", "Ports"), ("0", "Exit"))
+        with (mock.patch.object(simple_ui.sys, "stdin", mock.Mock(
+                  fileno=mock.Mock(return_value=0))),
+              mock.patch.object(simple_ui.os, "read", side_effect=keys),
+              mock.patch("select.select", return_value=([0], [], [])),
+              mock.patch.object(termios, "tcgetattr", return_value=[0]*7),
+              mock.patch.object(termios, "tcsetattr") as restored,
+              mock.patch.object(tty, "setcbreak"),
+              mock.patch.object(simple_ui, "_repaint_actions"),
+              redirect_stdout(io.StringIO())):
+            result = simple_ui._menu_key(choices, selected=0)
+        self.assertEqual(result, "2")
+        restored.assert_called_once()
+
+    def test_number_and_enter_select_direct_option(self):
+        import termios
+        import tty
+        with (mock.patch.object(simple_ui.sys, "stdin", mock.Mock(
+                  fileno=mock.Mock(return_value=0))),
+              mock.patch.object(simple_ui.os, "read", side_effect=[b"3", b"\r"]),
+              mock.patch.object(termios, "tcgetattr", return_value=[0]*7),
+              mock.patch.object(termios, "tcsetattr") as restored,
+              mock.patch.object(tty, "setcbreak"),
+              redirect_stdout(io.StringIO())):
+            result = simple_ui._menu_key(
+                (("1", "Traffic"), ("3", "Edit"), ("0", "Back")), 0)
+        self.assertEqual(result, "3")
+        restored.assert_called_once()
+
+    def test_escape_returns_safely_and_restores_tty(self):
+        import termios
+        import tty
+        with (mock.patch.object(simple_ui.sys, "stdin", mock.Mock(
+                  fileno=mock.Mock(return_value=0))),
+              mock.patch.object(simple_ui.os, "read", return_value=b"\x1b"),
+              mock.patch("select.select", return_value=([], [], [])),
+              mock.patch.object(termios, "tcgetattr", return_value=[0]*7),
+              mock.patch.object(termios, "tcsetattr") as restored,
+              mock.patch.object(tty, "setcbreak"),
+              redirect_stdout(io.StringIO())):
+            result = simple_ui._menu_key((("1", "Traffic"), ("0", "Back")), 0)
+        self.assertEqual(result, "0")
+        restored.assert_called_once()
+
+    def test_arrow_marker_changes_with_selected_row(self):
+        with redirect_stdout(io.StringIO()) as output:
+            simple_ui._ui_actions(("1", "Traffic"), ("2", "Ports"),
+                                  ("0", "Exit"), selected=1)
+        lines = output.getvalue().splitlines()
+        self.assertTrue(any("▶" in line and "[2]" in line for line in lines))
+        self.assertFalse(any("▶" in line and "[1]" in line for line in lines))
+
+    def test_long_lists_have_next_pages_and_arrow_selection(self):
+        entries = [{"name": f"Port-{i}"} for i in range(15)]
+        with (mock.patch.object(simple_ui.shutil, "get_terminal_size",
+                                return_value=os.terminal_size((100, 36))),
+              mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_choose", side_effect=["9", "2"])
+              as picked,
+              redirect_stdout(io.StringIO())):
+            selected = simple_ui._pick_row(
+                "SAVED PORTS", entries, lambda item: item["name"])
+        self.assertEqual(selected["name"], "Port-8")
+        self.assertEqual(picked.call_count, 2)
 
     def test_iptables_nat_includes_old_rules_but_only_readonly(self):
         text = (
