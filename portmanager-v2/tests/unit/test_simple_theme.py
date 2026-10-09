@@ -129,6 +129,17 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(result, "0")
         restored.assert_called_once()
 
+    def test_selected_menu_text_is_high_contrast_without_filled_background(self):
+        with (mock.patch.object(simple_ui.os, "isatty", return_value=True),
+              mock.patch.dict(simple_ui.os.environ, {"TERM": "xterm-256color"},
+                              clear=False),
+              redirect_stdout(io.StringIO()) as output):
+            simple_ui._ui_actions(("1", "Traffic"), ("2", "Ports"),
+                                  ("0", "Exit"), selected=1)
+        text = output.getvalue()
+        self.assertIn("\x1b[96;1m", text)
+        self.assertNotIn("\x1b[30;46", text)
+
     def test_arrow_marker_changes_with_selected_row(self):
         with redirect_stdout(io.StringIO()) as output:
             simple_ui._ui_actions(("1", "Traffic"), ("2", "Ports"),
