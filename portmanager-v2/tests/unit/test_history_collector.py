@@ -52,7 +52,8 @@ class HistoryCollectorTests(unittest.TestCase):
             self.assertEqual(first["samples_written"], 0)
             self.assertEqual(second["samples_written"], 1)
             self.assertEqual(third["samples_written"], 0)  # 340s downtime
-            db = sampler.connect()
+            with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
+                db = sampler.connect()
             try:
                 labels = {("auto", "tcp", 443): "test port"}
                 rows = port_graph.history(db, 1400, labels)[("auto", "tcp", 443)]
