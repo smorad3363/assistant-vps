@@ -447,13 +447,18 @@ def _list_tunnels():
     cfg = config.load(transaction.CONFIG)
     items = cfg["tunnels"]
     rules, error = system_rules.detect_nat(limit=200)
+    # Keep the action menu on-screen even with hundreds of port rules.
+    height = shutil.get_terminal_size((100, 28)).lines
+    budget = max(4, min(10, height - 18))
+    saved_preview = min(len(items), max(2, budget // 2))
+    rules_preview = max(2, budget - saved_preview)
     _ui_edge("top", width)
     _ui_line(_paint("96;1", " ▤  PORTS AND CONNECTIONS ON THIS SERVER"))
     _ui_line(_paint("90", "    See where your ports send traffic. Nothing changes on this page."))
     _ui_edge("rule", width)
     if items:
         _ui_line(_paint("96;1", " ── PORT CONNECTIONS SAVED HERE ──"))
-        for i, t in enumerate(items, 1):
+        for i, t in enumerate(items[:saved_preview], 1):
             ports = ("ALL except " + ",".join(map(str, t["exclude"]))
                      if t["mode"] == "all-except" else
                      ",".join(f'{p["listen_port"]}→{p["target_port"]}'
@@ -464,6 +469,8 @@ def _list_tunnels():
             _ui_line(f"  {i:>2}. " + _paint("96;1", name) + "  " +
                      _paint("97", _ui_cut(ports, max(10, width - 65))) +
                      "  → " + _paint("95;1", dest) + "  " + state)
+        if len(items) > saved_preview:
+            _ui_line(_paint("90", f"  + {len(items) - saved_preview} more saved connections; choose Change / Remove to browse"))
     else:
         _ui_line(_paint("97", f"  {len(items)} saved connections  |  {len(rules)} existing network rules"))
     _ui_line("")
@@ -471,11 +478,13 @@ def _list_tunnels():
     _ui_line(_paint("90", _ui_cut(_ui_header_row(width), width - 5)))
     _ui_edge("rule", width)
     if rules:
-        for i, rule in enumerate(rules, 1):
+        for i, rule in enumerate(rules[:rules_preview], 1):
             _ui_record(i, rule["chain"],
                        f'{rule["protocol"]}:{rule["port"]}',
                        rule["target"], rule["destination"],
                        interface=rule.get("interface", "-"))
+        if len(rules) > rules_preview:
+            _ui_line(_paint("90", f"  + {len(rules) - rules_preview} more rules; choose See existing port rules to browse"))
     elif error:
         _ui_line(_paint("93", "  " + _ui_cut(error, width - 8)))
     else:
