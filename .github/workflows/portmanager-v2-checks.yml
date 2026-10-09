@@ -429,7 +429,7 @@ jobs:
       - name: Debian dependencies for static and graph checks
         run: |
           apt-get update -qq
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git python3 python3-minimal ca-certificates coreutils
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git python3 python3-minimal ca-certificates coreutils procps iptables iproute2
       - uses: actions/checkout@v4
       - name: Compile all V2 modules and validate time-window graph on Debian
         env:
