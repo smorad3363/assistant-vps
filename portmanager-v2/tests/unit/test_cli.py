@@ -90,6 +90,15 @@ class CLITests(TestCase):
                 self.assertEqual(code, 5)
                 self.assertIn("E_CONFLICT", err)
 
+    def test_mutation_lock_rejects_parallel_writer(self):
+        with tempfile.TemporaryDirectory() as t:
+            with mock.patch.object(cli, "LOCK", Path(t) / "pm2.lock"):
+                with cli.mutation_lock():
+                    with self.assertRaises(cli.PM2Error) as caught:
+                        with cli.mutation_lock():
+                            pass
+                self.assertEqual(caught.exception.code, "E_LOCKED")
+
     def test_invalid_schema_fails_closed(self):
         with tempfile.TemporaryDirectory() as t:
             etc = Path(t)
