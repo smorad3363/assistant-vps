@@ -1,86 +1,79 @@
-# Port Manager V2 — Tunnel Edition (`2.0.0-dev.1`)
+# Port Manager V2 — Tunnel Edition (`2.1.0-rc.1`)
 
-**Development / pre-release. Not yet approved for production.**
-V2 is a separate IPv4 NAT port-forwarding tool, **not an encrypted VPN**.
-No source files under `portmanager-dashboard/**` (stable V1) are changed.
+Port Manager V2 has its own binary (`portmanager2`), configuration, firewall
+chains, SQLite accounting database and optional services. It does not alter
+the original V1 executable or compressed V1 payload.
 
-## Version separation (after PR acceptance)
+## One shared installer URL (after merging this branch)
 
-| Installer | Destination | Role |
-| --- | --- | --- |
-| `master/portmanager-dashboard/install.sh` | V1 / `portmanager` | **Original URL stays unchanged** |
-| `master/portmanager-v1/install.sh` | V1 / `portmanager` | New alias to original V1 |
-| `master/portmanager-v2/install.sh` | V2 / `portmanager2` | Separate V2; valid **only once PR merges** |
-
-The current V2 code is available **only on** the protected-in-review
-`feat/portmanager-v2-roadmap` development branch. Do not try the V2 master URL
-before release. Full instructions to clone a pinned commit, test and uninstall
-on a disposable VM: [راهنمای آزمون فارسی](docs/OPERATOR-TEST-FA.md).
-
-## Implemented in the development branch
-
-- Strict IPv4 tunnel CRUD, TCP/UDP individual port mappings, and `all-except`
-  with explicit acknowledgment, existing-listener inspection and reserved SSH
-  fallback port 22.
-- V2-only `PM2_*` NAT, filter, mangle and accounting chains (no global flush);
-  conntrack scoped SNAT and bidirectional forwarding.
-- Full read-only previews, SHA256 file ownership, safety checks for V1 and
-  foreign rules, undo journal and rollback on recognized failures.
-- Dangerous binding/all-except changes: prearmed 120-second `systemd-run`
-  rollback and a unique confirmation ID. A failed/unknown rollback preserves
-  recovery evidence instead of pretending success.
-- SQLite sampling, upload/download reports for 1h/24h/7d, live rates,
-  separate JSON audit log, config backups, and a text-based tunnel manager.
-- Optional `systemd` V2-only restore + minute sampler services. **They are
-  disabled by default** and require explicit installer opt-in. No V1 cron
-  installation and no V1 `tc` changes.
-- V2-only IPv4 `sysctl.d` forwarding drop-in; uninstall never turns off a
-  possibly shared live `net.ipv4.ip_forward`.
-- Shaping and quotas are intentionally out of scope for V2 2.0; planned for
-  2.1 and must not overwrite any existing `tc` qdisc.
-- **Per-port LIVE 10-minute graph:** `portmanager2 graph --refresh 5 --window 10m`
-  (and menu option 04) displays configured V2 and already-monitored V1 ports
-  without modifying V1. It shows current up/down Mbit/s, time-weighted
-  ten-minute means with truthful sample coverage, 24-bucket sparklines,
-  selectable 2..60s refresh and an automatic polling backoff on large
-  accounting tables. Only one read-only iptables-save mangle snapshot is read
-  each refresh; bounded SQLite history survives viewer restarts. See
-  [live graph guide](docs/LIVE-PORT-GRAPH-FA.md).
-- A **read-only scheduled-limit preview** is implemented in
-  `pm2/limit_windows.py`, including weekdays, IANA timezone, overnight
-  windows, overlap rejection and DST handling. **It does not actually throttle
-  traffic in 2.0**. 2.1 enforcement must prove exclusive qdisc ownership.
-  See [scheduled-limit ADR](docs/ADR-0003-SCHEDULED-LIMITS.md).
-
-## Useful CLI (after installing on a disposable VM)
+**Default V2:**
 
 ```bash
-portmanager2                        # text menu on a TTY
-portmanager2 help
-portmanager2 doctor --json
-portmanager2 tunnel list --json
-portmanager2 tunnel create --dry-run --name test --listen-ip 192.0.2.11 --interface eth0 --protocol tcp --mode ports --mapping 443:8443 --target-ip 198.51.100.10
-portmanager2 tunnel check --json
-portmanager2 report --window 1h --json
-portmanager2 backup list
-portmanager2 limits list --json     # enforcement unavailable/2.1
-portmanager2 limits schedule-preview --file examples/scheduled-limits.example.json --at 2026-10-12T20:00:00Z --json  # read-only
-sudo portmanager2 uninstall --dry-run
-sudo portmanager2 uninstall --yes   # retains V2 config/data
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash
 ```
 
-Current evidence: [GitHub Actions run 37960307468](https://github.com/smorad3363/assistant-vps/actions/runs/37960307468)
-passed static/unit (48 tests per Python), real V1/V2 coexistence, networkns
-TCP+UDP round trip, guard rollback and 120s timer, and activated systemd on
-fresh GitHub Ubuntu VMs. **A full guest reboot, real multi-host reliability,
-IPv6 behavior, legacy iptables and user acceptance are still not certified.**
+**Explicit V1:**
 
-V1 users seeing CPU spikes after `portmanager live 1` can consult the
-[read-only V1 profiler and lower-overhead viewer](../portmanager-v1/perf/README.fa.md).
-V1's original installer and executable remain frozen.
+```bash
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- v1
+```
 
-See [PM2-SPEC-001](docs/PM2-SPEC-001.fa.md),
-[progress checkpoint](docs/PROGRESS.md),
-[test matrix](docs/TEST-MATRIX.md), [CLI contract](docs/CLI.md) and
-[operator test guide](docs/OPERATOR-TEST-FA.md). PR must remain draft until
-all release gates pass.
+`sudo bash v1` is not valid for piped script arguments. Use `-s -- v1`.
+See [version router guide](docs/RELEASE-ROUTER.fa.md).
+
+## Included features
+
+- TCP/UDP IPv4 NAT tunnels, individual port forwarding or all-except mode.
+- Protected all-except/management binding changes with timed rollback and
+  explicit confirmation identifier; no blanket firewall flush.
+- Live per-port 10-minute time-weighted moving-average sparklines, read-only
+  V1 and V2 accounting, selectable refresh 2–60 seconds and CPU-aware backoff.
+- SQLite 1h/24h/7d reporting, root-only backups, CLI and text menu.
+- **V2-only timed port limits:** `tc clsact` flower policing for a tunnel's
+  inbound upload and outbound download using IANA timezone, week days and
+  HH:MM start/end. A minute systemd timer reconciles desired limits.
+- All tc shaping operations are isolated to V2-owned clsact. If V1 or a
+  foreign clsact is present, V2 rejects the limiter with `E_CONFLICT`.
+  A limiter here is drop/policing, not HTB queued shaping.
+- V2 installer checks SHA256 manifest, pins a commit and maintains release
+  ownership markers. V1 remains separately installed and executable.
+
+### Terminal monitor
+
+```bash
+sudo portmanager2
+sudo portmanager2 graph --refresh 5 --window 10m
+sudo portmanager2 graph --refresh 10 --all-ports
+sudo portmanager2 report --window 24h --json
+```
+
+### Time-based bandwidth limits
+
+Choose option 05 in `sudo portmanager2` for a validated schedule wizard.
+Or use the [JSON example](examples/scheduled-limits.example.json):
+
+```bash
+sudo portmanager2 limits schedule-preview --file /path/to/schedules.json --json
+sudo portmanager2 limits schedule-install --file /path/to/schedules.json --json
+sudo portmanager2 limits schedule-list
+sudo portmanager2 limits schedule-apply
+```
+
+Scheduling requires an enabled V2 `ports` tunnel and **no V1 installation**.
+The schedule-install command activates V2's own sample timer. Policing may
+drop excess packets, so test on a disposable VPS before production. Deleting
+V2 removes only its recorded clsact filters after ownership preflight.
+
+## Release status
+
+This is a **release candidate**, not a production guarantee. Automated CI
+tests exercise Debian 12 userspace, Ubuntu networking with isolated
+namespaces, firewall rollback and tc filters; a complete guest reboot
+with real SSH loss, custom Docker rules and production performance must still
+be qualified by an operator with snapshot and alternate console.
+
+[Detailed specification](docs/PM2-SPEC-001.fa.md) ·
+[Time-window rate limits](docs/ADR-0003-SCHEDULED-LIMITS.md) ·
+[Graph guide](docs/LIVE-PORT-GRAPH-FA.md) ·
+[Operator test guide](docs/OPERATOR-TEST-FA.md) ·
+[Progress checkpoint](docs/PROGRESS.md).
