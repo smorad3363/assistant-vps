@@ -138,6 +138,14 @@ def init_history(db):
         PRIMARY KEY (sample_end,tunnel_id,protocol,listen_port)
     )""")
     db.execute("CREATE INDEX IF NOT EXISTS idx_pm2_port_live_time ON port_live_samples(sample_end)")
+    db.execute("""CREATE TABLE IF NOT EXISTS port_live_minutes (
+        bucket_end REAL NOT NULL, tunnel_id TEXT NOT NULL,
+        protocol TEXT NOT NULL, listen_port INTEGER NOT NULL,
+        duration_seconds REAL NOT NULL, up_mbps REAL NOT NULL,
+        down_mbps REAL NOT NULL,
+        PRIMARY KEY(bucket_end,tunnel_id,protocol,listen_port)
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_pm2_port_minutes_time ON port_live_minutes(bucket_end)")
 
 
 def record(db, timestamp, elapsed, rates):
@@ -149,23 +157,54 @@ def record(db, timestamp, elapsed, rates):
             db.execute(
                 "INSERT OR REPLACE INTO port_live_samples VALUES(?,?,?,?,?,?,?)",
                 (timestamp, tid, proto, port, elapsed, row["up"], row["down"]))
-        # Bounded history: only trailing 10 minutes, retain records overlapping
-        # a bucket at the cutoff, and do not accumulate forever.
+        # Keep exact 5-second resolution for recent 20m. Older complete
+        # minutes are compressed to one weighted row so 24h history does not
+        # require scanning ~1 million raw records on every 5-second redraw.
+        compact_before = (int((timestamp - 1200) // 60)) * 60
+        older = db.execute(
+            "SELECT CAST(sample_end/60 AS INTEGER)*60+60 AS bucket_end,"
+            "tunnel_id,protocol,listen_port,SUM(duration_seconds),"
+            "SUM(up_mbps*duration_seconds),SUM(down_mbps*duration_seconds) "
+            "FROM port_live_samples WHERE sample_end < ? "
+            "GROUP BY bucket_end,tunnel_id,protocol,listen_port",
+            (compact_before,)).fetchall()
+        for bucket, tid, proto, port, duration, up_total, down_total in older:
+            if duration:
+                db.execute(
+                    "INSERT OR REPLACE INTO port_live_minutes VALUES(?,?,?,?,?,?,?)",
+                    (bucket, tid, proto, port, duration,
+                     up_total / duration, down_total / duration))
         db.execute("DELETE FROM port_live_samples WHERE sample_end < ?",
+                   (compact_before,))
+        db.execute("DELETE FROM port_live_minutes WHERE bucket_end < ?",
                    (timestamp - RETENTION - 60,))
 
 
 def history(db, timestamp, labels):
+    """Bounded 24h minutes + exact recent raw samples, no full-day raw scans."""
     init_history(db)
     series = defaultdict(list)
-    for end, tid, proto, port, duration, up, down in db.execute(
+    cutoff = timestamp - RETENTION
+    raw = db.execute(
         "SELECT sample_end,tunnel_id,protocol,listen_port,duration_seconds,"
         "up_mbps,down_mbps FROM port_live_samples "
         "WHERE sample_end >= ? AND sample_end <= ? ORDER BY sample_end",
-        (timestamp - RETENTION, timestamp)):
+        (cutoff, timestamp))
+    for end, tid, proto, port, duration, up, down in raw:
         key = (tid, proto, port)
         if key in labels:
             series[key].append((end, duration, up, down))
+    minute_rows = db.execute(
+        "SELECT bucket_end,tunnel_id,protocol,listen_port,duration_seconds,"
+        "up_mbps,down_mbps FROM port_live_minutes "
+        "WHERE bucket_end >= ? AND bucket_end <= ? ORDER BY bucket_end",
+        (cutoff, timestamp))
+    for end, tid, proto, port, duration, up, down in minute_rows:
+        key = (tid, proto, port)
+        if key in labels:
+            series[key].append((end, duration, up, down))
+    for key in series:
+        series[key].sort(key=lambda item: item[0])
     return series
 
 
