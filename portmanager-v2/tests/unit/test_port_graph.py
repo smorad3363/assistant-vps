@@ -175,11 +175,13 @@ COMMIT
             with (mock.patch.object(port_graph.transaction, "CONFIG", p / "config.json"),
                   mock.patch.object(sampler, "DB", p / "traffic.sqlite3"),
                   mock.patch.object(port_graph.os, "geteuid", return_value=0),
+                  mock.patch.object(port_graph.auto_monitor, "AutoMonitor") as monitor,
                   mock.patch.object(port_graph.time, "sleep", return_value=None),
                   mock.patch.object(port_graph.accounting, "counters", side_effect=[
                       {(TID, "tcp", "up", 443): 10},
                       {(TID, "tcp", "up", 443): 125010},
                   ]) as counted):
+                monitor.return_value.__enter__.return_value.ports = []
                 from contextlib import redirect_stdout
                 output = io.StringIO()
                 with redirect_stdout(output):
