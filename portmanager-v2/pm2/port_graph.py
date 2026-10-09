@@ -43,12 +43,22 @@ def port_labels(tunnels):
     return labels
 
 
+def add_v1_labels(labels, snapshot, tunnel_filter=None):
+    """Frozen V1 accounting chain is read only and can share this graph."""
+    if tunnel_filter not in (None, "v1"):
+        return labels
+    for tid, proto, _direction, port in snapshot:
+        if tid == "v1" and port is not None:
+            labels.setdefault((tid, proto, port), "V1 monitored")
+    return labels
+
+
 def key_from_counter(raw):
     """Normalize (tunnel,proto,direction,original_port|None) counter keys."""
     if len(raw) != 4:
         raise PM2Error("E_VALIDATION", "Expected per-port V2 accounting counters")
     tid, proto, direction, port = raw
-    if direction not in ("up", "down") or proto not in ("tcp", "udp"):
+    if direction not in ("up", "down") or proto not in ("tcp", "udp", "all"):
         raise PM2Error("E_VALIDATION", "Invalid V2 graph counter key")
     if port is not None and not 1 <= port <= 65535:
         raise PM2Error("E_VALIDATION", "Invalid original port")
@@ -168,7 +178,8 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
         result.append({
             "tunnel_id": tid, "name": name, "protocol": proto,
             "listen_port": port if port else None,
-            "scope": "original_port" if port else "all_except_aggregate",
+            "scope": ("v1_monitored_port" if tid == "v1" else
+                      "original_port" if port else "all_except_aggregate"),
             "now_up_mbps": recent["up"], "now_down_mbps": recent["down"],
             "avg10m_up_mbps": avg["up"], "avg10m_down_mbps": avg["down"],
             "coverage_seconds": round(avg["coverage"], 2),
@@ -217,14 +228,16 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
     db = sampler.connect()
     try:
         t0 = time.monotonic()
-        before = accounting.counters(by_port=True)
+        before = accounting.counters(by_port=True, include_v1=True)
+        labels = add_v1_labels(labels, before, tunnel)
         cost = time.monotonic() - t0
         interval = refresh_interval(refresh, len(before), cost)
         while True:
             try:
                 time.sleep(interval)
                 t1 = time.monotonic()
-                after = accounting.counters(by_port=True)
+                after = accounting.counters(by_port=True, include_v1=True)
+                labels = add_v1_labels(labels, after, tunnel)
                 t2 = time.monotonic()
                 elapsed = max(0.001, t2 - t0)
                 effective = refresh_interval(refresh, len(after), t2 - t1)
@@ -255,6 +268,7 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                     if tunnel:
                         labels = {key: v for key, v in labels.items()
                                   if key[0] == tunnel}
+                    labels = add_v1_labels(labels, after, tunnel)
                     next_reload = now + 30
             except KeyboardInterrupt:
                 print("\nGraph stopped. No firewall/tc changes.")
