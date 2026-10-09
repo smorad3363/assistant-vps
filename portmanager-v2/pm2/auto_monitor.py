@@ -129,31 +129,47 @@ def _expected_hook(builtin, chain):
 
 
 def _valid_counter(line, chain, direction):
-    args = shlex.split(line)
-    if len(args) != 14 or args[:2] != ["-A", chain]:
+    """Accept only whitelisted match conditions, regardless of nft/legacy order.
+
+    iptables-nft often inserts another '-m tcp' while reformatting -S output;
+    positional/length matching could falsely classify our rule as foreign and
+    prevent safe owned cleanup. Reject all non-whitelisted matches/targets.
+    """
+    try:
+        args = shlex.split(line)
+    except ValueError:
         return False
-    # Netfilter canonical order may differ between nft and legacy backends;
-    # enforce *all* non-dynamic semantics and forbid any packet target.
-    if "-j" in args or "-g" in args or "--dport" in args:
+    if args[:2] != ["-A", chain] or len(args) < 14:
         return False
-    # Exact rule signature avoids ever deleting unrelated service rules.
-    if args[2:6] not in (["-p", "tcp", "-m", "conntrack"],
-                         ["-p", "udp", "-m", "conntrack"]):
+    fields = {"-p": [], "-m": [], "--ctdir": [],
+              "--ctorigdstport": [], "--comment": []}
+    tokens = args[2:]
+    if len(tokens) % 2:
         return False
-    if args[6] != "--ctdir" or args[8] != "--ctorigdstport" or args[10:13] != ["-m", "comment", "--comment"]:
+    for i in range(0, len(tokens), 2):
+        flag, val = tokens[i:i+2]
+        if flag not in fields:
+            return False
+        fields[flag].append(val)
+    if (len(fields["-p"]) != 1 or len(fields["--ctdir"]) != 1 or
+            len(fields["--ctorigdstport"]) != 1 or
+            len(fields["--comment"]) != 1):
+        return False
+    proto = fields["-p"][0]
+    modules = fields["-m"]
+    if proto not in ("tcp", "udp") or not {"conntrack", "comment"}.issubset(modules):
+        return False
+    if any(m not in ("conntrack", "comment", proto) for m in modules) or len(modules) > 3:
         return False
     try:
-        proto = args[args.index("-p") + 1]
-        owner = args[args.index("--comment") + 1]
-        ct = args[args.index("--ctdir") + 1]
-        port = int(args[args.index("--ctorigdstport") + 1])
-    except (IndexError, ValueError):
+        port = int(fields["--ctorigdstport"][0])
+    except ValueError:
         return False
-    match = _COMMENT.fullmatch(owner)
-    return bool(match and match.group(1) == proto and
-                int(match.group(2)) == port and match.group(3) == direction and
-                ct == CHAINS[direction][2] and
-                proto in ("tcp", "udp") and 1 <= port <= 65535)
+    owner = _COMMENT.fullmatch(fields["--comment"][0])
+    return bool(owner and owner.group(1) == proto and
+                int(owner.group(2)) == port and owner.group(3) == direction and
+                fields["--ctdir"][0] == CHAINS[direction][2] and
+                1 <= port <= 65535)
 
 
 def _inspect():
@@ -174,9 +190,11 @@ def _inspect():
             if hooks:
                 raise PM2Error("E_CONFLICT", "Orphaned monitor hook")
             continue
-        if not all(_valid_counter(x, chain, direction) for x in rules if x.startswith("-A ")):
+        invalid = [x for x in rules if x.startswith("-A ") and
+                   not _valid_counter(x, chain, direction)]
+        if invalid:
             raise PM2Error("E_CONFLICT", "Foreign rule in owned live monitor chain",
-                           {"chain": chain})
+                           {"chain": chain, "first_rule": invalid[0][:400]})
         present.append((builtin, chain, bool(hooks)))
     return present
 
