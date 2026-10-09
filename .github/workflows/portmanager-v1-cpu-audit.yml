@@ -4,6 +4,7 @@ on:
     branches: [feat/portmanager-v2-roadmap]
     paths:
       - '.github/workflows/portmanager-v1-cpu-audit.yml'
+      - 'portmanager-v1/perf/**'
   workflow_dispatch:
 jobs:
   audit:
@@ -43,3 +44,7 @@ jobs:
           Path('/tmp/portmanager-v1-audit.sh').write_text(source)
           PY
           bash -n /tmp/portmanager-v1-audit.sh
+      - name: Pure regression tests for lower-overhead V1 read-only counter monitor
+        run: |
+          python3 -m py_compile portmanager-v1/perf/fast_live.py
+          python3 -m unittest discover -v -s portmanager-v1/perf -p 'test_*.py'
