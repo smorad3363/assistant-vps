@@ -36,6 +36,9 @@ jobs:
           print('\nV1 read-only source review with hotspots:\n')
           for idx in sorted(windows):
               print(f'{idx+1:03d}: {lines[idx]}')
+          print('\nEXPENSIVE KERNEL RULE PATH, ALL LINES 190..270:')
+          for i in range(189, min(270,len(lines))):
+              print(f'{i+1:03d}: {lines[i]}')
           print('\nSHELL SYNTAX CHECK:')
           Path('/tmp/portmanager-v1-audit.sh').write_text(source)
           PY
