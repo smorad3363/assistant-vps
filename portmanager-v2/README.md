@@ -2,6 +2,7 @@
 
 > **NOT READY FOR PRODUCTION.** Current version: `2.0.0-dev.1`.
 > Phase-1 bootstrap only. No tunnel, NAT, shaping or telemetry is implemented.
+> It installs **disabled** systemd unit templates but never starts or enables them.
 
 Port Manager V2 is a separate IPv4 NAT-forwarding application to be developed
 alongside the original Port Manager V1. **NAT is not an encrypted VPN.**
@@ -36,7 +37,8 @@ only**, using a pinned commit in `PORTMANAGER2_REF`. Never run on production.
 - `portmanager2 status --json`
 - `portmanager2 limits list --json` (reports unavailable)
 - `portmanager2 uninstall --dry-run`
-- `sudo portmanager2 uninstall --yes` (retains V2 config/data)
+- `sudo portmanager2 uninstall --yes` (removes only verified V2 units
+  and V2 launcher/release; retains V2 config/data)
 - `sudo portmanager2 uninstall --purge` (interactive double confirmation)
 
 All unfinished tunnel, traffic and bandwidth-changing commands return
