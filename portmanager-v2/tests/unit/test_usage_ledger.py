@@ -53,6 +53,15 @@ class PortUsageTests(unittest.TestCase):
         self.assertTrue(items[0]["overlapping_sources"])
         self.assertEqual(len(items[0]["sources"]), 1)
 
+    def test_legacy_combined_tcp_udp_port_is_reported(self):
+        rows = [(0, 60, "v1", "all", 2083, 100, 220),
+                (0, 60, "v1", "all", 0, 500000, 500000)]
+        entries = usage_ledger.summarize(rows, 0, 60)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["protocol"], "all")
+        self.assertEqual(entries[0]["port"], 2083)
+        self.assertEqual(entries[0]["total_bytes_lower"], 320)
+
     def test_port_zero_aggregates_excluded(self):
         rows = [(0, 60, "v1", "all", 0, 100000, 200000),
                 (0, 60, "auto", "tcp", 22, 10, 15)]
