@@ -111,7 +111,7 @@ def summarize(intervals, start, end):
     """
     candidates = defaultdict(list)
     for a, b, source, proto, port, up, down in intervals:
-        if proto not in ("tcp", "udp") or port <= 0:
+        if proto not in ("tcp", "udp", "all") or port <= 0:
             continue
         if a < b and b > start and a < end:
             candidates[(proto, port)].append((a, b, source, int(up), int(down)))
@@ -188,7 +188,7 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
         grouped = summarize(rows, start, end)
         note = [
             "IPv4 monitored ports only; IPv6, unmatched ports and traffic of other networks may be absent.",
-            "Counters are per original TCP/UDP port; NAT/bridges and overlapping sources may double-count across ports.",
+            "Counters are per original TCP/UDP port (or legacy combined-protocol counter). NAT/bridges can overlap; no combined billable total is asserted.",
             "Intervals crossing requested endpoints have unknown intra-minute distribution; lower/upper bounds are shown.",
             "A missing interval is NOT zero traffic. This is not a provider billing reconciliation.",
             "Only data sampled after this byte ledger was enabled are available; older Mbps graphs are not billing data.",
@@ -202,8 +202,6 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
         return {
             "from": from_time, "to": to_time, "timezone": tz_name,
             "interval_seconds": end - start, "ports": grouped,
-            "all_port_sum_bytes_lower": sum(x["total_bytes_lower"] for x in grouped),
-            "all_port_sum_bytes_upper": sum(x["total_bytes_upper"] for x in grouped),
             "intervals_read": len(rows), "warnings": note,
             "not_provider_billable": True,
         }
