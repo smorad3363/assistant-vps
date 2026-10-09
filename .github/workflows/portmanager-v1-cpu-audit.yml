@@ -1,0 +1,42 @@
+name: Port Manager V1 CPU audit (read only)
+on:
+  push:
+    branches: [feat/portmanager-v2-roadmap]
+    paths:
+      - '.github/workflows/portmanager-v1-cpu-audit.yml'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode immutable V1 executable and show live-sampling hotspots without execution
+        run: |
+          python3 - <<'PY'
+          import base64
+          import gzip
+          import re
+          from pathlib import Path
+          packed=Path('portmanager-dashboard/portmanager.sh.gz.b64').read_bytes()
+          source=gzip.decompress(base64.b64decode(packed)).decode('utf-8')
+          lines=source.splitlines()
+          print('V1 decoded lines:',len(lines))
+          hints = ('live', 'sample', 'iptables', 'iptables-save', 'ss ', 'tc ',
+                   'conntrack', 'sleep', '/proc/net', 'awk', 'while true',
+                   'net_', 'read_bytes', 'filter', 'window')
+          matches=[]
+          for i,line in enumerate(lines):
+              lowered=line.lower()
+              if any(x in lowered for x in hints):
+                  matches.append(i)
+          windows=set()
+          for idx in matches:
+              for j in range(max(0,idx-2),min(len(lines),idx+4)):
+                  windows.add(j)
+          print('\nV1 read-only source review with hotspots:\n')
+          for idx in sorted(windows):
+              print(f'{idx+1:03d}: {lines[idx]}')
+          print('\nSHELL SYNTAX CHECK:')
+          Path('/tmp/portmanager-v1-audit.sh').write_text(source)
+          PY
+          bash -n /tmp/portmanager-v1-audit.sh
