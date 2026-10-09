@@ -55,6 +55,8 @@ def apply(candidate):
                "desired_generation": candidate["generation"], "previous_firewall": previous}
     config.atomic_json(PENDING, journal)
     applied = None
+    completed = False
+    rollback_completed = False
     try:
         applied = firewall.reconcile(compiled, previous)
         next_state = dict(runtime)
@@ -67,6 +69,7 @@ def apply(candidate):
         # Save new state then candidate config; failure -> attempt owned rollback.
         config.atomic_json(STATE, next_state)
         config.atomic_json(CONFIG, candidate)
+        completed = True
     except Exception as exc:
         try:
             if applied is not None:
@@ -74,6 +77,7 @@ def apply(candidate):
                                     for table, chain in firewall.ORDER}, applied)
             config.atomic_json(STATE, runtime)
             config.atomic_json(CONFIG, original)
+            rollback_completed = True
         except Exception as rollback_exc:
             raise PM2Error("E_ROLLBACK", "Failed to restore transaction state",
                            {"cause": str(exc), "rollback": str(rollback_exc)}) from rollback_exc
@@ -82,7 +86,7 @@ def apply(candidate):
         raise PM2Error("E_APPLY", "Tunnel transaction failed", {"error": str(exc)}) from exc
     finally:
         # Do not erase recovery evidence if we cannot know rollback succeeded.
-        if applied is not None and (CONFIG.exists() and not PENDING.is_symlink()):
+        if (completed or rollback_completed) and not PENDING.is_symlink():
             PENDING.unlink(missing_ok=True)
     return {"changed": True, "generation": candidate["generation"],
             "tunnels": len(candidate["tunnels"]), **report}
