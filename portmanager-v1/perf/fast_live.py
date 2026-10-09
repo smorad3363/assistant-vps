@@ -83,6 +83,14 @@ def delta(previous, current, elapsed):
     return sorted(result, key=lambda item: -(item[1] + item[2]))
 
 
+def adjusted_interval(requested, rule_count, snapshot_cost):
+    """Avoid hammering a large V1 mangle ruleset under traffic."""
+    minimum = 30 if rule_count >= 8000 else 10 if rule_count >= 1000 else 2
+    if snapshot_cost >= 1.0:
+        minimum = max(minimum, round(snapshot_cost * 5))
+    return min(300, max(requested, minimum))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="V1 read-only CPU-safe rate viewer")
     p.add_argument("--interval", type=float, default=5.0,
@@ -100,21 +108,24 @@ def main(argv=None):
     try:
         previous, count, spent = snapshot(binaries)
         sample_time = time.monotonic()
-        if count > 1024 and args.interval < 10:
-            print(f"High V1 rule count ({count}). Increase --interval to >=10 s "
-                  "and audit packet-path CPU costs.", file=sys.stderr)
+        interval = adjusted_interval(args.interval, count, spent)
+        if interval > args.interval:
+            print(f"Safety backoff: {count} V1 accounting rules, "
+                  f"{spent:.3f}s snapshot cost; using {interval:g}s "
+                  f"instead of requested {args.interval:g}s.", file=sys.stderr)
         while True:
-            time.sleep(args.interval)
+            time.sleep(interval)
             now, count, cost = snapshot(binaries)
             next_time = time.monotonic()
             elapsed = max(0.001, next_time - sample_time)
             rows = delta(previous, now, elapsed)
-            print(f"\nV1 FAST LIVE — {args.interval:g}s target, {count} counter rules "
+            print(f"\nV1 FAST LIVE — {interval:g}s target, {count} counter rules "
                   f"({cost:.3f}s read-only snapshot)")
             print("   PORT   DL Mbit/s   UL Mbit/s")
             for port, down, up in rows[:args.top]:
                 print(f"{port:7d} {down:11.2f} {up:11.2f}")
             previous, sample_time = now, next_time
+            interval = adjusted_interval(args.interval, count, cost)
             if args.once:
                 break
     except KeyboardInterrupt:
