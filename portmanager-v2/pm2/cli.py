@@ -20,6 +20,7 @@ from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
+from . import backup
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -302,6 +303,21 @@ def main(argv=None):
             with mutation_lock():
                 payload = persistence.restore()
             response(True, "OK", "V2-owned rules reconciled after reboot", payload, json_mode)
+        elif args.command == "backup":
+            argv = args.args or []
+            operation = argv[0] if argv else None
+            if operation == "list":
+                details = backup.list_backups()
+            elif operation == "create":
+                with mutation_lock():
+                    details = backup.create()
+            elif operation == "restore" and len(argv) >= 2:
+                dry_run = "--dry-run" in argv
+                with mutation_lock() if not dry_run else contextlib.nullcontext():
+                    details = backup.restore(argv[1], dry_run)
+            else:
+                raise PM2Error("E_VALIDATION", "Usage: backup create|list|restore <id> [--dry-run]")
+            response(True, "OK", "Backup operation completed", details, json_mode)
         elif args.command == "report":
             argv = args.args or []
             if "--window" not in argv:
