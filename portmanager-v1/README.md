@@ -1,25 +1,36 @@
-# Port Manager V1 (original) — installation alias
+# Port Manager V1 — frozen original version
 
-**This directory does not contain a second implementation of V1.** The original
-installer and payload remain untouched under `portmanager-dashboard/`.
+V1 is deliberately preserved as a separate legacy implementation under
+`portmanager-v1/legacy-install.sh`, byte-for-byte matching the former
+`portmanager-dashboard/install.sh`. Its compressed Bash payload remains
+unchanged under `portmanager-dashboard/portmanager.sh.gz.b64`.
 
-Original, permanent V1 install URL:
+## One shared installation URL
+
+**Default V2** (installs the separate `portmanager2` command):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash
 ```
 
-New alias URL (also runs the same original installer from master):
+**Explicit old V1** (installs the original `portmanager` command):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- v1
+```
+
+`sudo bash v1` **does not** work in a pipe: Bash treats `v1` as a script
+filename and ignores stdin. Always use `bash -s -- v1` to route an argument.
+
+Alternative direct V1 URL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-v1/install.sh | sudo bash
 ```
 
-Both result in the existing `portmanager` command and use the same V1
-configuration, data, cron and traffic-control rules. The alias fetches the
-**original** installer at runtime and preserves its exit code. It does not
-install V2.
+V1 installs exactly the original binary/config/cron/accounting/tc behavior.
+Do not run V1 on a host with active V2 scheduled `tc` enforcement; the
+new V1 alias refuses that conflict. A direct legacy installer has no such
+guard and is only for recovery on a controlled VM.
 
-WARNING: the original V1 installer includes potentially disruptive
-`tc` operations. Evaluate on a VM, especially if V2 is already installed.
-Do not treat an alias as a security update to the original application.
+V2 is independently installed; it never automatically removes V1.
