@@ -16,10 +16,10 @@ class LiveScreen:
         self.requested = refresh
         self.window = None
         self.curses = None
-        self.show_idle = False
+        self.show_idle = True  # default shows every discovered port
         self.offset = 0
         self.selected_index = 0
-        self.interface_name = None
+        self.interface_name = "ALL"  # default keeps the full interface overview
         self.last = None
         self.effective = refresh
         self._totals = {}  # per-interface peak, sample mean and session byte estimate
@@ -128,17 +128,21 @@ class LiveScreen:
         links = self._interfaces()
         if not links:
             return {"interface": "loading", "rx_mbps": 0, "tx_mbps": 0}
-        if self.interface_name is None or not any(
-                link["interface"] == self.interface_name for link in links):
-            self.interface_name = links[0]["interface"]
-        return next(link for link in links
-                    if link["interface"] == self.interface_name)
+        names = [x["interface"] for x in links]
+        if self.interface_name not in names and self.interface_name != "ALL":
+            self.interface_name = "ALL"
+        if self.interface_name == "ALL":
+            # Useful overview, not physical host bandwidth: bridges, veth
+            # and tunnels may count the same packet multiple times.
+            return {"interface": "ALL", "rx_mbps": sum(x["rx_mbps"] for x in links),
+                    "tx_mbps": sum(x["tx_mbps"] for x in links)}
+        return next(x for x in links if x["interface"] == self.interface_name)
 
     def _cycle_interface(self, delta=1):
         links = self._interfaces()
         if not links:
             return
-        names = [link["interface"] for link in links]
+        names = ["ALL"] + [link["interface"] for link in links]
         current = self._selected_interface()["interface"]
         self.interface_name = names[(names.index(current) + delta) % len(names)]
 
@@ -152,6 +156,8 @@ class LiveScreen:
     def selection(self, whole_interface=False):
         """Selected port and NIC; returning data never changes firewall rules."""
         interface = self._selected_interface()["interface"]
+        if interface == "ALL" and len(self._interfaces()) == 1:
+            interface = self._interfaces()[0]["interface"]
         if whole_interface:
             return None, interface
         return self._selected_row(), interface
@@ -160,7 +166,10 @@ class LiveScreen:
         now = time.monotonic()
         dt = min(60.0, max(0.0, now - self._last_tick)) if self._last_tick else 0.0
         self._last_tick = now
-        for link in data.get("interfaces", []):
+        links = data.get("interfaces", [])
+        overview = {"interface": "ALL", "rx_mbps": sum(x["rx_mbps"] for x in links),
+                    "tx_mbps": sum(x["tx_mbps"] for x in links)}
+        for link in ([overview] + links if links else []):
             name = link["interface"]
             value = self._totals.setdefault(name, {
                 "count": 0, "rx_sum": 0, "tx_sum": 0,
@@ -222,11 +231,14 @@ class LiveScreen:
         self._panel(1, 2, card_width, "▼ DOWNLOAD", "rx", stats, interface)
         self._panel(card_width + 2, 2, card_width, "▲ UPLOAD", "tx", stats, interface)
         if links:
-            pos = next(i for i, link in enumerate(links)
-                       if link["interface"] == interface["interface"]) + 1
-            self._write(6, 2, f"Interface {pos}/{len(links)}: {interface['interface']}  |  Tab/←→ switch", 1)
+            choices = ["ALL"] + [link["interface"] for link in links]
+            pos = choices.index(interface["interface"]) + 1
+            note = "Σ NICs may DOUBLE COUNT bridged/tunneled packets" if interface["interface"] == "ALL" else "individual interface"
+            self._write(6, 2,
+                        f"Interface {pos}/{len(choices)}: {interface['interface']} | {note} | Tab/←→ switch",
+                        3 if interface["interface"] == "ALL" else 1)
         self._write(7, 1, "╭" + "─" * (width - 3) + "╮", 1)
-        self._write(8, 2, "PORT TRAFFIC    ↓ ranked by 10m average", 1, True)
+        self._write(8, 2, "PORT TRAFFIC (all NICs; ↓ ranked by 10m average)", 1, True)
         self._write(9, 2, "PORT", 1, True)
         self._write(9, 17, "NOW Mb/s", 1, True)
         self._write(9, 30, "10 min", 1, True)
@@ -237,8 +249,10 @@ class LiveScreen:
             self._write(9, 77, "TREND", 1, True)
         self._write(10, 2, "─" * (width - 5), 1)
         rows = self._candidate_rows()
-        # Reserve two rows for untracked estimate and one for panel frame.
-        max_visible = max(1, height - (23 if height >= 27 else 17))
+        # Divide the terminal between all known ports (scrollable) and a
+        # separate interface overview (pageable with Tab). No silent truncation.
+        nic_slots = min(len(links), max(1, (height - 17) // 3))
+        max_visible = max(1, height - 20 - nic_slots)
         self.selected_index = max(0, min(self.selected_index, max(0, len(rows) - 1)))
         self.offset = min(self.offset, max(0, len(rows) - max_visible))
         if self.selected_index < self.offset:
@@ -274,22 +288,29 @@ class LiveScreen:
             self._write(11, 3, "Waiting for tracked port samples. NIC totals above are live.", 3)
         # Interface summary is independent of per-port attribution.
         # A NIC switch changes the cards and the chosen interface for a cap.
-        summary_y = 13 + len(visible)
-        if links and height >= 27 and summary_y + 2 < height - 6:
-            self._write(summary_y, 2, "NETWORK INTERFACES  (Tab/←→ to choose)", 1, True)
-            current_pos = next(i for i, link in enumerate(links)
-                               if link["interface"] == interface["interface"])
-            slots = max(1, min(8, height - 8 - summary_y))
-            start = min(max(0, current_pos - slots + 1), max(0, len(links) - slots))
+        summary_y = 12 + len(visible)
+        if links and summary_y + 2 < height - 5:
+            self._write(summary_y, 2,
+                        f"NETWORK INTERFACES  [{len(links)} found]  Tab/←→ select; ALL overview first",
+                        1, True)
+            active_name = interface["interface"]
+            # Show all available NICs whenever screen height permits.
+            # If overflowing, the selected NIC determines the visible page.
+            slots = max(1, min(nic_slots, height - 7 - summary_y))
+            current_pos = next((i for i, link in enumerate(links)
+                                if link["interface"] == active_name), 0)
+            start = (0 if active_name == "ALL" else
+                     min(max(0, current_pos - slots + 1),
+                         max(0, len(links) - slots)))
             for i, link in enumerate(links[start:start + slots]):
-                active = link["interface"] == interface["interface"]
+                active = link["interface"] == active_name
                 self._write(summary_y + 1 + i, 2,
                             f"{'▶' if active else ' '} {link['interface']:<16}"
                             f"  ↓ {link['rx_mbps']:>9.1f}  ↑ {link['tx_mbps']:>9.1f} Mb/s",
                             2 if active else 0, active)
             if len(links) > slots:
-                self._write(summary_y, 47,
-                            f"Showing {start + 1}-{min(len(links), start + slots)}/{len(links)}", 3)
+                self._write(summary_y, max(52, width - 28),
+                            f"NICs {start + 1}-{min(len(links), start + slots)}/{len(links)}", 3)
         # We cannot prove the precise destination port of untracked flows.
         # Display the difference as a directional estimate, not as a rule.
         if self.last and links:
@@ -299,7 +320,7 @@ class LiveScreen:
         self._write(height - 4, 2,
                     "* incomplete period  |  ~ estimated  |  averages in Mb/s (not GB)", 3)
         self._write(height - 3, 1, "╰" + line + "╯", 1)
-        self._write(height - 2, 2, "↑↓ choose port | Enter/q limit | g entire NIC | Tab/←→ NIC | a idle | +/- rate | Esc back")
+        self._write(height - 2, 2, "↑↓ port | Enter/q limit | g selected NIC | Tab/←→ NIC | a hide/show idle | +/- rate | Esc back")
         state = "History ON (background)" if self.last and self.last.get("background_history_active") else "History: viewer only"
         self._write(height - 1, 2,
                     f"{len(rows)} ports  •  {interface['interface']}  •  {state}  •  Ctrl+C back", 1)
