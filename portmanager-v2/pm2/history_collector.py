@@ -10,7 +10,7 @@ import re
 import shlex
 import time
 
-from . import accounting, auto_monitor, config, sampler, transaction, port_graph, system_rules
+from . import accounting, auto_monitor, config, sampler, transaction, port_graph, system_rules, usage_ledger
 from .errors import PM2Error
 
 CHAINS = {"down": ("PREROUTING", "PM2_HIST_RX", "ORIGINAL"),
@@ -133,6 +133,7 @@ def _install(ports, inspected):
 
 def _schema(db):
     port_graph.init_history(db)
+    usage_ledger.init(db)
     db.execute("""CREATE TABLE IF NOT EXISTS pm2_history_last (
         tunnel_id TEXT NOT NULL, protocol TEXT NOT NULL,
         listen_port INTEGER NOT NULL, direction TEXT NOT NULL,
@@ -231,16 +232,20 @@ def collect(timestamp=None):
     db = sampler.connect()
     try:
         _schema(db)
+        boot = usage_ledger.boot_id()
+        same_boot = usage_ledger.baseline_matches(db, boot)
         inspected = _inspect()
         current_ports = inspected[1]
         valid_old = all(row[2] for row in inspected[0])
         # Tunnel/V1 rules are persistent independently of our auto-port hooks.
         # One background job records all three sources on the same clock.
         current = _history_counters()
-        previous = {(tid, proto, port, direction): (total, end)
-                    for tid, proto, port, direction, total, end in db.execute(
-                        "SELECT tunnel_id, protocol, listen_port, direction, "
-                        "total_bytes, sampled_at FROM pm2_history_last")}
+        previous = ({(tid, proto, port, direction): (total, end)
+                     for tid, proto, port, direction, total, end in db.execute(
+                         "SELECT tunnel_id, protocol, listen_port, direction, "
+                         "total_bytes, sampled_at FROM pm2_history_last")}
+                    if same_boot else {})
+        byte_intervals = []
         rates = {}
         elapsed = None
         keys = {(tid, proto, port) for tid, proto, port, _direction in current}
@@ -251,8 +256,16 @@ def collect(timestamp=None):
             if not old_down or not old_up or down_total is None or up_total is None:
                 continue
             dt = now - max(old_down[1], old_up[1])
-            if not 0 < dt <= 120 or down_total < old_down[0] or up_total < old_up[0]:
+            # Keep verified monotonic counter deltas even when an operation
+            # briefly delays systemd sampling. > 5-minute gaps are not
+            # considered reliable for bills; never invent a long interval.
+            if not 0 < dt <= 300 or down_total < old_down[0] or up_total < old_up[0]:
                 continue
+            if abs(old_up[1] - old_down[1]) > 0.001:
+                continue
+            byte_intervals.append((
+                max(old_down[1], old_up[1]), now, tid, proto, port,
+                up_total - old_up[0], down_total - old_down[0]))
             if elapsed is None:
                 elapsed = dt
             if abs(elapsed - dt) > 0.001:
@@ -271,6 +284,8 @@ def collect(timestamp=None):
             _install(wanted, inspected)
             current = _history_counters()
         with db:
+            usage_ledger.record(db, byte_intervals)
+            usage_ledger.remember_boot(db, boot)
             db.execute("DELETE FROM pm2_history_last")
             for (tid, proto, port, direction), count in current.items():
                 db.execute("INSERT INTO pm2_history_last VALUES(?,?,?,?,?,?)",
@@ -278,6 +293,7 @@ def collect(timestamp=None):
             db.execute("INSERT OR REPLACE INTO pm2_history_health VALUES(1,?)",
                        (now,))
         return {"monitored_ports": len(wanted), "samples_written": len(rates),
+                "byte_intervals_written": len(byte_intervals),
                 "history_active": True, "sampled_at": now}
     finally:
         db.close()
