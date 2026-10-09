@@ -15,12 +15,15 @@ fatal() { printf '[portmanager2] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[portmanager2] %s\n' "$*"; }
 
 [[ "$(id -u)" == 0 ]] || fatal "Run as root."
-for command in curl python3 sha256sum tar cp mv mkdir readlink mktemp ln chmod bash grep rm cat; do
+for command in curl python3 sha256sum tar cp mv mkdir readlink mktemp ln chmod bash grep rm cat flock; do
   command -v "$command" >/dev/null 2>&1 || fatal "Missing required tool: $command"
 done
 python3 -c 'import sys; assert sys.version_info >= (3, 10)' \
   || fatal "Python 3.10+ required"
 [[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || fatal "Invalid Git ref"
+[[ ! -L /run/lock/portmanager2.lock ]] || fatal "V2 lock path is an unsafe symlink"
+exec 9>/run/lock/portmanager2.lock
+flock -n 9 || fatal "Another Port Manager V2 operation holds the lock"
 [[ ! -e "$BIN" || -L "$BIN" ]] || fatal "Refusing to overwrite existing $BIN"
 if [[ -L "$BIN" ]]; then
   [[ "$(readlink "$BIN")" == "$LAUNCHER_TARGET" ]] \
