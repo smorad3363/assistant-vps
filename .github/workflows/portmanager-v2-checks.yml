@@ -90,7 +90,7 @@ jobs:
             esac
           done
           sudo test -f /etc/portmanager2/systemd-owner.json
-          sudo portmanager2 --version | grep -Fx '2.0.0-dev.1'
+          sudo portmanager2 --version | grep -Fx '2.1.0-rc.1'
           sudo portmanager2 doctor --json
           # Failure injection: refuse deletion if an owned unit was tampered.
           sudo sh -c 'echo "# tampered externally" >> /etc/systemd/system/portmanager2-restore.service'
