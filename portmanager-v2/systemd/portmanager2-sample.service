@@ -1,0 +1,9 @@
+[Unit]
+Description=Port Manager V2 - sample owned tunnel traffic
+ConditionPathExists=/etc/portmanager2/enable-sample
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/portmanager2 sample
+TimeoutStartSec=30
+NoNewPrivileges=true
