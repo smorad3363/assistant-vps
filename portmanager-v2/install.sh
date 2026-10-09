@@ -135,6 +135,10 @@ tar -xzf "$tmp/source.tar.gz" --no-same-owner --strip-components=1 -C "$tmp/sour
   || fatal "Source has no V2 checksum manifest"
 (cd "$tmp/source/portmanager-v2" && sha256sum --check --strict manifest.sha256) \
   || fatal "V2 source integrity check failed"
+# Fail closed BEFORE touching installed release or root crontab if the
+# public 'portmanager' command is foreign or V1 cron cannot be safely paused.
+PYTHONPATH="$tmp/source/portmanager-v2" python3 -m pm2.migration preflight \
+  || fatal "Cannot safely archive V1 or select V2 as the primary command"
 VERSION="$(cat "$tmp/source/portmanager-v2/VERSION")"
 [[ "$VERSION" =~ ^2\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] \
   || fatal "Unexpected version string"
@@ -217,10 +221,18 @@ if [[ "${PORTMANAGER2_ENABLE_SERVICES:-0}" == "1" ]]; then
   PYTHONPATH="$ROOT/current" python3 -c 'from pm2.services import activate; print(activate())' \
     || fatal "Could not safely activate V2-only systemd units"
 fi
+# LAST mutating operation: freeze V1 binary and its exact cron entries, then
+# atomically direct /usr/local/bin/portmanager to the verified V2 release.
+# This does NOT reset any V1 firewall or tc rules (migration is non-disruptive).
+PYTHONPATH="$ROOT/current" python3 -m pm2.migration activate \
+  || fatal "Legacy V1 archival / primary launcher cut-over failed"
+"$BIN" --version | grep -Fxq "$VERSION" || fatal "V2 alias post-cutover verification failed"
+"/usr/local/bin/portmanager" --version | grep -Fxq "$VERSION" \
+  || fatal "Primary command did not select V2"
 new_release=""
 swapped=0
 trap - EXIT
 rm -rf -- "$tmp"
-log "Installed DEVELOPMENT $VERSION (commit $SHA)"
-log "Run: portmanager2"
-log "Development installer: systemd activation opt-in via PORTMANAGER2_ENABLE_SERVICES=1; V1 untouched."
+log "Installed $VERSION (commit $SHA); primary command: portmanager"
+log "Original V1 executable/cron archived under /var/lib/portmanager2/legacy-v1 when present."
+log "Run: portmanager (or portmanager2); use original installer with bash -s -- v1 to restore V1."
