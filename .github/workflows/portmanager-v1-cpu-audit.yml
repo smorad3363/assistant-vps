@@ -48,3 +48,25 @@ jobs:
         run: |
           python3 -m py_compile portmanager-v1/perf/fast_live.py
           python3 -m unittest discover -v -s portmanager-v1/perf -p 'test_*.py'
+
+  fast-live-actual-v1-kernel:
+    runs-on: ubuntu-24.04
+    needs: audit
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert real V1 counter readout leaves kernel mangle/tc and cron unchanged
+        run: |
+          set -euo pipefail
+          sudo bash portmanager-dashboard/install.sh
+          sudo iptables -t mangle -S PORTMANAGER_ACCT > "$RUNNER_TEMP/mangle-before"
+          sudo tc qdisc show > "$RUNNER_TEMP/tc-before"
+          sudo crontab -l > "$RUNNER_TEMP/cron-before"
+          sudo python3 portmanager-v1/perf/fast_live.py --interval 2 --once --ipv4-only
+          sudo iptables -t mangle -S PORTMANAGER_ACCT > "$RUNNER_TEMP/mangle-after"
+          sudo tc qdisc show > "$RUNNER_TEMP/tc-after"
+          sudo crontab -l > "$RUNNER_TEMP/cron-after"
+          diff -u "$RUNNER_TEMP/mangle-before" "$RUNNER_TEMP/mangle-after"
+          diff -u "$RUNNER_TEMP/tc-before" "$RUNNER_TEMP/tc-after"
+          diff -u "$RUNNER_TEMP/cron-before" "$RUNNER_TEMP/cron-after"
+          echo "PASS: read-only V1 fast-live on real accounting kernel rules"
