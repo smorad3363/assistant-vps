@@ -5,7 +5,7 @@ All unexpected *partial* states fail closed; never repair a foreign firewall.
 import json
 import os
 
-from . import config, discovery, firewall, transaction
+from . import config, discovery, firewall, transaction, forwarding
 from .errors import PM2Error
 
 
@@ -40,7 +40,7 @@ def restore():
         raise PM2Error("E_CONFLICT", "No recorded kernel ownership inventory")
     report = discovery.audit(cfg["tunnels"])
     if not discovery.forwarding_enabled():
-        raise PM2Error("E_CONFLICT", "IPv4 forwarding disabled at boot")
+        forwarding.activate()
     expected = firewall.compile_rules(cfg)
     actual = firewall.reconcile(expected, {})  # kernel explicitly empty
     updated = dict(current, firewall=actual, backend=backend,
