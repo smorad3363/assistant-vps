@@ -22,14 +22,14 @@ def state():
     return item, runtime
 
 
-def preflight(candidate, runtime):
+def preflight(candidate, runtime, allow_protected=False):
     """All checks occur before kernel mutation."""
     from .validation import validate_collection
     validate_collection(candidate["tunnels"])
     if PENDING.exists() or PENDING.is_symlink():
         raise PM2Error("E_CONFLICT", "Incomplete V2 pending transaction; manual recovery required")
-    if any(t["enabled"] and t["mode"] == "all-except" for t in candidate["tunnels"]):
-        raise PM2Error("E_UNSUPPORTED", "All-except pending 120-second rollback implementation")
+    if any(t["enabled"] and t["mode"] == "all-except" for t in candidate["tunnels"]) and not allow_protected:
+        raise PM2Error("E_CONFLICT", "All-except requires an armed 120-second rollback watchdog")
     report = discovery.audit(candidate["tunnels"])
     original_backend = runtime.get("backend")
     if original_backend is not None and original_backend != report["backend"]:
@@ -41,12 +41,12 @@ def preflight(candidate, runtime):
     return report
 
 
-def apply(candidate):
+def apply(candidate, allow_protected=False):
     """Root-only, requires caller holding V2 global mutation lock."""
     if os.geteuid():
         raise PM2Error("E_PERMISSION", "Applying V2 tunnels requires root")
     original, runtime = state()
-    report = preflight(candidate, runtime)
+    report = preflight(candidate, runtime, allow_protected=allow_protected)
     if candidate == original and runtime.get("applied_generation") == original["generation"]:
         return {"changed": False, "generation": original["generation"], **report}
     previous = runtime.get("firewall", {})
