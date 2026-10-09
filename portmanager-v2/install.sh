@@ -206,10 +206,14 @@ fi
 # Service module handles unit preflight, atomic writes and unit rollback.
 PYTHONPATH="$ROOT/current" python3 -m pm2.services install \
   || fatal "Could not safely install V2 systemd units"
+if [[ "${PORTMANAGER2_ENABLE_SERVICES:-0}" == "1" ]]; then
+  PYTHONPATH="$ROOT/current" python3 -c 'from pm2.services import activate; print(activate())' \
+    || fatal "Could not safely activate V2-only systemd units"
+fi
 new_release=""
 swapped=0
 trap - EXIT
 rm -rf -- "$tmp"
 log "Installed DEVELOPMENT $VERSION (commit $SHA)"
 log "Run: portmanager2"
-log "Phase 1 only: systemd units installed but DISABLED; no NAT, shaping, cron or service start."
+log "Development installer: systemd activation opt-in via PORTMANAGER2_ENABLE_SERVICES=1; V1 untouched."
