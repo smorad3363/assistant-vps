@@ -203,6 +203,59 @@ class LiveScreen:
             self._write(y + 3, x + 2,
                         f"Peak {item[direction + '_peak']:.0f}  Avg {avg:.0f}  Session {total_gb:.2f} GB~", 3)
 
+    @staticmethod
+    def _large_trend(value, columns):
+        """Scale existing 10-minute samples; blanks remain missing history."""
+        raw = str(value or "").rstrip("\n")
+        columns = max(0, min(int(columns), 160))
+        if not raw or not columns:
+            return "─" * columns
+        if len(raw) == columns:
+            return raw
+        return "".join(raw[min(len(raw) - 1, i * len(raw) // columns)]
+                       for i in range(columns))
+
+    def _limit_for(self, row, nic):
+        """Configured policy + schedule match, not an assertion about tc state."""
+        port = row.get("listen_port")
+        proto = row.get("protocol")
+        policies = self.last.get("speed_limits", []) if self.last else []
+        matches = [p for p in policies
+                   if p.get("port") == port
+                   and proto in str(p.get("protocol", "")).split(",")
+                   and (nic == "ALL" or p.get("interface") in (None, nic))]
+        global_scope = False
+        if not matches and nic != "ALL":
+            matches = [p for p in policies if p.get("port") == 0
+                       and p.get("interface") == nic]
+            global_scope = bool(matches)
+        if not matches:
+            return None
+        # Scheduled-now first, then future configured, then disabled.
+        matches.sort(key=lambda p: (not p.get("scheduled_now"),
+                                    not p.get("enabled"), p.get("id", "")))
+        chosen = matches[0]
+        active = bool(chosen.get("scheduled_now"))
+        enabled = bool(chosen.get("enabled"))
+        when = ("OFF" if not enabled else
+                "ALL DAY" if chosen.get("start") == chosen.get("end")
+                            and len(chosen.get("days", [])) == 7 else
+                f'{chosen.get("start", "--")}–{chosen.get("end", "--")}')
+        down = chosen.get("download_mbps", 0)
+        up = chosen.get("upload_mbps", 0)
+        compact = f"↓{down} ↑{up} {when}"
+        if global_scope:
+            compact = "NIC " + compact
+        if len(matches) > 1:
+            compact += f" +{len(matches) - 1}"
+        detailed = (f"{'NIC-WIDE ' if global_scope else ''}↓{down} / ↑{up} Mbps"
+                    f"  |  {when}"
+                    f"  |  {chosen.get('interface') or 'auto'}"
+                    f"  |  {chosen.get('timezone', 'UTC')}"
+                    f"  |  {'window NOW' if active else 'scheduled later' if enabled else 'disabled'}")
+        return {"compact": compact, "detail": detailed,
+                "scheduled_now": active, "enabled": enabled}
+
     def draw(self, data=None, effective=None):
         if data is not None:
             self.last = data
@@ -215,44 +268,57 @@ class LiveScreen:
         height, width = self.window.getmaxyx()
         if height < 19 or width < 68:
             self._write(0, 1, "PORT MANAGER | LIVE", 1, True)
-            self._write(2, 1, "Enlarge terminal (min 68 columns x 13 rows).")
-            self._write(4, 1, "q / Esc: return", 3)
+            self._write(2, 1, "Enlarge terminal (min 68 columns x 19 rows).", 3)
+            self._write(4, 1, "Esc: back", 3)
             self.window.refresh()
             return
         line = "─" * (width - 3)
         self._write(0, 1, " PORT MANAGER  │  ● LIVE ", 1, True)
         self._write(0, max(27, width - 35),
-                    f"Refresh: {self.effective:g}s  (set {self.requested}s)", 3)
+                    f"Refresh: {self.effective:g}s (set {self.requested}s)", 3)
         self._write(1, 1, line, 1)
         links = self._interfaces()
         interface = self._selected_interface()
+        nic = interface["interface"]
         card_width = max(31, (width - 5) // 2)
-        stats = self._totals.get(interface["interface"])
+        stats = self._totals.get(nic)
         self._panel(1, 2, card_width, "▼ DOWNLOAD", "rx", stats, interface)
         self._panel(card_width + 2, 2, card_width, "▲ UPLOAD", "tx", stats, interface)
         if links:
-            choices = ["ALL"] + [link["interface"] for link in links]
-            pos = choices.index(interface["interface"]) + 1
-            note = "Σ NICs may DOUBLE COUNT bridged/tunneled packets" if interface["interface"] == "ALL" else "individual interface"
+            names = ["ALL"] + [link["interface"] for link in links]
+            note = "NIC sums can overlap" if nic == "ALL" else "one network"
             self._write(6, 2,
-                        f"Interface {pos}/{len(choices)}: {interface['interface']} | {note} | Tab/←→ switch",
-                        3 if interface["interface"] == "ALL" else 1)
+                        f"Interface {names.index(nic) + 1}/{len(names)}: {nic} | {note} | Tab/←→ switch",
+                        3 if nic == "ALL" else 1)
         self._write(7, 1, "╭" + "─" * (width - 3) + "╮", 1)
-        self._write(8, 2, "PORT TRAFFIC (all NICs; ↓ ranked by 10m average)", 1, True)
-        self._write(9, 2, "PORT", 1, True)
+        self._write(8, 2, "PORT TRAFFIC   ↓ ranked by 10-minute average", 1, True)
+
+        # Five history averages remain visible where width permits; the
+        # limit column is reserved BEFORE the mini graph, never painted over.
+        limit_x = 74 if width >= 105 else 70 if width >= 88 else 60
+        trend_x = 105 if width >= 150 else 100 if width >= 128 else (
+            96 if width >= 112 else None)
+        limit_width = max(6, (trend_x - limit_x - 2 if trend_x
+                              else width - limit_x - 3))
+        self._write(9, 3, "PORT", 1, True)
         self._write(9, 17, "NOW Mb/s", 1, True)
-        self._write(9, 30, "10 min", 1, True)
-        self._write(9, 41, "1 hour", 1, True)
-        self._write(9, 52, "8 hours", 1, True)
+        self._write(9, 29, "10 min", 1, True)
+        self._write(9, 40, "1 hour", 1, True)
+        self._write(9, 51, "8 hours", 1, True)
         if width >= 88:
-            self._write(9, 63, "24 hours", 1, True)
-            self._write(9, 77, "TREND", 1, True)
+            self._write(9, 62, "24 hours", 1, True)
+        self._write(9, limit_x, "LIMIT / HOURS", 1, True)
+        if trend_x and width - trend_x > 6:
+            self._write(9, trend_x, "TREND", 1, True)
         self._write(10, 2, "─" * (width - 5), 1)
+
         rows = self._candidate_rows()
-        # Divide the terminal between all known ports (scrollable) and a
-        # separate interface overview (pageable with Tab). No silent truncation.
-        nic_slots = min(len(links), max(1, (height - 17) // 3))
-        max_visible = max(1, height - 20 - nic_slots)
+        detail_height = 5 if height >= 30 else 3 if height >= 25 else 0
+        nic_slots = (min(len(links), max(1, (height - 22) // 5), 6)
+                     if height >= 25 else 0)
+        reserved = (11 + 6 + detail_height + (1 if detail_height else 0)
+                    + (1 + nic_slots if nic_slots else 0))
+        max_visible = max(1, height - reserved)
         self.selected_index = max(0, min(self.selected_index, max(0, len(rows) - 1)))
         self.offset = min(self.offset, max(0, len(rows) - max_visible))
         if self.selected_index < self.offset:
@@ -260,70 +326,108 @@ class LiveScreen:
         elif self.selected_index >= self.offset + max_visible:
             self.offset = self.selected_index - max_visible + 1
         visible = rows[self.offset:self.offset + max_visible]
+
         for i, row in enumerate(visible):
             y = 11 + i
             port = row.get("listen_port")
-            p = str(port) if port else "ALL"
-            proto = row.get("protocol", "").upper()
+            name = f'{str(row.get("protocol", "")).upper()}:{port if port else "ALL"}'
             total = (row.get("now_up_mbps", 0) or 0) + (row.get("now_down_mbps", 0) or 0)
-            chosen = self.offset + i == self.selected_index
-            self._write(y, 1, "▶" if chosen else " ", 1, chosen)
-            self._write(y, 3, f"{proto}:{p}", 2 if chosen else 0, chosen)
-            self._write(y, 17, f"{total:8.1f}", 2 if total >= .05 else 0)
+            selected = self.offset + i == self.selected_index
+            # High-contrast marker and bold cyan text, no filled background.
+            self._write(y, 1, "▶" if selected else " ", 1, selected)
+            self._write(y, 3, name[:13], 1 if selected else 0, selected)
+            self._write(y, 17, f"{total:8.1f}", 2 if total >= .05 else 0, selected)
             stats_ = row.get("averages", {})
-            for key, pos in (("10m", 30), ("1h", 41), ("8h", 52), ("24h", 63)):
-                if key == "24h" and width < 88:
+            for period, xpos in (("10m", 29), ("1h", 40),
+                                 ("8h", 51), ("24h", 62)):
+                if period == "24h" and width < 88:
                     continue
-                avg = stats_.get(key, {})
+                avg = stats_.get(period, {})
                 up, down = avg.get("up_mbps"), avg.get("down_mbps")
                 number = up + down if up is not None and down is not None else None
-                self._write(y, pos, self._metric(
+                self._write(y, xpos, self._metric(
                     number, avg.get("coverage_seconds", 0),
                     avg.get("requested_seconds",
-                            {"10m": 600, "1h": 3600, "8h": 28800, "24h": 86400}[key])))
-            if width >= 88:
-                trend = str(row.get("graph_up", "")).strip()[-max(3, width - 81):]
-                self._write(y, 77, trend, 2)
+                            {"10m": 600, "1h": 3600,
+                             "8h": 28800, "24h": 86400}[period])))
+            limit_info = self._limit_for(row, nic)
+            limit_text = (limit_info["compact"] if limit_info else "—")
+            self._write(y, limit_x, limit_text[:limit_width],
+                        2 if limit_info and limit_info["scheduled_now"] else
+                        3 if limit_info and limit_info["enabled"] else 0,
+                        selected)
+            if trend_x and width - trend_x > 6:
+                self._write(y, trend_x, self._large_trend(
+                    row.get("graph_up", ""), width - trend_x - 2),
+                    2, selected)
         if not rows:
-            self._write(11, 3, "Waiting for tracked port samples. NIC totals above are live.", 3)
-        # Interface summary is independent of per-port attribution.
-        # A NIC switch changes the cards and the chosen interface for a cap.
-        summary_y = 12 + len(visible)
-        if links and summary_y + 2 < height - 5:
+            self._write(11, 3, "No port samples yet. Network totals above are live.", 3)
+
+        panel_y = 12 + len(visible)
+        selected_row = self._selected_row()
+        if selected_row is not None and detail_height:
+            proto = selected_row.get("protocol", "").upper()
+            port = selected_row.get("listen_port") or "ALL"
+            now_rate = ((selected_row.get("now_down_mbps") or 0) +
+                        (selected_row.get("now_up_mbps") or 0))
+            self._write(panel_y, 2,
+                        f"╭─ SELECTED PORT: {proto}:{port}  │  Now: {now_rate:.1f} Mb/s " +
+                        "─" * max(0, width - 55), 1, True)
+            lim = self._limit_for(selected_row, nic)
+            if detail_height == 5:
+                detail = lim["detail"] if lim else "No speed limit configured"
+                self._write(panel_y + 1, 4, "Limit: " + detail[:width - 14],
+                            2 if lim and lim["scheduled_now"] else 3 if lim else 0)
+                self._write(panel_y + 2, 4, "▲ UP    " + self._large_trend(
+                    selected_row.get("graph_up"), width - 16), 2)
+                self._write(panel_y + 3, 4, "▼ DOWN  " + self._large_trend(
+                    selected_row.get("graph_down"), width - 16), 1)
+                self._write(panel_y + 4, 2,
+                            "╰─ Past 10m trend (rolling average; gaps = missing data) " +
+                            "─" * max(0, width - 63), 1)
+            else:
+                self._write(panel_y + 1, 4, "▲ " + self._large_trend(
+                    selected_row.get("graph_up"), width - 9), 2)
+                self._write(panel_y + 2, 4, "▼ " + self._large_trend(
+                    selected_row.get("graph_down"), width - 9), 1)
+
+        summary_y = panel_y + detail_height + (1 if detail_height else 0)
+        if links and nic_slots and summary_y + 1 < height - 5:
             self._write(summary_y, 2,
-                        f"NETWORK INTERFACES  [{len(links)} found]  Tab/←→ select; ALL overview first",
-                        1, True)
-            active_name = interface["interface"]
-            # Show all available NICs whenever screen height permits.
-            # If overflowing, the selected NIC determines the visible page.
-            slots = max(1, min(nic_slots, height - 7 - summary_y))
-            current_pos = next((i for i, link in enumerate(links)
-                                if link["interface"] == active_name), 0)
-            start = (0 if active_name == "ALL" else
-                     min(max(0, current_pos - slots + 1),
-                         max(0, len(links) - slots)))
-            for i, link in enumerate(links[start:start + slots]):
-                active = link["interface"] == active_name
-                self._write(summary_y + 1 + i, 2,
-                            f"{'▶' if active else ' '} {link['interface']:<16}"
-                            f"  ↓ {link['rx_mbps']:>9.1f}  ↑ {link['tx_mbps']:>9.1f} Mb/s",
-                            2 if active else 0, active)
-            if len(links) > slots:
-                self._write(summary_y, max(52, width - 28),
-                            f"NICs {start + 1}-{min(len(links), start + slots)}/{len(links)}", 3)
-        # We cannot prove the precise destination port of untracked flows.
-        # Display the difference as a directional estimate, not as a rule.
+                        f"NETWORK INTERFACES ({len(links)})  Tab/←→ to switch", 1, True)
+            position = next((i for i, link in enumerate(links)
+                             if link["interface"] == nic), 0)
+            start = (0 if nic == "ALL" else
+                     min(max(0, position - nic_slots + 1),
+                         max(0, len(links) - nic_slots)))
+            for i, link in enumerate(links[start:start + nic_slots]):
+                self._write(summary_y + 1 + i, 4,
+                            f"{'▶' if link['interface'] == nic else ' '} "
+                            f"{link['interface']:<16} "
+                            f"↓{link['rx_mbps']:>9.1f}  ↑{link['tx_mbps']:>9.1f} Mb/s",
+                            1 if link["interface"] == nic else 0,
+                            link["interface"] == nic)
+            if len(links) > nic_slots:
+                self._write(summary_y, max(44, width - 24),
+                            f"NIC {start + 1}-{min(len(links), start + nic_slots)}/{len(links)}", 3)
         if self.last and links:
             down, up = self.untracked_rates(interface, self.last.get("rows", []))
             if down + up >= .1:
-                self._write(height - 5, 2, f"OTHER / UNKNOWN ~  ↓ {down:,.1f}  ↑ {up:,.1f} Mbps", 3, True)
-        self._write(height - 4, 2,
-                    "* incomplete period  |  ~ estimated  |  averages in Mb/s (not GB)", 3)
+                self._write(height - 5, 2,
+                            f"OTHER / UNKNOWN ~  ↓{down:,.1f}  ↑{up:,.1f} Mb/s",
+                            3, True)
+        if self.last and self.last.get("speed_limits_error"):
+            footer_note = "Speed-limit settings unavailable (check scheduler logs)"
+        else:
+            footer_note = "* incomplete period | ~ estimate | LIMIT = configured schedule (not tc verification)"
+        self._write(height - 4, 2, footer_note, 3)
         self._write(height - 3, 1, "╰" + line + "╯", 1)
-        self._write(height - 2, 2, "↑↓ port | Enter/q limit | g selected NIC | Tab/←→ NIC | a hide/show idle | +/- rate | Esc back")
-        state = "History ON (background)" if self.last and self.last.get("background_history_active") else "History: viewer only"
+        self._write(height - 2, 2,
+                    "↑↓ port | Enter/q speed | g NIC speed | Tab NIC | a idle | +/- refresh | Esc back")
+        state = ("History ON (background)" if self.last and
+                 self.last.get("background_history_active") else "History: viewer only")
         self._write(height - 1, 2,
-                    f"{len(rows)} ports  •  {interface['interface']}  •  {state}  •  Ctrl+C back", 1)
+                    f"{len(rows)} ports  •  {nic}  •  {state}  •  Ctrl+C back", 1)
         self.window.refresh()
 
     def wait(self, interval):
