@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Alias to the original, unchanged Port Manager V1 installer.
 set -Eeuo pipefail
-ORIGINAL="https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh"
+ORIGINAL="https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-v1/legacy-install.sh"
 if [[ $(id -u) -ne 0 ]]; then
   printf 'ERROR: run with sudo/root, just like the original V1 installer.\n' >&2
   exit 1
