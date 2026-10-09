@@ -1,37 +1,31 @@
-# Acceptance gate status — source of truth
+# Acceptance/test gates — Port Manager V2, 2026-10-09
 
-Spec: [PM2-SPEC-001.fa.md](PM2-SPEC-001.fa.md). See
-[PROGRESS.md](PROGRESS.md) for latest CI run and checkpoint.
+Normative source: [PM2-SPEC-001](PM2-SPEC-001.fa.md).
+Automated evidence: [run 37960307468](https://github.com/smorad3363/assistant-vps/actions/runs/37960307468)
+at commit `ac6655379fb370ad4b7d7933f361e98cf78d1ba1`.
+**All nine jobs passed:** static/unit Python 3.10/3.12 (48 tests), V1 alias,
+V2 bootstrap, real V1+V2 coexistence, networkns TCP+UDP, activated V2 systemd,
+120-second automatic rollback watchdog, and VM-isolated failure/integrity checks.
 
-No test is PASS without actual execution evidence. The GitHub runner is a
-disposable Ubuntu 24.04 VM; **it is not a full V1+V2 deployed VPS**.
-
-| Gate / IDs | Current result | Evidence required |
+| Gate | Status | Evidence/remaining work |
 | --- | --- | --- |
-| Gate A — V1 frozen, Bash/Python/ShellCheck/SHA256 | PASS at SHA 6782c771 | GitHub run 37935515165 |
-| Gate B — Phase-1 CLI and service ownership tests | PASS (19 tests per Python) at SHA 6782c771 | GitHub run 37935515165 |
-| AT-001 actual install V1 via original URL | NOT TESTED | VM original installer |
-| AT-002 V1 alias identical result | PARTIAL | delegated URL/exit mocked only |
-| AT-003 V2-only install/version | PASS for Ubuntu 24.04 bootstrap | run 37935515165 |
-| AT-004 V1 present then V2 install, fingerprint | NOT TESTED | dedicated sandbox VM |
-| AT-005 V2 repeated install no duplicate | PASS for disabled phase-1 systemd units | run 37935515165 |
-| AT-006 V2 uninstall while V1 installed | NOT TESTED | dedicated sandbox VM |
-| AT-007 V2 purge while V1 installed | NOT TESTED | VM manual confirm + fingerprint |
-| AT-022 dry-run no mutation, all mutators | PARTIAL | no NAT mutators implemented |
-| Gate C / AT-008..022 network | NOT TESTED | netns and VM TCP/UDP NAT |
-| Gate D V1/V2 coexistence | NOT TESTED | V1 installed VM + fingerprint |
-| Gate E failure injection, reboot | PARTIAL | unit rollback mocked; full VM required |
-| Gate F release | BLOCKED | 0 P0/P1 + docs + manual approval |
+| A — V1 frozen, manifest, Bash, ShellCheck, Python | PASS | CI checks, V1 path diff |
+| B — CLI/config/systemd unit tests | PASS | 48 unit tests on Python 3.10/3.12 |
+| AT-001 original V1 installer, AT-002 alias | PASS (Ubuntu 24.04 VM) | Real V1 and V1 alias invoked separately |
+| AT-003 V2 install/doctor/version, AT-005 reinstall | PASS (Ubuntu VM) | Root install and idempotence |
+| AT-004/006 real V1+V2 install/uninstall | PASS (Ubuntu VM) | V1 binary/data/cron/accounting/tc fingerprints unchanged |
+| AT-007 purge with V1 present | NOT TESTED | Destructive purge requires a dedicated manual VM |
+| AT-008..021 network/SSH-specific variants | PARTIAL | TCP+UDP, SNAT, reverse return, all-except and confirm tested; not exhaustive |
+| AT-022 dry-run no mutation | PARTIAL | Tunnel preview/installer dry run, not all error injections |
+| AT-023..027 reporting/shaping | PARTIAL | Two real samples, positive upload/download/rates; shaping deliberately unsupported |
+| AT-028..040 failure/reboot/compatibility | PARTIAL | Unit tamper, networkns kernel-rule reset+restore, real 120s timer; full OS reboot/legacy backend unsupported |
+| C — NAT/SSH safety | PARTIAL | Isolated network success; real SSH port-change/lockout safety still unverified |
+| D — V1/V2 coexistence | PASS on fresh Ubuntu runner | Other distributions, long-lived V1 configs still unverified |
+| E — failure injection and reboot | PARTIAL | Simulated rule loss works; full reboot and true loss-of-connectivity need VM |
+| F — publication gate | BLOCKED | User acceptance, remaining AT IDs, explicit release review |
 
-New Phase-1 regression checks:
-- V1 alias points to the unmodified original URL and propagates errors, without
-  executing the genuine installer in a shared CI host.
-- The installer installs **disabled** service units with recorded checksums,
-  never enables them, removes them on uninstall and leaves V1 paths unchanged.
-- Mocked unit lifecycle: new install, idempotent install, modified/foreign/
-  symlinked/masked/active units block deletion; failed daemon-reload rolls back.
-- Installer and CLI uninstall share an exclusive nonblocking mutation lock.
-- PASS at run 37935898792: tampering with a V2-owned unit causes uninstall
-  to fail with `E_CONFLICT` and leaves V2 installed; after restoring original
-  V2 unit content, safe reinstall and uninstall succeed.
-- Before/after `iptables-save` and `tc qdisc show` equality on ephemeral runner.
+**Scope of claims matters.** Successful GitHub jobs do **not** prove V2 safe
+on an arbitrary active VPS with Docker, UFW, custom SSH ports or `tc` shaping.
+Do not mark a full reboot, legacy iptables, IPv6, high-load soak, automatic
+rollback after real SSH loss, or destructive purge PASS until observed.
+Never merge to `master` while Gate F is blocked.
