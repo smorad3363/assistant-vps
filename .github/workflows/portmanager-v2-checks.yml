@@ -444,3 +444,31 @@ jobs:
           python3 -m compileall -q portmanager-v2/pm2
           python3 -m unittest discover -s portmanager-v2/tests/unit -v
           python3 portmanager-v2/bin/portmanager2 --help || bash portmanager-v2/bin/portmanager2 --version
+
+  default-v2-explicit-v1-router:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test exact original URL dispatcher semantics (default V2, -s -- v1)
+        env:
+          REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # The base URI remains portmanager-dashboard/install.sh after merge.
+          # Use the same script from this checkout so no master writes needed.
+          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh v1
+          sudo test -s /usr/local/bin/portmanager
+          before="$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          # User's exact stdin-based syntax MUST have '-s --' for bash args.
+          cat portmanager-dashboard/install.sh |
+            sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash -s -- v1
+          test "$before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" PORTMANAGER2_REF="$REF_SHA"             bash portmanager-dashboard/install.sh
+          sudo portmanager2 doctor --json
+          sudo test -L /usr/local/bin/portmanager2
+          test "$before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo portmanager2 uninstall --yes
+          test "$before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          echo 'PASS shared URL dispatches V2 by default and frozen V1 by explicit v1'
