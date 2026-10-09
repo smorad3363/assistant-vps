@@ -1,4 +1,4 @@
-# Port Manager V1 — frozen original version
+# Port Manager 11 — frozen original version
 
 V1 is deliberately preserved as a separate legacy implementation under
 `portmanager-v1/legacy-install.sh`, byte-for-byte matching the former

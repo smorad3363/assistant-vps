@@ -91,6 +91,8 @@ jobs:
           done
           sudo test -f /etc/portmanager2/systemd-owner.json
           sudo portmanager2 --version | grep -Fx '2.1.0-rc.1'
+          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo test -L /usr/local/bin/portmanager
           sudo portmanager2 doctor --json
           # Failure injection: refuse deletion if an owned unit was tampered.
           sudo sh -c 'echo "# tampered externally" >> /etc/systemd/system/portmanager2-restore.service'
@@ -109,6 +111,7 @@ jobs:
           sudo portmanager2 uninstall --yes
           test ! -e /usr/local/bin/portmanager2
           test ! -L /usr/local/bin/portmanager2
+          test ! -L /usr/local/bin/portmanager
           for name in portmanager2-restore.service portmanager2-sample.service portmanager2-sample.timer; do
             sudo test ! -e "/etc/systemd/system/$name"
           done
@@ -282,38 +285,40 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Install real V1, preserve fingerprint, install and remove V2
+      - name: Automatically archive V1 then migrate portmanager to V2, explicitly restore original V1
         env:
           REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          # Runs exclusively on a fresh disposable GitHub VM, not user VPS.
           sudo bash portmanager-v1/legacy-install.sh
-          sudo test -s /usr/local/bin/portmanager
-          v1_executable_before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
-          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-v1/install.sh
-          test "$v1_executable_before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
-          sudo find /etc/portmanager /var/lib/portmanager -type f -exec sha256sum '{}' ';' 2>/dev/null |
-            sort > "$RUNNER_TEMP/v1-files-before" || true
-          sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-before" || true
-          sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-acct-before" || true
+          before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo crontab -l > "$RUNNER_TEMP/v1-cron-before"
+          sudo iptables -t mangle -S PORTMANAGER_ACCT > "$RUNNER_TEMP/v1-acct-before"
           sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-before"
+          sudo find /etc/portmanager /var/lib/portmanager -type f -exec sha256sum '{}' ';' |
+            sort > "$RUNNER_TEMP/v1-files-before"
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
-          sudo portmanager2 doctor --json
-          test "$v1_executable_before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
-          sudo portmanager2 uninstall --yes
-          sudo test -s /usr/local/bin/portmanager
-          test "$v1_executable_before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
-          sudo find /etc/portmanager /var/lib/portmanager -type f -exec sha256sum '{}' ';' 2>/dev/null |
-            sort > "$RUNNER_TEMP/v1-files-after" || true
-          sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-after" || true
-          sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-acct-after" || true
-          sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-after"
-          diff -u "$RUNNER_TEMP/v1-files-before" "$RUNNER_TEMP/v1-files-after"
-          diff -u "$RUNNER_TEMP/v1-cron-before" "$RUNNER_TEMP/v1-cron-after"
-          diff -u "$RUNNER_TEMP/v1-acct-before" "$RUNNER_TEMP/v1-acct-after"
-          diff -u "$RUNNER_TEMP/v1-tc-before" "$RUNNER_TEMP/v1-tc-after"
-          echo "PASS real V1 install, alias equivalence and V2 non-interference"
+          sudo test -L /usr/local/bin/portmanager
+          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          test "$before" = "$(sudo sha256sum /var/lib/portmanager2/legacy-v1/portmanager.v1 | cut -d' ' -f1)"
+          sudo test -f /var/lib/portmanager2/legacy-v1/archive.json
+          sudo crontab -l > "$RUNNER_TEMP/v1-cron-after-upgrade"
+          ! grep -E '/usr/local/bin/portmanager (sample|apply)' "$RUNNER_TEMP/v1-cron-after-upgrade"
+          sudo iptables -t mangle -S PORTMANAGER_ACCT > "$RUNNER_TEMP/v1-acct-after-upgrade"
+          sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-after-upgrade"
+          diff -u "$RUNNER_TEMP/v1-acct-before" "$RUNNER_TEMP/v1-acct-after-upgrade"
+          diff -u "$RUNNER_TEMP/v1-tc-before" "$RUNNER_TEMP/v1-tc-after-upgrade"
+          sudo find /etc/portmanager /var/lib/portmanager -type f -exec sha256sum '{}' ';' |
+            sort > "$RUNNER_TEMP/v1-files-after-upgrade"
+          diff -u "$RUNNER_TEMP/v1-files-before" "$RUNNER_TEMP/v1-files-after-upgrade"
+          # Explicit V1 selection MUST remove V2, restore original binary and cron.
+          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-v1/install.sh
+          test ! -e /usr/local/bin/portmanager2
+          test ! -L /usr/local/bin/portmanager
+          test "$before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo crontab -l > "$RUNNER_TEMP/v1-cron-after-rollback"
+          diff -u "$RUNNER_TEMP/v1-cron-before" "$RUNNER_TEMP/v1-cron-after-rollback"
+          echo "PASS real archived V1 -> V2 primary command -> original V1 rollback"
 
   activated-v2-systemd:
     runs-on: ubuntu-24.04
@@ -392,38 +397,28 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Preserve V1 after V1 reinstall and interactive V2 --purge
+      - name: Refuse purge of V1 recovery archive, allow explicit V1 rollback
         env:
           REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           sudo bash portmanager-v1/legacy-install.sh
-          before="$(sha256sum /usr/local/bin/portmanager | awk '{print $1}')"
-          sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-before" || true
-          sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-iptables-before" || true
-          sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-before"
+          before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
           sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
-          # Re-running the unmodified original installer must not remove V2.
-          sudo bash portmanager-v1/legacy-install.sh
-          sudo test -L /usr/local/bin/portmanager2
-          test "$before" = "$(sha256sum /usr/local/bin/portmanager | awk '{print $1}')"
-          # --purge requires a real terminal, not --yes alone.
-          command -v script >/dev/null
-          printf 'PURGE-V2-DATA\n' | script -q -e -c 'sudo portmanager2 uninstall --yes --purge' /dev/null
-          sudo test ! -e /usr/local/bin/portmanager2
-          sudo test ! -e /opt/portmanager2
-          sudo test ! -e /etc/portmanager2
-          sudo test ! -e /var/lib/portmanager2
-          sudo test ! -e /var/log/portmanager2
-          sudo test -s /usr/local/bin/portmanager
-          test "$before" = "$(sha256sum /usr/local/bin/portmanager | awk '{print $1}')"
-          sudo crontab -l 2>/dev/null > "$RUNNER_TEMP/v1-cron-after" || true
-          sudo iptables -t mangle -S PORTMANAGER_ACCT 2>/dev/null > "$RUNNER_TEMP/v1-iptables-after" || true
-          sudo tc qdisc show > "$RUNNER_TEMP/v1-tc-after"
-          diff -u "$RUNNER_TEMP/v1-cron-before" "$RUNNER_TEMP/v1-cron-after"
-          diff -u "$RUNNER_TEMP/v1-iptables-before" "$RUNNER_TEMP/v1-iptables-after"
-          diff -u "$RUNNER_TEMP/v1-tc-before" "$RUNNER_TEMP/v1-tc-after"
-          echo 'PASS AT-007 V2 interactive purge, AT-032 V1 reinstall coexistence'
+          test "$(sudo portmanager --version)" = '2.1.0-rc.1'
+          sudo portmanager2 uninstall --dry-run
+          set +e
+          sudo portmanager2 uninstall --yes --purge > "$RUNNER_TEMP/pm2-purge.out" 2>&1
+          rc=$?
+          set -e
+          test "$rc" -eq 5
+          grep -F 'rollback archive' "$RUNNER_TEMP/pm2-purge.out"
+          sudo test -f /var/lib/portmanager2/legacy-v1/archive.json
+          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-v1/install.sh
+          test "$before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          test ! -e /usr/local/bin/portmanager2
+          sudo test -f /var/lib/portmanager2/legacy-v1/archive.json
+          echo "PASS destructive V2 purge blocked, V1 rollback and archive preserved"
 
   debian-12-graph-unit:
     runs-on: ubuntu-24.04
@@ -451,27 +446,29 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Test exact original URL dispatcher semantics (default V2, -s -- v1)
+      - name: "Exact public URL semantics: V2 default, v1 archived rollback, V2 re-upgrade"
         env:
           REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          # The base URI remains portmanager-dashboard/install.sh after merge.
-          # Use the same script from this checkout so no master writes needed.
           sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh v1
-          sudo test -s /usr/local/bin/portmanager
-          before="$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
-          # User's exact stdin-based syntax MUST have '-s --' for bash args.
+          before="$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh
+          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
+          sudo test -L /usr/local/bin/portmanager2
+          test "$before" = "$(sudo sha256sum /var/lib/portmanager2/legacy-v1/portmanager.v1 | cut -d' ' -f1)"
+          # With a piped installer the correct explicit argument is bash -s -- v1.
           cat portmanager-dashboard/install.sh |
             sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash -s -- v1
-          test "$before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
-          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" PORTMANAGER2_REF="$REF_SHA"             bash portmanager-dashboard/install.sh
-          sudo portmanager2 doctor --json
-          sudo test -L /usr/local/bin/portmanager2
-          test "$before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          test ! -L /usr/local/bin/portmanager
+          test "$before" = "$(sudo sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
+          test ! -e /usr/local/bin/portmanager2
+          sudo env PORTMANAGER_INSTALL_REF="$REF_SHA" bash portmanager-dashboard/install.sh
+          sudo portmanager --version | grep -Fx '2.1.0-rc.1'
           sudo portmanager2 uninstall --yes
-          test "$before" = "$(sha256sum /usr/local/bin/portmanager | cut -d' ' -f1)"
-          echo 'PASS shared URL dispatches V2 by default and frozen V1 by explicit v1'
+          test ! -L /usr/local/bin/portmanager
+          sudo test -f /var/lib/portmanager2/legacy-v1/archive.json
+          echo "PASS V2 primary command and original V1 selection / reupgrade"
 
   tc-police-scheduled-ephemeral:
     runs-on: ubuntu-24.04
