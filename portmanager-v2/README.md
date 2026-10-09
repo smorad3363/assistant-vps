@@ -64,20 +64,22 @@ persistent collection. Already active timers stay enabled after future updates.
 
 ## Live monitor lock and exit
 
-`q` / Esc / Ctrl+C exits Live and releases its exclusive `flock`; the
-monitor is **not** a persistent background service. An independent scheduled
+`q`/Enter chooses the highlighted port for a speed limit; `g` chooses
+an interface-wide limit, Esc exits without changing limits, and Ctrl+C
+opens manual port selection. All exits release the viewer\'s temporary `flock`;
+the viewer is **not** the persistent history service. An independent scheduled
 sample timer may continue running after the menu closes.
 
 If `E_LOCKED` appears, another **running** Live window holds the monitor
 lock (the lock file's mere existence is normal). The error includes a
-possible PID. Check it using `ps -fp PID`, exit that Live window, or send
+possible PID. Check it using `ps -fp PID`, exit that Live window with Esc, or send
 SIGTERM only to the confirmed old viewer. SIGTERM now unwinds the monitor,
 restores the terminal and removes only its own ephemeral counter rules.
 **Never** remove `/run/lock/portmanager2-view.lock` to bypass a live lock.
 
 ## Included features
 
-- **Fixed-screen live terminal dashboard (curses):** single-screen real-time redraw on Debian/Ubuntu without spilling each interval into SSH scrollback. Default shows busiest active ports only, terminal-height bounded, with 10m/1h/8h/24h averages. Keys: `q` or `Esc` to choose a port, `a` show idle ports, `+/-` refresh seconds, arrows to scroll. JSON/once modes stay plain text.
+- **Fixed-screen live terminal dashboard (curses):** single-screen real-time redraw on Debian/Ubuntu without spilling each interval into SSH scrollback. Default shows busiest active ports only, terminal-height bounded, with 10m/1h/8h/24h averages. Keys: `↑↓` choose a port, `Enter`/`q` open the limit wizard, `Tab`/`←→` switch NICs, `g` limit entire selected NIC, `Esc` exits, `Ctrl+C` manual port selection, `a` shows idle ports and `+/-` changes refresh. JSON/once modes stay plain text.
 - **Simple V1-inspired menu:** only [1] Live & speed limits, [2] IPTABLES & tunnels,
   [3] Edit/remove configurations. No IDs or iptables syntax required.
 - **No more false “0 traffic” assumption:** autodetect TCP/UDP IPv4 local sockets
