@@ -79,9 +79,11 @@ def _tunnel_wizard(old=None, all_ports=False):
     listen_ip = old["listen_ip"] if old else ip
     device = old["interface"] if old else iface
     is_all = (old["mode"] == "all-except") if old else all_ports
+    print(_paint("90", f"  Incoming interface {device} / local IP {listen_ip}"))
     argv = ([old["id"]] if old else []) + [
         "--name", name, "--interface", device, "--listen-ip", listen_ip,
-        "--target-ip", target, "--protocol", "tcp,udp",
+        "--target-ip", target,
+        "--protocol", ",".join(old["protocols"]) if old else "tcp,udp",
         "--mode", "all-except" if is_all else "ports"
     ]
     if is_all:
@@ -93,15 +95,17 @@ def _tunnel_wizard(old=None, all_ports=False):
         print(_paint("91", "  CAUTION: all-except forwarding can disrupt SSH."))
     else:
         if old and old["mapping"]:
-            first = old["mapping"][0]
-            d_in, d_out = str(first["listen_port"]), str(first["target_port"])
+            preserved = ",".join(f'{p["listen_port"]}:{p["target_port"]}' for p in old["mapping"])
+            mapping = _ask("Port pairs incoming:destination", preserved)
         else:
-            d_in, d_out = None, None
-        port_in = _ask("Incoming port", d_in)
-        port_out = _ask("Destination port", d_out or port_in)
-        if not port_in or not port_out:
+            port_in = _ask("Incoming port")
+            port_out = _ask("Destination port", port_in)
+            if not port_in or not port_out:
+                return
+            mapping = f"{port_in}:{port_out}"
+        if not mapping:
             return
-        argv += ["--mapping", f"{port_in}:{port_out}"]
+        argv += ["--mapping", mapping]
     _mutate("update" if old else "create", argv)
 
 
