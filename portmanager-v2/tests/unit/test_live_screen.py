@@ -75,14 +75,14 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIn("550.0", text)
         self.assertIn("10 min", text)
 
-    def test_idle_ports_are_hidden_until_a_toggle(self):
+    def test_all_detected_ports_are_visible_until_user_hides_idle(self):
         screen = self.make_view([ord("a"), ord("q")])
         screen.draw(sample())
         before = "\n".join(v for _, _, v in screen.window.writes)
-        self.assertNotIn("8085", before)
+        self.assertIn("8085", before)
         screen.wait(5)
         after = "\n".join(v for _, _, v in screen.window.writes)
-        self.assertIn("8085", after)
+        self.assertNotIn("8085", after)
         self.assertEqual(screen.window.refreshes, 2)
 
     def test_partial_history_is_not_claimed_as_complete_24h(self):
@@ -118,7 +118,7 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIn("▶", display)
 
     def test_tab_switches_nic_without_changing_port(self):
-        screen = self.make_view([9, ord("q")])
+        screen = self.make_view([9, 9, ord("q")])
         data = sample()
         data["interfaces"].append({"interface": "wgcf", "rx_mbps": 50,
                                    "tx_mbps": 60})
@@ -131,7 +131,7 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIn("wgcf", display)
 
     def test_global_limit_shortcut_selects_current_nic(self):
-        screen = self.make_view([9, ord("g")])
+        screen = self.make_view([9, 9, ord("g")])
         data = sample()
         data["interfaces"].append({"interface": "ens18", "rx_mbps": 1,
                                    "tx_mbps": 2})
