@@ -446,7 +446,7 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         result = frame(labels, rates, history(db, now, labels),
                                        now, top=top, active_only=active_only)
                         result["interfaces"] = auto_monitor.interface_rates(
-                            net_before, net_after, elapsed)[:5]
+                            net_before, net_after, elapsed)
                         result.update({"requested_refresh_seconds": refresh,
                                        "effective_refresh_seconds": interval,
                                        "rule_count": len(after),
