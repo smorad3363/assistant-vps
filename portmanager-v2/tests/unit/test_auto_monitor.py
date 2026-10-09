@@ -94,6 +94,38 @@ class AutoMonitorTests(unittest.TestCase):
         self.assertNotIn("flower", argv)
         self.assertIn("police", argv)
 
+    def test_live_port_selection_can_limit_entire_interface(self):
+        fakeframe = {
+            "rows": [{"listen_port": 443, "protocol": "tcp",
+                      "tunnel_id": "auto", "name": "Local"}],
+            "interfaces": [{"interface": "eth0", "rx_mbps": 510.0, "tx_mbps": 25.0}]
+        }
+        def simulate(**kwargs):
+            kwargs["on_frame"](fakeframe)
+            return 130
+        with (mock.patch.object(simple_ui, "_ask", side_effect=["5", "ALL"]),
+              mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulate),
+              mock.patch.object(simple_ui, "_limit") as limits,
+              mock.patch.object(simple_ui, "_title")):
+            simple_ui._live()
+        limits.assert_called_once_with(0, "eth0")
+
+    def test_live_port_selection_passes_protocol_and_interface(self):
+        fakeframe = {
+            "rows": [{"listen_port": 2053, "protocol": "udp",
+                      "tunnel_id": "auto", "name": "Sing-box"}],
+            "interfaces": [{"interface": "eth0", "rx_mbps": 250.0, "tx_mbps": 75.0}]
+        }
+        def simulate(**kwargs):
+            kwargs["on_frame"](fakeframe)
+            return 130
+        with (mock.patch.object(simple_ui, "_ask", side_effect=["5", "2053"]),
+              mock.patch.object(simple_ui.port_graph, "watch", side_effect=simulate),
+              mock.patch.object(simple_ui, "_limit") as limits,
+              mock.patch.object(simple_ui, "_title")):
+            simple_ui._live()
+        limits.assert_called_once_with(2053, "eth0", "udp")
+
     def test_simple_menu_throughput_and_limit_options_are_three(self):
         with (mock.patch.object(simple_ui.os, "isatty", return_value=True),
               mock.patch.object(simple_ui, "_ask", return_value="0"),
