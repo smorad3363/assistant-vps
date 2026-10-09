@@ -286,3 +286,30 @@ jobs:
           diff -u "$RUNNER_TEMP/v1-acct-before" "$RUNNER_TEMP/v1-acct-after"
           diff -u "$RUNNER_TEMP/v1-tc-before" "$RUNNER_TEMP/v1-tc-after"
           echo "PASS real V1 install, alias equivalence and V2 non-interference"
+
+  activated-v2-systemd:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable owned units, sample, reinstall and remove without V1 writes
+        env:
+          REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          sudo env PORTMANAGER2_REF="$REF_SHA" PORTMANAGER2_ENABLE_SERVICES=1 bash portmanager-v2/install.sh
+          test "$(systemctl is-enabled portmanager2-restore.service)" = enabled
+          test "$(systemctl is-enabled portmanager2-sample.timer)" = enabled
+          test "$(systemctl is-active portmanager2-sample.timer)" = active
+          sudo test -f /etc/portmanager2/enable-restore
+          sudo test -f /etc/portmanager2/enable-sample
+          sudo systemctl start portmanager2-restore.service
+          sudo systemctl start portmanager2-sample.service
+          sudo portmanager2 doctor --json |
+            python3 -c 'import json,sys;assert json.load(sys.stdin)["details"]["systemd_units"]=="installed_active"'
+          sudo env PORTMANAGER2_REF="$REF_SHA" PORTMANAGER2_ENABLE_SERVICES=1 bash portmanager-v2/install.sh
+          sudo portmanager2 uninstall --yes
+          sudo test ! -e /etc/portmanager2/enable-restore
+          sudo test ! -e /etc/portmanager2/enable-sample
+          sudo test ! -e /etc/systemd/system/portmanager2-sample.timer
+          echo "PASS V2 systemd activated timer/restore lifecycle and uninstall"
