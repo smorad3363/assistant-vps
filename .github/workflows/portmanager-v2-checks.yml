@@ -325,3 +325,42 @@ jobs:
           sudo test ! -e /etc/portmanager2/enable-sample
           sudo test ! -e /etc/systemd/system/portmanager2-sample.timer
           echo "PASS V2 systemd activated timer/restore lifecycle and uninstall"
+
+  watchdog-expiry-ephemeral:
+    runs-on: ubuntu-24.04
+    needs: static-and-unit
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify unconfirmed V2 change automatically rolls back after 120 seconds
+        env:
+          REF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          sudo env PORTMANAGER2_REF="$REF_SHA" bash portmanager-v2/install.sh
+          sudo env PYTHONPATH=/opt/portmanager2/current python3 - <<'PY'
+          import json
+          import os
+          import time
+          import uuid
+          from pm2 import config, guard
+          original_config=json.load(open("/etc/portmanager2/config.json"))
+          original_state=json.load(open("/var/lib/portmanager2/state.json"))
+          ident=str(uuid.uuid4())
+          config.atomic_json(guard.PROTECTED, {
+              "product": "portmanager2", "change_id": ident,
+              "original_config": original_config,
+              "original_state": original_state,
+              "created_at": time.time(),
+              "expires_at": time.time()+120,
+              "desired_generation": original_config["generation"]
+          })
+          guard._schedule(ident)
+          print("Armed actual systemd-run watchdog", ident)
+          PY
+          sudo test -f /var/lib/portmanager2/protected.json
+          sleep 130
+          sudo test ! -e /var/lib/portmanager2/protected.json
+          sudo portmanager2 status --json | python3 -c             'import json,sys; d=json.load(sys.stdin); assert d["ok"] and d["details"]["generation"] == 0'
+          sudo portmanager2 uninstall --yes
+          echo "PASS real 120-second automatic watchdog expiry without network mutation"
