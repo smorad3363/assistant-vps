@@ -19,7 +19,7 @@ def parse_counters(output, by_port=False, include_v1=False):
     """
     data = {}
     for line in output.splitlines():
-        if "PM2_ACCOUNT" not in line or "-A" not in line:
+        if "-A" not in line or not ("PM2_ACCOUNT" in line or (include_v1 and by_port and "PORTMANAGER_ACCT" in line)):
             continue
         args = shlex.split(line)
         if "-A" not in args:
