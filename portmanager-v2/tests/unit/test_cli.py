@@ -99,6 +99,31 @@ class CLITests(TestCase):
             self.assertEqual(payload["details"]["would_apply"][0]["port"], 443)
             self.assertEqual(json.loads(path.read_text()), schedule)
 
+    def test_schedule_install_wires_kernel_reconcile_and_minute_timer(self):
+        with (mock.patch.object(cli, "mutation_lock", return_value=contextlib.nullcontext()),
+              mock.patch("pm2.shaping.install_schedule", return_value={"saved": 1}) as installed,
+              mock.patch("pm2.shaping.reconcile", return_value={"changed": True, "active_filters": 2}) as applied,
+              mock.patch("pm2.services.activate") as activated):
+            code, out, err = self.invoke(["limits", "schedule-install",
+                                          "--file", "/tmp/plan.json", "--json"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["details"]["active_filters"], 2)
+        installed.assert_called_once_with("/tmp/plan.json")
+        applied.assert_called_once_with()
+        activated.assert_called_once()
+
+    def test_schedule_install_failure_does_not_claim_activation(self):
+        from pm2.errors import PM2Error
+        with (mock.patch.object(cli, "mutation_lock", return_value=contextlib.nullcontext()),
+              mock.patch("pm2.shaping.install_schedule",
+                         side_effect=PM2Error("E_CONFLICT", "foreign V1 tc")),
+              mock.patch("pm2.services.activate") as activated):
+            code, out, err = self.invoke(["limits", "schedule-install",
+                                          "--file", "/tmp/plan.json"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("E_CONFLICT", err)
+        activated.assert_not_called()
+
     def test_limits_list_reports_owned_policies_not_foreign_tc(self):
         with (mock.patch("pm2.shaping.schedule_load", return_value={"schema_version": 1, "policies": []}),
               mock.patch("pm2.shaping.state_load", return_value={"product": "portmanager2", "interfaces": [], "filters": []})):
