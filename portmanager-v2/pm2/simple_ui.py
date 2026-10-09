@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -246,21 +247,124 @@ def _ui_header(page):
     _ui_edge("bottom", width)
 
 
-def _ui_actions(*choices):
+def _ui_actions(*choices, selected=0):
+    """Shared menu: the highlighted arrow is a real keyboard selection."""
     width = _ui_width()
     _ui_edge("top", width)
     for index, (hotkey, label) in enumerate(choices):
-        marker = _paint("96;1", f"[{hotkey}]")
-        pointer = _paint("96;1", " ›") if index == 0 else "  "
-        content = f"  {marker}   " + _ui_cut(label, width - 20)
-        if index == 0:
-            content = _paint("96", "▸ ") + content
+        chosen = index == selected
+        text = "  " + f"[{hotkey}] " + _ui_cut(label, width - 17)
+        inner_width = width - 8
+        content = ("▶ " if chosen else "  ") + text
+        content += " " * max(0, inner_width - _ui_len(content))
+        if chosen:
+            content = _paint("30;46;1", content) if os.isatty(1) and not os.getenv("NO_COLOR") else content
         else:
-            content = "  " + content
-        _ui_line(content + " " * max(0, width - 5 - _ui_len(content) - 2) +
-                 pointer, width)
+            content = _paint("97", content)
+        _ui_line(content, width)
     _ui_edge("bottom", width)
-    print(_paint("90", "  0 Back    │    number + Enter Select    │    r Refresh"))
+    print(_paint("90", "  ↑↓ Move   │   Enter Choose   │   0 / Esc Back   │   r Refresh"))
+
+
+def _menu_key(choices, selected):
+    """Read one action directly from an interactive SSH terminal.
+
+    The tty is always restored, including on Ctrl+C, EOF and exceptions.
+    Digits require Enter (so a typed newline never leaks to the next screen).
+    """
+    import select
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    previous = termios.tcgetattr(fd)
+    typed = ""
+    try:
+        tty.setcbreak(fd)
+        while True:
+            char = os.read(fd, 1)
+            if not char:
+                return "0"
+            if char == b"\x03":  # Ctrl+C
+                return "0"
+            if char == b"\x1b":
+                seq = b""
+                if select.select([fd], [], [], 0.05)[0]:
+                    seq = os.read(fd, 1)
+                    if seq in (b"[", b"O"):
+                        while len(seq) < 12 and select.select([fd], [], [], 0.05)[0]:
+                            nxt = os.read(fd, 1)
+                            seq += nxt
+                            if nxt in b"~ABCDHF":
+                                break
+                if seq.endswith(b"A"):
+                    selected = (selected - 1) % len(choices)
+                elif seq.endswith(b"B"):
+                    selected = (selected + 1) % len(choices)
+                else:
+                    return "0"
+                typed = ""
+                _repaint_actions(choices, selected, typed)
+                continue
+            if char in (b"\r", b"\n"):
+                if typed:
+                    available = {key for key, _ in choices}
+                    result = typed if typed in available else None
+                    if result is None:
+                        typed = ""
+                        _repaint_actions(choices, selected, typed)
+                        continue
+                    return result
+                return choices[selected][0]
+            if char in (b"\x7f", b"\x08"):
+                typed = typed[:-1]
+                _draw_menu_prompt(choices, selected, typed)
+                continue
+            if char in (b"r", b"R") and not typed:
+                return "r"
+            if char in (b"q", b"Q") and not typed:
+                return "0"
+            if char.isdigit():
+                typed = (typed + char.decode("ascii"))[-5:]
+                _draw_menu_prompt(choices, selected, typed)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, previous)
+        print()
+
+
+def _draw_menu_prompt(choices, selected, typed):
+    default = choices[selected][0]
+    sys.stdout.write("\r\x1b[2K" + _paint("96;1", "  Choose") +
+                     f" [{default}]: {typed}")
+    sys.stdout.flush()
+
+
+def _repaint_actions(choices, selected, typed):
+    # Cursor is on the prompt line just below the (n + 3)-line menu.
+    sys.stdout.write("\r\x1b[2K" + f"\x1b[{len(choices) + 3}A\x1b[J")
+    sys.stdout.flush()
+    _ui_actions(*choices, selected=selected)
+    _draw_menu_prompt(choices, selected, typed)
+
+
+def _choose(*choices, selected=0):
+    """Universal navigation for all on-screen options, with safe pipe fallback."""
+    if not choices:
+        return "0"
+    keys = [key for key, _ in choices]
+    if len(set(keys)) != len(keys):
+        raise ValueError("Menu shortcuts must be unique")
+    selected = max(0, min(selected, len(choices) - 1))
+    _ui_actions(*choices, selected=selected)
+    if not (os.isatty(0) and os.isatty(1) and
+            os.getenv("TERM", "").lower() not in ("", "dumb")):
+        return _ask("Choose number", "0")
+    try:
+        _draw_menu_prompt(choices, selected, "")
+        return _menu_key(choices, selected)
+    except (OSError, ValueError, ImportError):
+        # Nonstandard terminal: provide an ordinary numeric choice.
+        print()
+        return _ask("Choose number", "0")
 
 
 def _ui_header_row(width):
