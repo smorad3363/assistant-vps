@@ -68,7 +68,8 @@ Every main menu and speed-setting menu supports Up / Down to move the
 highlighted arrow, Enter to open the highlighted choice, number + Enter as
 a shortcut, and Esc or 0 to go back. A menu is replaced rather than appended
 to SSH scrollback, and longer existing-rule or saved-connection lists are
-paginated with Previous / Next choices. The menu uses a short-lived
+paginated with Previous / Next choices. The main Ports and Edit pages
+show short previews so long lists never push the menu off-screen. The menu uses a short-lived
 cbreak tty reader and always restores the terminal settings after selecting
 or leaving; ordinary numeric entry remains as a fallback for unsupported TTYs.
 No firewall, routing or bandwidth policy is applied by merely navigating.
