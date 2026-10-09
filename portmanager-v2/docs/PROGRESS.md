@@ -99,6 +99,26 @@ acceptance gates A–F and user testing complete.
 - Requested extra acceptance IDs: AT-041..050, with 047..050
   requiring real scheduling + qdisc ownership and VM tests.
 
+## Live per-port graph (latest 2026-10-09 change)
+
+- Implemented `pm2/port_graph.py`, `graph --refresh N --window 10m`
+  and interactive menu option 04. A single per-refresh read-only
+  `iptables-save -c -t mangle` snapshot powers real per-original-port
+  TCP/UDP throughput, configurable 2..60s refresh, rolling time-weighted
+  600-second averages, ASCII/Unicode sparkline history, reset-safe deltas,
+  bounded SQLite retention and load-aware refresh backoff.
+- Shows existing V1 `PORTMANAGER_ACCT` original monitor ports **without
+  editing V1** as well as V2's own `PM2_ACCOUNT` tunnel ports.
+- All-except rules are explicitly labelled `ALL*` aggregated because
+  single-port conntrack tags are not present; no invented per-port stats.
+- Added `tests/unit/test_port_graph.py` (11 cases) and namespace
+  TCP/UDP graph assertions in GitHub Actions. First failing SQLite window
+  boundary test was fixed. A second V1 parser exclusion error was fixed;
+  validate **the latest HEAD run**, not previous runs, before release.
+- **NEXT:** confirm 10/10 green CI at latest HEAD, then perform user
+  acceptance on disposable Debian VPS/snapshot. Time-scheduled `tc`
+  enforcement still requires version 2.1 ownership-safe backend.
+
 ## Open risks and acceptance work remaining
 
 1. **P0 until verified:** Full guest reboot of a VM with actual active
