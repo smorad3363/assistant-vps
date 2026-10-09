@@ -5,10 +5,12 @@ ports on each refresh, never adds firewall rules or changes tc. History persists
 for 10 minutes across viewer restarts in the existing V2-owned SQLite DB.
 """
 from collections import defaultdict
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import json
 import math
 import os
+import signal
+import threading
 import shutil
 import sqlite3
 import sys
@@ -17,6 +19,24 @@ import time
 from . import accounting, auto_monitor, config, sampler, transaction
 from .errors import PM2Error
 from .live_screen import LiveScreen
+
+@contextmanager
+def _graceful_sigterm():
+    """Allow TERM to unwind curses and clean only owned live counter rules."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def interrupt(_number, _frame):
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGTERM, interrupt)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
 
 WINDOW = 600
 # A 10-minute history OF the trailing 10-minute moving average needs
@@ -356,7 +376,10 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
             # machine-readable and never leak terminal control characters.
             interactive = not once and not json_mode
             view = LiveScreen(refresh) if interactive else nullcontext()
-            with monitor as session, view as screen:
+            # Acquire the viewer's own flock first; after it is acquired,
+            # graceful SIGTERM can unwind the active contexts and clean its
+            # temporary, counter-only netfilter chains.
+            with monitor as session, view as screen, _graceful_sigterm():
                 if use_auto and session.ports:
                     labels.update({("auto", proto, port): "Local service"
                                    for proto, port in session.ports})
@@ -421,6 +444,13 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         # without leaving repeated frames in terminal scrollback.
                         return 130
         except BlockingIOError as exc:
-            raise PM2Error("E_LOCKED", "Another live monitor is already running") from exc
+            owner = auto_monitor.lock_owner_pid()
+            hint = (f" (possible PID {owner}; inspect with ps -fp {owner})"
+                    if owner else "")
+            raise PM2Error(
+                "E_LOCKED",
+                "Another live monitor is running" + hint +
+                ". Exit its Live screen with q; do not delete the lock file."
+            ) from exc
     finally:
         db.close()
