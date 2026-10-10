@@ -9,6 +9,77 @@ from pm2 import history_collector, sampler, usage_ledger
 
 
 class PortUsageTests(unittest.TestCase):
+    def test_daily_download_and_upload_are_separate_in_local_timezone(self):
+        tz = "Asia/Tehran"
+        start = usage_ledger.parse_datetime("2026-10-10 00:00", tz)
+        end = usage_ledger.parse_datetime("2026-10-12 00:00", tz)
+        rows = [
+            (start + 60, start + 120, "auto", "tcp", 8080,
+             1_000_000_000, 3_000_000_000),
+            (start + 86400 + 60, start + 86400 + 120, "auto", "tcp",
+             8080, 2_000_000_000, 4_000_000_000),
+            (start + 60, start + 120, "auto", "udp", 4343, 500, 900)
+        ]
+        days = usage_ledger.daily_breakdown(rows, start, end, tz)
+        self.assertEqual([day["date"] for day in days],
+                         ["2026-10-10", "2026-10-11"])
+        first = next(p for p in days[0]["ports"] if p["port"] == 8080)
+        second = next(p for p in days[1]["ports"] if p["port"] == 8080)
+        self.assertEqual(first["upload_bytes_lower"], 1_000_000_000)
+        self.assertEqual(first["download_bytes_lower"], 3_000_000_000)
+        self.assertEqual(second["upload_bytes_lower"], 2_000_000_000)
+        self.assertEqual(second["download_bytes_lower"], 4_000_000_000)
+        self.assertTrue(any(p["port"] == 4343 for p in days[0]["ports"]))
+        self.assertFalse(any(p["port"] == 4343 for p in days[1]["ports"]))
+
+    def test_midnight_crossing_bytes_are_uncertain_not_divided_or_double_verified(self):
+        tz = "Asia/Tehran"
+        midnight = usage_ledger.parse_datetime("2026-10-11 00:00", tz)
+        days = usage_ledger.daily_breakdown([
+            (midnight - 30, midnight + 30, "auto", "tcp",
+             1001, 1_000, 3_000)
+        ], midnight - 60, midnight + 60, tz)
+        self.assertEqual(len(days), 2)
+        for day in days:
+            port = day["ports"][0]
+            self.assertEqual(port["download_bytes_lower"], 0)
+            self.assertEqual(port["upload_bytes_lower"], 0)
+            self.assertEqual(port["download_bytes_upper"], 3_000)
+            self.assertEqual(port["upload_bytes_upper"], 1_000)
+            self.assertEqual(port["boundary_uncertain_bytes"], 4_000)
+            self.assertEqual(port["missing_seconds"], 30)
+
+    def test_daily_explicit_no_samples_is_not_reported_as_zero(self):
+        start = usage_ledger.parse_datetime("2026-10-10 00:00", "UTC")
+        days = usage_ledger.daily_breakdown([
+            (start + 60, start + 120, "auto", "tcp", 1001, 1, 1),
+        ], start, start + 2 * 86400, "UTC")
+        self.assertTrue(days[0]["has_samples"])
+        self.assertFalse(days[1]["has_samples"])
+        self.assertEqual(days[1]["ports"], [])
+        result = {"from": "2026-10-10 00:00", "to": "2026-10-12 00:00",
+                  "timezone": "UTC", "daily": days}
+        parsed = list(csv.DictReader(usage_ledger.to_daily_csv(result).splitlines()))
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0]["upload_bytes_lower"], "1")
+        self.assertEqual(parsed[0]["download_bytes_lower"], "1")
+        self.assertEqual(parsed[1]["date"], "2026-10-11")
+        self.assertEqual(parsed[1]["has_samples"], "False")
+        self.assertEqual(parsed[1]["download_bytes_lower"], "")
+        self.assertIn("NO SAMPLES", usage_ledger.pretty_daily(result))
+
+    def test_local_dst_day_can_have_23_or_25_hours(self):
+        for date, expected in (("2026-03-08", 23), ("2026-11-01", 25)):
+            start = usage_ledger.parse_datetime(
+                f"{date} 00:00", "America/New_York")
+            end_day = "2026-03-09" if expected == 23 else "2026-11-02"
+            end = usage_ledger.parse_datetime(
+                f"{end_day} 00:00", "America/New_York")
+            day = usage_ledger.daily_breakdown(
+                [], start, end, "America/New_York")
+            self.assertEqual(len(day), 1)
+            self.assertEqual(day[0]["period_seconds"], expected * 3600)
+
     def test_timezone_parse_and_invalid_clock(self):
         self.assertEqual(
             usage_ledger.parse_datetime("2026-10-10 03:30", "Asia/Tehran"),
@@ -123,6 +194,8 @@ class PortUsageTests(unittest.TestCase):
                 result = usage_ledger.report("2026-10-10 00:00",
                                              "2026-10-10 00:02", "UTC")
                 self.assertEqual(result["intervals_read"], 2)
+                self.assertEqual(result["daily"][0]["date"], "2026-10-10")
+                self.assertEqual(result["daily"][0]["ports"][0]["upload_bytes_lower"], 4000000000)
                 self.assertEqual(result["ports"][0]["upload_bytes_lower"], 4000000000)
                 self.assertEqual(result["ports"][0]["download_bytes_lower"], 6000000000)
                 self.assertTrue(result["not_provider_billable"])
