@@ -161,6 +161,64 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(selected["name"], "Port-8")
         self.assertEqual(picked.call_count, 2)
 
+    def test_report_displays_distinct_network_total_and_port_rows(self):
+        row = {"protocol": "tcp", "port": 1001,
+               "download_bytes_lower": 870_200_000,
+               "download_bytes_upper": 870_200_000,
+               "upload_bytes_lower": 7_411_100_000,
+               "upload_bytes_upper": 7_411_100_000,
+               "covered_seconds": 1500, "missing_seconds": 1000,
+               "boundary_uncertain_bytes": 0, "overlapping_sources": False}
+        server = {"interface": "eth0", "has_samples": True,
+                  "download_bytes_lower": 2_000_000_000,
+                  "download_bytes_upper": 2_000_000_000,
+                  "upload_bytes_lower": 8_000_000_000,
+                  "upload_bytes_upper": 8_000_000_000,
+                  "covered_seconds": 1500}
+        data = {"ports": [row],
+                "monitored_port_sum": {
+                    "download_bytes_lower": 870_200_000,
+                    "download_bytes_upper": 870_200_000,
+                    "upload_bytes_lower": 7_411_100_000,
+                    "upload_bytes_upper": 7_411_100_000},
+                "server": server, "daily": [
+                    {"date": "2026-10-10", "server": server,
+                     "ports": [row]}]}
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ask", side_effect=[
+                  "Asia/Tehran", "2026-10-10 00:00",
+                  "2026-10-10 03:59", "ALL"]),
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=data),
+              mock.patch.object(simple_ui, "_choose", side_effect=["4", "0"]),
+              redirect_stdout(io.StringIO()) as output):
+            simple_ui._usage_report()
+        rendered = output.getvalue()
+        self.assertIn("WHOLE SERVER NETWORK (eth0)", rendered)
+        self.assertIn("↓ DOWNLOAD  2.0000 GB", rendered)
+        self.assertIn("↑ UPLOAD  8.0000 GB", rendered)
+        self.assertIn("BOTH DIRECTIONS: 10.0000 GB", rendered)
+        self.assertIn("Monitored ports sum (NOT server total", rendered)
+        self.assertIn("TCP:1001", rendered)
+        self.assertIn("0.8702", rendered)
+        self.assertIn("7.4111", rendered)
+        self.assertIn("RECORDED", rendered)
+        self.assertNotIn("Unrecorded: 18933", rendered)
+
+    def test_port_usage_table_fixed_columns_remain_readable(self):
+        item = {"download_bytes_lower": 2000000000,
+                "download_bytes_upper": 2000000000,
+                "upload_bytes_lower": 1000000000,
+                "upload_bytes_upper": 1500000000,
+                "covered_seconds": 600}
+        row = simple_ui._usage_row("TCP:8080", item, wide=True)
+        self.assertLess(row.index("2.0000"), row.index("1.0000..1.5000"))
+        self.assertEqual(row.count("GB"), 0)  # header defines units
+        self.assertIn("10m recorded", row)
+        small = simple_ui._usage_row("TCP:8080", item, wide=False)
+        self.assertIn("Download: 2.0000 GB", small)
+        self.assertIn("Upload: 1.0000..1.5000 GB", small)
+
     def test_daily_usage_is_default_and_directional_columns_are_distinct(self):
         port = {"protocol": "tcp", "port": 8080,
                 "download_bytes_lower": 3_000_000_000,
@@ -192,7 +250,7 @@ class NewThemeTest(unittest.TestCase):
         self.assertIn("3.0000", rendered)
         self.assertIn("1.0000", rendered)
         self.assertIn("2026-10-11", rendered)
-        self.assertIn("No stored measurements", rendered)
+        self.assertIn("No stored port measurements", rendered)
         self.assertTrue(any("Show full period totals" in str(choice)
                             for call in chooser.call_args_list
                             for choice in call.args))
@@ -241,7 +299,7 @@ class NewThemeTest(unittest.TestCase):
             "2026-10-10 08:00", "2026-10-10 10:00",
             "Asia/Tehran", port=8080)
         self.assertIn("2.0000", out.getvalue())
-        self.assertIn("Unrecorded:", out.getvalue())
+        self.assertIn("gap", out.getvalue())
 
     def test_iptables_nat_includes_old_rules_but_only_readonly(self):
         text = (
