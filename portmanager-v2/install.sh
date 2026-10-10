@@ -213,14 +213,15 @@ fi
 "$BIN" --version | grep -Fxq "$VERSION" || fatal "Activation smoke test failed"
 "$BIN" doctor --json >/dev/null || fatal "Read-only doctor smoke test failed"
 
-# Services exist but are disabled until their engines are implemented/tested.
-# Service module handles unit preflight, atomic writes and unit rollback.
+# Verified V2-owned systemd timer logs per-port bytes in the background.
+# Normal installs enable it automatically. Operators can explicitly set
+# PORTMANAGER2_ENABLE_SERVICES=0 to opt out on an unsupported test machine.
+# Service module handles strict unit ownership/rollback.
 PYTHONPATH="$ROOT/current" python3 -m pm2.services install \
   || fatal "Could not safely install V2 systemd units"
-# Continuous 10m/1h/8h/24h history requires the minute timer.
-# Opt in explicitly with PORTMANAGER2_ENABLE_SERVICES=1, keeping other
-# installations inert by default and preserving safe VM/uninstall behavior.
-if [[ "${PORTMANAGER2_ENABLE_SERVICES:-0}" == "1" ]]; then
+# Continuous history and 14-day byte accounting run without Live.
+# Enabled by default on installation; explicit 0 opts out safely.
+if [[ "${PORTMANAGER2_ENABLE_SERVICES:-1}" == "1" ]]; then
   PYTHONPATH="$ROOT/current" python3 -c 'from pm2.services import activate; print(activate())' \
     || fatal "Could not safely activate V2-only systemd units"
 fi
@@ -236,6 +237,16 @@ new_release=""
 swapped=0
 trap - EXIT
 rm -rf -- "$tmp"
+# Queue the first counter baseline immediately after installation; the
+# sampler waits briefly for the install lock to be released. The systemd timer
+# continues running every minute even when the Live viewer is closed.
+if [[ "${PORTMANAGER2_ENABLE_SERVICES:-1}" == "1" ]]; then
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl start --no-block portmanager2-sample.service \
+      || log "WARNING: first background sample could not be queued; check sample timer"
+  fi
+fi
 log "Installed $VERSION (commit $SHA); primary command: portmanager"
+log "Continuous port-byte logging: ${PORTMANAGER2_ENABLE_SERVICES:-1} (1=on, 0=off); retention: 14 days"
 log "Original V1 executable/cron archived under /var/lib/portmanager2/legacy-v1 when present."
 log "Run: portmanager (or portmanager2); use original installer with bash -s -- v1 to restore V1."
