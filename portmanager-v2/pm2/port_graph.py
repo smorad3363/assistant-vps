@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import time
 
-from . import accounting, auto_monitor, config, sampler, transaction, shaping, limit_windows
+from . import accounting, auto_monitor, config, sampler, transaction, shaping, limit_windows, usage_ledger
 from .errors import PM2Error
 from .live_screen import LiveScreen
 
@@ -434,6 +434,8 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                 next_limit_reload = 0
                 speed_policies = []
                 speed_policies_error = None
+                next_volume_reload = 0
+                volume_windows = {}
                 while True:
                     try:
                         if screen is not None:
@@ -469,6 +471,17 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                             labels.update(saved_auto_labels(db, now))
                         result = frame(labels, rates, history(db, now, labels),
                                        now, top=top, active_only=active_only)
+                        if now >= next_volume_reload:
+                            try:
+                                volume_windows = usage_ledger.live_window_volumes(db, now)
+                                result.pop("byte_volume_error", None)
+                            except (OSError, ValueError, PM2Error) as exc:
+                                volume_windows = {}
+                                result["byte_volume_error"] = str(exc)[:100]
+                            next_volume_reload = now + 30
+                        for row in result["rows"]:
+                            proto, port = row.get("protocol"), row.get("listen_port")
+                            row["volumes"] = volume_windows.get((proto, port), {})
                         result["interfaces"] = auto_monitor.interface_rates(
                             net_before, net_after, elapsed)
                         # Loaded read-only; refresh policies at most twice per
