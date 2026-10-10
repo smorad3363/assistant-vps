@@ -50,6 +50,16 @@ or deeply nested firewall details. The header is compact on these two screens
 so important numbers occupy most of the terminal. The font itself is terminal
 controlled, hence the enlarged figures use portable block characters.
 
+For cross-date port accounting, press **P** directly from the day picker or
+inside any single-day port breakdown. This opens **PORT CONSUMPTION BY DATE**:
+a paginated table of **date, TCP/UDP port, Download GB, Upload GB, combined
+port Total GB, and measured minutes**. It uses the already-saved daily byte
+records, not Mbps estimates. Press **F** there to filter to one numeric port,
+such as `1001`, and compare all available local calendar days for that
+specific port. A missing day/port is **NO RECORD (unknown)**, never a fake
+zero. Use **8/9** to turn pages and **0/Esc** to go back. No historical
+consumption can be recovered before the background byte logger began.
+
 Each date line now shows the physical NIC's **download, upload and their
 combined total** side-by-side, and the period-wide total is displayed above
 the dates. GB readings have two decimals (tiny nonzero readings show
