@@ -9,6 +9,47 @@ from pm2 import history_collector, sampler, usage_ledger
 
 
 class PortUsageTests(unittest.TestCase):
+    def test_live_volume_windows_count_recorded_bytes_not_mbps(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
+                db = sampler.connect()
+                now = 2_000_000_000.0
+                with db:
+                    usage_ledger.record(db, [
+                        (now-300,now-240,"auto","tcp",8080,400_000_000,600_000_000),
+                        (now-240,now-180,"auto","tcp",8080,200_000_000,300_000_000),
+                        (now-7200,now-7140,"auto","tcp",8080,100_000_000,100_000_000),
+                        (now-600,now-540,"auto","udp",4343,25_000_000,75_000_000),
+                        (now-300,now-240,"v1","tcp",8080,400_000_000,600_000_000)
+                    ])
+                windows = usage_ledger.live_window_volumes(db, now)
+                first = windows[("tcp",8080)]
+                self.assertEqual(first["10m"]["bytes"], 1_500_000_000)
+                self.assertEqual(first["1h"]["bytes"], 1_500_000_000)
+                self.assertEqual(first["8h"]["bytes"], 1_700_000_000)
+                self.assertEqual(first["24h"]["bytes"], 1_700_000_000)
+                self.assertEqual(windows[("udp",4343)]["10m"]["bytes"], 100_000_000)
+                self.assertLess(first["10m"]["coverage_seconds"], 600)
+                self.assertEqual(first["10m"]["possible_bytes"], 1_500_000_000)
+                db.close()
+
+    def test_live_volume_partial_boundary_never_invents_byte_fraction(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
+                db = sampler.connect()
+                now = 2_000_000_000.0
+                with db:
+                    usage_ledger.record(db, [
+                        (now-620,now-570,"auto","tcp",1001,300,700)
+                    ])
+                volumes = usage_ledger.live_window_volumes(
+                    db, now, periods={"10m":600})
+                partial = volumes[("tcp",1001)]["10m"]
+                self.assertEqual(partial["bytes"], 0)
+                self.assertEqual(partial["possible_bytes"], 1000)
+                self.assertEqual(partial["coverage_seconds"], 30)
+                db.close()
+
     def test_real_nic_rx_tx_totals_are_independent_from_ports(self):
         with tempfile.TemporaryDirectory() as folder:
             with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
