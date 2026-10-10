@@ -39,8 +39,11 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 ## Per-port traffic volume by arbitrary date and time
 
 Open Port Manager and select **See port usage by date and time** (option 4).
-Enter a start, end, explicit timezone (e.g. `Asia/Tehran`), and a port
-number or `ALL`. The report stores integer iptables byte deltas in the same
+By default the report starts with the last 14 local calendar days, grouped
+**by day and port** with **separate Download (↓) and Upload (↑) GB columns**.
+You can change the start, end, timezone (e.g. `Asia/Tehran`) and port
+number or use `ALL`; option 4 inside the report switches between daily rows
+and totals for the selected interval. The report stores integer iptables byte deltas in the same
 owned SQLite database `/var/lib/portmanager2/traffic.sqlite3`. Unlike
 Live's *rate* history, these records are not erased after 24 hours and are
 collected once per minute by the systemd sampler without opening Live.
@@ -51,13 +54,19 @@ For exact export suitable for checking a purchasing discrepancy:
 portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran
 portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran --port 8080 --csv > /root/port8080-usage.csv
 portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran --json
+portmanager2 usage --from "2026-10-01 00:00" --to "2026-10-10 23:59" --tz Asia/Tehran --daily
+portmanager2 usage --from "2026-10-01 00:00" --to "2026-10-10 23:59" --tz Asia/Tehran --daily --csv > /root/daily-port-usage.csv
 ```
 
 The report separates **lower-bound measured bytes** from the **upper-bound
 bytes that may fall inside a partially overlapping first or last minute**.
-Unknown within-minute timing is not silently estimated. Interrupted
-samples, a reboot, counter resets, and unavailable ports are shown as
-coverage gaps, **not zero usage**. Existing rate-only history cannot be
+Unknown within-minute timing is not silently estimated. A sample crossing
+local midnight contributes **zero verified bytes** to either day's LOWER
+bound, but may contribute to the possible UPPER bound for both days. These
+daily UPPER bounds must **not** be added across days. Interrupted samples,
+a reboot, counter resets, and unavailable ports are shown as coverage gaps,
+**not zero usage**. Dates with no measured samples say **No stored
+measurements**, never 0 GB. Existing rate-only history cannot be
 converted into authoritative historical byte volumes: accurate byte
 logging starts only when this upgrade's ledger has established its baseline.
 
