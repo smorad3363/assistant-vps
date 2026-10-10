@@ -270,7 +270,7 @@ def _ui_actions(*choices, selected=0):
     print(_paint("90", "  ↑↓ Move   │   Enter Choose   │   0 / Esc Back   │   Number + Enter"))
 
 
-def _menu_key(choices, selected):
+def _menu_key(choices, selected, shortcuts=()):
     """Read one action directly from an interactive SSH terminal.
 
     The tty is always restored, including on Ctrl+C, EOF and exceptions.
@@ -331,7 +331,7 @@ def _menu_key(choices, selected):
             # with numeric day/port choices; they must never shadow a day.
             if char.isalpha() and not typed:
                 letter = char.decode("ascii").lower()
-                if letter in {key.lower() for key, _ in choices}:
+                if letter in {key.lower() for key, _ in choices} or letter in shortcuts:
                     return letter
                 continue
             if char.isdigit():
@@ -357,11 +357,11 @@ def _repaint_actions(choices, selected, typed):
     _draw_menu_prompt(choices, selected, typed)
 
 
-def _choose(*choices, selected=0):
+def _choose(*choices, selected=0, shortcuts=()):
     """Universal navigation for all on-screen options, with safe pipe fallback."""
     if not choices:
         return "0"
-    keys = [key for key, _ in choices]
+    keys = [key for key, _ in choices] + list(shortcuts)
     if len(set(keys)) != len(keys):
         raise ValueError("Menu shortcuts must be unique")
     selected = max(0, min(selected, len(choices) - 1))
@@ -372,7 +372,7 @@ def _choose(*choices, selected=0):
         return _ask("Choose option", "0")
     try:
         _draw_menu_prompt(choices, selected, "")
-        return _menu_key(choices, selected)
+        return _menu_key(choices, selected, shortcuts=shortcuts)
     except (OSError, ValueError, ImportError):
         # Nonstandard terminal: provide an ordinary numeric choice.
         print()
@@ -999,7 +999,12 @@ def _usage_day_label(day, width):
         ul = _usage_amount(network["upload_bytes_lower"],
                            network["upload_bytes_upper"])
         # The network is measured independently and is never a sum of ports.
-        label = f'{day["date"]}   ↓ {dl:>11} GB   ↑ {ul:>11} GB'
+        total_lo = network["download_bytes_lower"] + network["upload_bytes_lower"]
+        total_hi = network["download_bytes_upper"] + network["upload_bytes_upper"]
+        total = _usage_amount(total_lo, total_hi)
+        label = (f'{day["date"]:<12}   '
+                 f'↓ {dl:>12} GB     ↑ {ul:>12} GB     '
+                 f'TOTAL {total:>12} GB')
         return _ui_cut(label, max(15, width - 19))
     if day.get("ports"):
         return _ui_cut(
@@ -1122,9 +1127,24 @@ def _usage_report(custom=False):
                  _paint("90", f"  ·  last 14 days  ·  {zone_name}"))
         _ui_line("  " + _paint("92;1", "↓ DOWNLOAD") +
                  "     " + _paint("96;1", "↑ UPLOAD") +
-                 _paint("90", "     ·     recorded server traffic"))
+                 "     " + _paint("93;1", "TOTAL (↓ + ↑)") +
+                 _paint("90", "   ·   GB on main network interface"))
         _ui_line(_paint("93",
             "  Unknown days show NO DATA; zero is never assumed."))
+        summary = result.get("server") or {}
+        if summary.get("has_samples"):
+            summed_dl = _usage_amount(summary["download_bytes_lower"],
+                                      summary["download_bytes_upper"])
+            summed_ul = _usage_amount(summary["upload_bytes_lower"],
+                                      summary["upload_bytes_upper"])
+            summed_total = _usage_amount(
+                summary["download_bytes_lower"] + summary["upload_bytes_lower"],
+                summary["download_bytes_upper"] + summary["upload_bytes_upper"])
+            _ui_line("  " + _paint("97;1", "PERIOD TOTAL") +
+                     f"  ↓ {summed_dl} GB   ↑ {summed_ul} GB   " +
+                     _paint("93;1", f"TOTAL {summed_total} GB"))
+        _ui_line(_paint("90",
+            "  Enter: see that day's ports    S: change range/port    T: period details"))
         _ui_edge("bottom")
         chunk = days[page * page_size:(page + 1) * page_size]
         choices = [(str(i + 1), _usage_day_label(day, width))
@@ -1133,10 +1153,8 @@ def _usage_report(custom=False):
             choices.append(("8", "← Newer days"))
         if page < max_page:
             choices.append(("9", "Older days →"))
-        choices.extend([("s", "Settings: date / port"),
-                        ("t", "Totals for selected range"),
-                        ("0", "Back to home")])
-        action = _choose(*choices)
+        choices.append(("0", "Back to home"))
+        action = _choose(*choices, shortcuts=("s", "t"))
         if action and action.isdecimal() and 1 <= int(action) <= len(chunk):
             _usage_detail(result, chunk[int(action) - 1])
         elif action == "8" and page > 0:
