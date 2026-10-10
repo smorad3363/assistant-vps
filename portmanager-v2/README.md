@@ -79,9 +79,9 @@ failing the unit. Consecutive lost ticks still create gaps in the
 measurement history.
 
 Normal new installs and upgrades **activate** the V2-owned systemd
-sampling timer automatically, even if the Live viewer is closed. An initial
-counter baseline is queued as installation finishes; the next successful
-minute sample can then write byte differences. To explicitly opt out on a
+sampling timer automatically, even if the Live viewer is closed. The
+first scheduled run establishes a counter baseline (generally within a
+minute); the next successful sample can then write byte differences. To explicitly opt out on a
 test-only host, set `PORTMANAGER2_ENABLE_SERVICES=0` during installation.
 Monitoring rules are counter-only, but setup still requires root and
 iptables/netfilter support. Confirm the timer is healthy with:
