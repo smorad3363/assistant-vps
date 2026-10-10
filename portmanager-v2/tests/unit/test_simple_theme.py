@@ -161,187 +161,188 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(selected["name"], "Port-8")
         self.assertEqual(picked.call_count, 2)
 
-    def test_home_daily_report_opens_without_asking_for_dates_or_port(self):
+    @staticmethod
+    def usage_fixture():
+        port_new = {"protocol": "tcp", "port": 8080,
+                    "download_bytes_lower": 2_000_000_000,
+                    "download_bytes_upper": 2_100_000_000,
+                    "upload_bytes_lower": 1_000_000_000,
+                    "upload_bytes_upper": 1_100_000_000,
+                    "covered_seconds": 600, "missing_seconds": 60,
+                    "boundary_uncertain_bytes": 200,
+                    "overlapping_sources": False}
+        port_old = dict(port_new, port=1001,
+                        download_bytes_lower=300_000_000,
+                        download_bytes_upper=300_000_000,
+                        upload_bytes_lower=400_000_000,
+                        upload_bytes_upper=400_000_000)
+        network = {"interface": "eth0", "has_samples": True,
+                   "download_bytes_lower": 2_000_000_000,
+                   "download_bytes_upper": 2_100_000_000,
+                   "upload_bytes_lower": 1_000_000_000,
+                   "upload_bytes_upper": 1_100_000_000,
+                   "covered_seconds": 600, "missing_seconds": 60}
+        return {"ports": [port_new, port_old],
+                "server": network,
+                "daily": [
+                    {"date": "2026-10-09", "ports": [port_old], "server": network},
+                    {"date": "2026-10-10", "ports": [port_new], "server": network}],
+                "timezone": "Asia/Tehran"}
+
+    def test_home_four_shows_days_without_prompts(self):
         from datetime import datetime
         from zoneinfo import ZoneInfo
         zone = ZoneInfo("Asia/Tehran")
-        fake = {"ports": [], "daily": [],
-                "server": {"has_samples": False, "interface": None}}
+        data = self.usage_fixture()
         with (mock.patch.object(simple_ui, "_title") as title,
-              mock.patch.object(simple_ui, "_ask") as prompt,
+              mock.patch.object(simple_ui, "_ask") as prompts,
               mock.patch.object(simple_ui.usage_ledger, "report",
-                                return_value=fake) as queried,
-              mock.patch.object(simple_ui, "_choose", return_value="0"),
+                                return_value=data) as report,
+              mock.patch.object(simple_ui, "_choose", return_value="0") as choose,
               redirect_stdout(io.StringIO())):
             before = datetime.now(zone)
             simple_ui._usage_report()
             after = datetime.now(zone)
-        prompt.assert_not_called()
-        self.assertEqual(title.call_args_list[-1].args[0], "DAILY PORT USAGE")
-        args = queried.call_args.args
+        prompts.assert_not_called()
+        self.assertEqual(title.call_args_list[-1].args[0], "TRAFFIC BY DAY")
+        args = report.call_args.args
         self.assertEqual(args[2], "Asia/Tehran")
-        self.assertIsNone(queried.call_args.kwargs["port"])
+        self.assertIsNone(report.call_args.kwargs["port"])
         self.assertEqual(args[0], (before - simple_ui.timedelta(days=13))
                          .replace(hour=0, minute=0).strftime("%Y-%m-%d %H:%M"))
         self.assertIn(args[1], [
             before.replace(second=0, microsecond=0).strftime("%Y-%m-%d %H:%M"),
             after.replace(second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")])
+        first_menu = choose.call_args.args
+        self.assertIn("2026-10-10", first_menu[0][1])
+        self.assertIn("2026-10-09", first_menu[1][1])
 
-    def test_range_customization_prompts_only_after_request(self):
-        data = {"ports": [], "daily": []}
+    def test_select_day_shows_only_its_ports_and_returns_to_dates(self):
+        data = self.usage_fixture()
+        with (mock.patch.object(simple_ui, "_title") as titles,
+              mock.patch.object(simple_ui, "_ask") as prompts,
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=data),
+              mock.patch.object(simple_ui, "_choose",
+                                side_effect=["1", "0", "0"]) as chooser,
+              redirect_stdout(io.StringIO()) as out):
+            simple_ui._usage_report()
+        prompts.assert_not_called()
+        self.assertEqual([call.args[0] for call in titles.call_args_list],
+                         ["TRAFFIC BY DAY", "PORTS · 2026-10-10",
+                          "TRAFFIC BY DAY"])
+        output = out.getvalue()
+        self.assertIn("TCP:8080", output)
+        self.assertNotIn("TCP:1001", output)
+        self.assertIn("SERVER TRAFFIC", output)
+        self.assertIn("PORT BREAKDOWN", output)
+        self.assertEqual(chooser.call_count, 3)
+        self.assertIn("Back to days", str(chooser.call_args_list[1].args))
+
+    def test_day_details_separate_colored_large_download_upload(self):
+        data = self.usage_fixture()
+        day = data["daily"][1]
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui.os, "isatty", return_value=True),
+              mock.patch.dict(simple_ui.os.environ,
+                              {"TERM": "xterm-256color"}, clear=False),
+              mock.patch.object(simple_ui, "_choose", return_value="0"),
+              redirect_stdout(io.StringIO()) as out):
+            simple_ui._usage_detail(data, day)
+        output = out.getvalue()
+        self.assertIn("\033[92;1m", output)
+        self.assertIn("\033[96;1m", output)
+        self.assertIn("███", output)
+        self.assertIn("↓ DOWNLOAD", output)
+        self.assertIn("↑ UPLOAD", output)
+        self.assertIn("TCP:8080", output)
+        self.assertIn("2.0000..2.1000", output)
+        self.assertIn("1.0000..1.1000", output)
+
+    def test_compact_usage_header_hides_unneeded_network_status(self):
+        with (mock.patch.object(simple_ui, "_clear_screen"),
+              redirect_stdout(io.StringIO()) as output):
+            simple_ui._title("TRAFFIC BY DAY", compact=True)
+        rendered = output.getvalue()
+        self.assertIn("TRAFFIC BY DAY", rendered)
+        self.assertNotIn("View: all ports / rules", rendered)
+        self.assertNotIn("Mode: interactive", rendered)
+
+    def test_previous_days_page_and_day_selection(self):
+        data = self.usage_fixture()
+        from datetime import date, timedelta
+        data["daily"] = [
+            {"date": (date(2026, 10, 14) - timedelta(days=i)).isoformat(),
+             "server": {"has_samples": False}, "ports": []}
+            for i in reversed(range(14))]
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=data),
+              mock.patch.object(simple_ui, "_usage_detail") as detail,
+              mock.patch.object(simple_ui, "_choose",
+                                side_effect=["9", "1", "0"]) as chose,
+              redirect_stdout(io.StringIO())):
+            simple_ui._usage_report()
+        self.assertEqual(detail.call_args.args[1]["date"], "2026-10-07")
+        self.assertEqual(chose.call_count, 3)
+
+    def test_no_samples_never_displays_fictitious_zero_server_total(self):
+        data = self.usage_fixture()
+        data["server"] = {"interface": "eth0", "has_samples": False}
+        data["daily"][1]["server"] = data["server"]
+        data["daily"][1]["ports"] = []
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_choose", return_value="0"),
+              redirect_stdout(io.StringIO()) as out):
+            simple_ui._usage_detail(data, data["daily"][1])
+        self.assertIn("NOT RECORDED", out.getvalue())
+        self.assertIn("Usage is unknown, not 0 GB", out.getvalue())
+
+    def test_custom_range_prompts_only_on_explicit_change(self):
+        data = self.usage_fixture()
         with (mock.patch.object(simple_ui, "_title"),
               mock.patch.object(simple_ui, "_ask", side_effect=[
                   "Asia/Tehran", "2026-10-09 00:00",
-                  "2026-10-10 12:00", "1001"]) as prompt,
+                  "2026-10-10 12:00", "1001"]) as prompts,
               mock.patch.object(simple_ui.usage_ledger, "report",
-                                return_value=data) as queried,
-              mock.patch.object(simple_ui, "_choose", side_effect=["3", "0"]),
+                                return_value=data) as report,
+              mock.patch.object(simple_ui, "_choose",
+                                side_effect=["3", "0"]),
               redirect_stdout(io.StringIO())):
             simple_ui._usage_report()
-        self.assertEqual(prompt.call_count, 4)
-        queried.assert_any_call(
+        self.assertEqual(prompts.call_count, 4)
+        report.assert_any_call(
             "2026-10-09 00:00", "2026-10-10 12:00",
             "Asia/Tehran", port=1001)
 
-    def test_report_displays_distinct_network_total_and_port_rows(self):
-        row = {"protocol": "tcp", "port": 1001,
-               "download_bytes_lower": 870_200_000,
-               "download_bytes_upper": 870_200_000,
-               "upload_bytes_lower": 7_411_100_000,
-               "upload_bytes_upper": 7_411_100_000,
-               "covered_seconds": 1500, "missing_seconds": 1000,
-               "boundary_uncertain_bytes": 0, "overlapping_sources": False}
-        server = {"interface": "eth0", "has_samples": True,
-                  "download_bytes_lower": 2_000_000_000,
-                  "download_bytes_upper": 2_000_000_000,
-                  "upload_bytes_lower": 8_000_000_000,
-                  "upload_bytes_upper": 8_000_000_000,
-                  "covered_seconds": 1500}
-        data = {"ports": [row],
-                "monitored_port_sum": {
-                    "download_bytes_lower": 870_200_000,
-                    "download_bytes_upper": 870_200_000,
-                    "upload_bytes_lower": 7_411_100_000,
-                    "upload_bytes_upper": 7_411_100_000},
-                "server": server, "daily": [
-                    {"date": "2026-10-10", "server": server,
-                     "ports": [row]}]}
-        with (mock.patch.object(simple_ui, "_title"),
-              mock.patch.object(simple_ui, "_ask", side_effect=[
-                  "Asia/Tehran", "2026-10-10 00:00",
-                  "2026-10-10 03:59", "ALL"]),
+    def test_range_totals_still_available_but_not_in_main_day_view(self):
+        data = self.usage_fixture()
+        with (mock.patch.object(simple_ui, "_title") as titles,
               mock.patch.object(simple_ui.usage_ledger, "report",
                                 return_value=data),
-              mock.patch.object(simple_ui, "_choose", side_effect=["4", "0"]),
+              mock.patch.object(simple_ui, "_choose",
+                                side_effect=["4", "0", "0"]),
               redirect_stdout(io.StringIO()) as output):
-            simple_ui._usage_report(custom=True)
-        rendered = output.getvalue()
-        self.assertIn("WHOLE SERVER NETWORK (eth0)", rendered)
-        self.assertIn("↓ DOWNLOAD  2.0000 GB", rendered)
-        self.assertIn("↑ UPLOAD  8.0000 GB", rendered)
-        self.assertIn("BOTH DIRECTIONS: 10.0000 GB", rendered)
-        self.assertIn("Monitored ports sum (NOT server total", rendered)
-        self.assertIn("TCP:1001", rendered)
-        self.assertIn("0.8702", rendered)
-        self.assertIn("7.4111", rendered)
-        self.assertIn("RECORDED", rendered)
-        self.assertNotIn("Unrecorded: 18933", rendered)
+            simple_ui._usage_report()
+        self.assertEqual([call.args[0] for call in titles.call_args_list],
+                         ["TRAFFIC BY DAY", "PORTS · SELECTED PERIOD",
+                          "TRAFFIC BY DAY"])
+        self.assertIn("PORT BREAKDOWN", output.getvalue())
+        self.assertIn("↓ DOWNLOAD", output.getvalue())
 
-    def test_port_usage_table_fixed_columns_remain_readable(self):
-        item = {"download_bytes_lower": 2000000000,
-                "download_bytes_upper": 2000000000,
-                "upload_bytes_lower": 1000000000,
-                "upload_bytes_upper": 1500000000,
-                "covered_seconds": 600}
-        row = simple_ui._usage_row("TCP:8080", item, wide=True)
-        self.assertLess(row.index("2.0000"), row.index("1.0000..1.5000"))
-        self.assertEqual(row.count("GB"), 0)  # header defines units
-        self.assertIn("10m recorded", row)
-        small = simple_ui._usage_row("TCP:8080", item, wide=False)
-        self.assertIn("Download: 2.0000 GB", small)
-        self.assertIn("Upload: 1.0000..1.5000 GB", small)
-
-    def test_daily_usage_is_default_and_directional_columns_are_distinct(self):
-        port = {"protocol": "tcp", "port": 8080,
-                "download_bytes_lower": 3_000_000_000,
-                "download_bytes_upper": 3_100_000_000,
-                "upload_bytes_lower": 1_000_000_000,
-                "upload_bytes_upper": 1_100_000_000,
-                "missing_seconds": 60, "boundary_uncertain_bytes": 200,
-                "overlapping_sources": False}
-        result = {"ports": [port], "daily": [
-            {"date": "2026-10-10", "ports": [port]},
-            {"date": "2026-10-11", "ports": [], "period_seconds": 86400}
-        ]}
-        with (mock.patch.object(simple_ui, "_title") as titles,
-              mock.patch.object(simple_ui, "_ask", side_effect=[
-                  "Asia/Tehran", "2026-10-10 00:00",
-                  "2026-10-12 00:00", "8080"]),
-              mock.patch.object(simple_ui.usage_ledger, "report",
-                                return_value=result) as called,
-              mock.patch.object(simple_ui, "_choose", return_value="0") as chooser,
-              redirect_stdout(io.StringIO()) as out):
-            simple_ui._usage_report(custom=True)
-        called.assert_called_once_with(
-            "2026-10-10 00:00", "2026-10-12 00:00",
-            "Asia/Tehran", port=8080)
-        rendered = out.getvalue()
-        self.assertEqual(titles.call_args_list[-1].args[0], "DAILY PORT USAGE")
-        self.assertIn("DOWNLOAD", rendered)
-        self.assertIn("UPLOAD", rendered)
-        self.assertIn("3.0000", rendered)
-        self.assertIn("1.0000", rendered)
-        self.assertIn("2026-10-11", rendered)
-        self.assertIn("No stored port measurements", rendered)
-        self.assertTrue(any("Show full period totals" in str(choice)
-                            for call in chooser.call_args_list
-                            for choice in call.args))
-
-    def test_can_switch_from_daily_to_period_totals(self):
-        port = {"protocol": "tcp", "port": 1001,
-                "download_bytes_lower": 2_000_000_000,
-                "download_bytes_upper": 2_000_000_000,
-                "upload_bytes_lower": 1_000_000_000,
-                "upload_bytes_upper": 1_000_000_000,
-                "missing_seconds": 0, "boundary_uncertain_bytes": 0,
-                "overlapping_sources": False}
-        result = {"ports": [port], "daily": [
-            {"date": "2026-10-10", "ports": [port]}]}
-        with (mock.patch.object(simple_ui, "_title") as titles,
-              mock.patch.object(simple_ui, "_ask", side_effect=[
-                  "UTC", "2026-10-10 00:00", "2026-10-11 00:00", "ALL"]),
-              mock.patch.object(simple_ui.usage_ledger, "report",
-                                return_value=result),
-              mock.patch.object(simple_ui, "_choose", side_effect=["4", "0"]),
-              redirect_stdout(io.StringIO())):
-            simple_ui._usage_report(custom=True)
-        self.assertEqual(titles.call_args_list[-2].args[0], "DAILY PORT USAGE")
-        self.assertEqual(titles.call_args_list[-1].args[0], "PORT USAGE TOTALS")
-
-    def test_usage_menu_queries_exact_user_time_range(self):
-        report = {"ports": [{
-            "protocol": "tcp", "port": 8080,
-            "download_bytes_lower": 2_000_000_000,
-            "download_bytes_upper": 2_100_000_000,
-            "upload_bytes_lower": 1_000_000_000,
-            "upload_bytes_upper": 1_100_000_000,
-            "missing_seconds": 90, "boundary_uncertain_bytes": 200,
-            "overlapping_sources": False,
-        }]}
+    def test_fixed_width_port_columns_and_compact_layout(self):
+        row = self.usage_fixture()["ports"][0]
         with (mock.patch.object(simple_ui, "_title"),
-              mock.patch.object(simple_ui, "_ask", side_effect=[
-                  "Asia/Tehran", "2026-10-10 08:00",
-                  "2026-10-10 10:00", "8080"]),
-              mock.patch.object(simple_ui.usage_ledger, "report",
-                                return_value=report) as called,
+              mock.patch.object(simple_ui, "_ui_width", return_value=85),
               mock.patch.object(simple_ui, "_choose", return_value="0"),
               redirect_stdout(io.StringIO()) as out):
-            simple_ui._usage_report(custom=True)
-        called.assert_called_once_with(
-            "2026-10-10 08:00", "2026-10-10 10:00",
-            "Asia/Tehran", port=8080)
-        self.assertIn("2.0000", out.getvalue())
-        self.assertIn("gap", out.getvalue())
+            simple_ui._usage_detail(self.usage_fixture(),
+                                    self.usage_fixture()["daily"][1])
+        self.assertIn("TCP:8080", out.getvalue())
+        self.assertIn("2.0000..2.1000", out.getvalue())
+        self.assertIn("1.0000..1.1000", out.getvalue())
+        self.assertNotIn("███", out.getvalue())
+        self.assertEqual(len(simple_ui._usage_big_digits("2.23")), 5)
 
     def test_iptables_nat_includes_old_rules_but_only_readonly(self):
         text = (
