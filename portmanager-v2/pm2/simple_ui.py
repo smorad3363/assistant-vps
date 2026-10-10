@@ -1019,6 +1019,137 @@ def _usage_day_label(day, width):
     return f'{day["date"]}   No recordings (unknown)'
 
 
+def _usage_cross_date(result):
+    """Daily bytes for all monitored ports, on one screen with pagination."""
+    all_days = list(reversed(result.get("daily", [])))
+    port_names = sorted({
+        (item["protocol"], item["port"])
+        for day in all_days for item in day.get("ports", [])
+    }, key=lambda key: (
+        -sum(item["download_bytes_lower"] + item["upload_bytes_lower"]
+             for day in all_days for item in day.get("ports", [])
+             if (item["protocol"], item["port"]) == key),
+        key[0], key[1]))
+    filter_port = None
+    page = 0
+    while True:
+        width = _ui_width()
+        screen_rows = shutil.get_terminal_size((118, 34)).lines
+        page_size = max(4, min(15, screen_rows - 17))
+        entries = []
+        if filter_port is None:
+            for day in all_days:
+                observed = sorted(day.get("ports", []),
+                                  key=lambda item: -(
+                                      item["download_bytes_lower"] +
+                                      item["upload_bytes_lower"]))
+                for item in observed:
+                    entries.append((day["date"], item))
+                if not observed:
+                    entries.append((day["date"], None))
+        else:
+            for day in all_days:
+                entry = next((item for item in day.get("ports", [])
+                              if (item["protocol"], item["port"]) == filter_port), None)
+                entries.append((day["date"], entry))
+        max_page = max(0, (len(entries) - 1) // page_size)
+        page = min(page, max_page)
+        _title("PORT CONSUMPTION BY DATE", compact=True)
+        _ui_edge("top")
+        label = (f"{filter_port[0].upper()}:{filter_port[1]}"
+                 if filter_port else "ALL MONITORED PORTS")
+        _ui_line(_paint("97;1", f"  {label}") +
+                 _paint("90", f"  ·  {result.get('timezone', 'Asia/Tehran')}  ·  past 14 days"))
+        _ui_line(_paint("90", "  Values = recorded GB; unknown days are not zero usage."))
+        if filter_port is not None:
+            selected = next((item for item in result.get("ports", [])
+                             if (item["protocol"], item["port"]) == filter_port), None)
+            if selected is not None:
+                down = _usage_amount(selected["download_bytes_lower"],
+                                     selected["download_bytes_upper"])
+                up = _usage_amount(selected["upload_bytes_lower"],
+                                   selected["upload_bytes_upper"])
+                both = _usage_amount(
+                    selected["download_bytes_lower"] + selected["upload_bytes_lower"],
+                    selected["download_bytes_upper"] + selected["upload_bytes_upper"])
+                _ui_line(_paint("93;1", "  RECORDED PERIOD TOTAL") +
+                         f"  ↓ {down} GB   ↑ {up} GB   BOTH {both} GB")
+        _ui_line(_paint("90",
+                 "  F: filter by port / ALL    9: next page    8: previous page"))
+        _ui_edge("rule")
+        if width >= 104:
+            _ui_line(_paint("96;1",
+                f"  {'DATE':<12} {'PORT':<11} {'↓ DOWNLOAD GB':>15}"
+                f"  {'↑ UPLOAD GB':>15}  {'TOTAL GB':>15}  MEASURED"))
+        else:
+            _ui_line(_paint("96;1",
+                "  DATE  /  PORT      ↓ DOWNLOAD GB    ↑ UPLOAD GB    TOTAL"))
+        displayed = entries[page * page_size:(page + 1) * page_size]
+        for date, item in displayed:
+            if item is None:
+                _ui_line(_paint("93", f"  {date}   NO RECORD (unknown)"))
+                continue
+            port_label = f'{item["protocol"].upper()}:{item["port"]}'
+            down = _usage_amount(item["download_bytes_lower"],
+                                 item["download_bytes_upper"])
+            up = _usage_amount(item["upload_bytes_lower"],
+                               item["upload_bytes_upper"])
+            both = _usage_amount(
+                item["download_bytes_lower"] + item["upload_bytes_lower"],
+                item["download_bytes_upper"] + item["upload_bytes_upper"])
+            measured = f'{item.get("covered_seconds", 0)/60:.0f}m'
+            if width >= 104:
+                _ui_line("  " + f"{date:<12} {port_label:<11} " +
+                         _paint("92;1", f"{down:>15}") + "  " +
+                         _paint("96;1", f"{up:>15}") + "  " +
+                         _paint("93;1", f"{both:>15}") +
+                         _paint("90", f"  {measured}"))
+            else:
+                _ui_line("  " + f"{date}  {port_label:<10} " +
+                         _paint("92;1", f"↓{down}") + " " +
+                         _paint("96;1", f"↑{up}") + " " +
+                         _paint("93;1", f"Σ{both}"))
+        if not entries:
+            _ui_line(_paint("93;1", "  No port byte samples recorded for this range."))
+        _ui_edge("bottom")
+        print(_paint("90", f"  Page {page+1}/{max_page+1}  ·  {len(entries)} day/port entries"))
+        print(_paint("90",
+            "  Port counters may overlap due to NAT; do not add ports to estimate the server bill."))
+        choices = []
+        if page > 0:
+            choices.append(("8", "Previous page"))
+        if page < max_page:
+            choices.append(("9", "Next page"))
+        choices.append(("0", "Back"))
+        action = _choose(*choices, shortcuts=("f",))
+        if action == "8" and page > 0:
+            page -= 1
+        elif action == "9" and page < max_page:
+            page += 1
+        elif action == "f":
+            raw = _ask("Port number (ALL to show all)", "ALL")
+            if raw is None:
+                continue
+            if raw.strip().upper() == "ALL":
+                filter_port = None
+            elif raw.strip().isdecimal() and 1 <= int(raw) <= 65535:
+                number = int(raw)
+                matching = [key for key in port_names if key[1] == number]
+                if not matching:
+                    _ui_line(_paint("93",
+                        f"  Port {number} has no stored data in this range."))
+                    _ask("Enter to return")
+                    continue
+                filter_port = matching[0]
+            else:
+                _ui_line(_paint("93", "  Enter a port from 1–65535 or ALL."))
+                _ask("Enter to return")
+                continue
+            page = 0
+        else:
+            return
+
+
 def _usage_detail(result, day=None):
     """One selected day -> only its per-port table; Esc returns to day list."""
     rows = day["ports"] if day is not None else result["ports"]
@@ -1076,12 +1207,15 @@ def _usage_detail(result, day=None):
             buttons.append(("8", "Previous ports"))
         if page < max_page:
             buttons.append(("9", "Next ports"))
+        print(_paint("90", "  P: compare each port's consumption across dates"))
         buttons.append(("0", "Back to days"))
-        action = _choose(*buttons)
+        action = _choose(*buttons, shortcuts=("p",))
         if action == "8" and page > 0:
             page -= 1
         elif action == "9" and page < max_page:
             page += 1
+        elif action == "p":
+            _usage_cross_date(result)
         else:
             return
 
@@ -1150,7 +1284,7 @@ def _usage_report(custom=False):
                      f"  ↓ {summed_dl} GB   ↑ {summed_ul} GB   " +
                      _paint("93;1", f"TOTAL {summed_total} GB"))
         _ui_line(_paint("90",
-            "  Enter: see that day's ports    S: change range/port    T: period details"))
+            "  Enter: one day   P: port traffic by date   S: settings   T: range"))
         _ui_edge("bottom")
         chunk = days[page * page_size:(page + 1) * page_size]
         choices = [(str(i + 1), _usage_day_label(day, width))
@@ -1160,7 +1294,7 @@ def _usage_report(custom=False):
         if page < max_page:
             choices.append(("9", "Older days →"))
         choices.append(("0", "Back to home"))
-        action = _choose(*choices, shortcuts=("s", "t"))
+        action = _choose(*choices, shortcuts=("s", "t", "p"))
         if action and action.isdecimal() and 1 <= int(action) <= len(chunk):
             _usage_detail(result, chunk[int(action) - 1])
         elif action == "8" and page > 0:
@@ -1171,6 +1305,8 @@ def _usage_report(custom=False):
             return _usage_report(custom=True)
         elif action == "t":
             _usage_detail(result)
+        elif action == "p":
+            _usage_cross_date(result)
         elif action == "r":
             result = usage_ledger.report(start, end, zone_name, port=port)
             days = list(reversed(result.get("daily", [])))
