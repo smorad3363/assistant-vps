@@ -28,6 +28,18 @@ def init(db):
     )""")
     db.execute("""CREATE INDEX IF NOT EXISTS idx_pm2_byte_report
       ON pm2_port_byte_intervals(start_utc, end_utc, protocol, listen_port)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS pm2_nic_byte_intervals (
+      start_utc REAL NOT NULL, end_utc REAL NOT NULL,
+      interface TEXT NOT NULL, upload_bytes INTEGER NOT NULL,
+      download_bytes INTEGER NOT NULL,
+      PRIMARY KEY(end_utc, interface)
+    )""")
+    db.execute("""CREATE INDEX IF NOT EXISTS idx_pm2_nic_byte_report
+      ON pm2_nic_byte_intervals(interface, start_utc, end_utc)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS pm2_nic_byte_latest (
+      interface TEXT PRIMARY KEY, rx_bytes INTEGER NOT NULL,
+      tx_bytes INTEGER NOT NULL, sampled_at REAL NOT NULL
+    )""")
     db.execute("""CREATE TABLE IF NOT EXISTS pm2_port_byte_boot (
       id INTEGER PRIMARY KEY CHECK(id=1), boot_id TEXT NOT NULL
     )""")
@@ -70,6 +82,82 @@ def record(db, intervals):
           VALUES (?,?,?,?,?,?,?)""", (start, end, tid, proto, port, up, down))
 
 
+def record_interfaces(db, counters, now, same_boot):
+    """Record byte increments for each NIC, not a sum across NICs.
+
+    Each NIC is recorded independently. eth0 cannot be added to docker0:
+    forwarded packets may traverse both interfaces. Reboot/reset creates
+    a fresh baseline; long gaps are not claimed as continuous measurements.
+    """
+    init(db)
+    written = 0
+    previous = ({
+        iface: (rx, tx, t)
+        for iface, rx, tx, t in db.execute(
+            "SELECT interface,rx_bytes,tx_bytes,sampled_at FROM pm2_nic_byte_latest")
+    } if same_boot else {})
+    for iface, (rx, tx) in counters.items():
+        if not iface or iface == "lo" or rx < 0 or tx < 0:
+            continue
+        earlier = previous.get(iface)
+        if earlier:
+            old_rx, old_tx, before = earlier
+            if 0 < now - before <= 300 and rx >= old_rx and tx >= old_tx:
+                db.execute("""INSERT OR IGNORE INTO pm2_nic_byte_intervals
+                    (start_utc, end_utc, interface, upload_bytes, download_bytes)
+                    VALUES (?, ?, ?, ?, ?)""",
+                           (before, now, iface, tx-old_tx, rx-old_rx))
+                written += 1
+        db.execute("""INSERT INTO pm2_nic_byte_latest
+          (interface,rx_bytes,tx_bytes,sampled_at) VALUES (?,?,?,?)
+          ON CONFLICT(interface) DO UPDATE SET
+          rx_bytes=excluded.rx_bytes, tx_bytes=excluded.tx_bytes,
+          sampled_at=excluded.sampled_at""", (iface, rx, tx, now))
+    return written
+
+
+def choose_server_interface(interfaces, route=None):
+    """Choose a single physical-facing NIC. Never sum a Docker bridge."""
+    names = set(interfaces)
+    physical = sorted(x for x in names if re.fullmatch(
+        r"(eth|ens|enp|eno)[0-9a-z_.-]*", x))
+    if route in physical:
+        return route
+    if physical:
+        return "eth0" if "eth0" in physical else physical[0]
+    candidates = sorted(x for x in names if x != "lo"
+                        and not x.startswith(("docker", "veth", "br-", "virbr")))
+    if route in candidates:
+        return route
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def network_totals(intervals, start, end):
+    """Return known bounds from one interface's exact byte intervals."""
+    full_up = full_down = edge_up = edge_down = 0
+    windows = []
+    for a, b, up, down in intervals:
+        if b <= start or a >= end or not a < b:
+            continue
+        windows.append((max(a, start), min(b, end)))
+        if a >= start and b <= end:
+            full_up += up
+            full_down += down
+        else:
+            edge_up += up
+            edge_down += down
+    covered = min(end - start, _union_seconds(windows))
+    return {
+        "download_bytes_lower": full_down,
+        "download_bytes_upper": full_down + edge_down,
+        "upload_bytes_lower": full_up,
+        "upload_bytes_upper": full_up + edge_up,
+        "covered_seconds": round(covered, 2),
+        "missing_seconds": round(max(0, end-start-covered), 2),
+        "has_samples": bool(windows),
+    }
+
+
 def prune(db, now):
     """Remove expired consumption intervals; called on each minute tick.
 
@@ -82,6 +170,7 @@ def prune(db, now):
     cutoff = float(now) - RETENTION_SECONDS
     cursor = db.execute(
         "DELETE FROM pm2_port_byte_intervals WHERE end_utc <= ?", (cutoff,))
+    db.execute("DELETE FROM pm2_nic_byte_intervals WHERE end_utc <= ?", (cutoff,))
     return cursor.rowcount
 
 
@@ -263,6 +352,28 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
         ).fetchone() else None
         grouped = summarize(rows, start, end)
         days = daily_breakdown(rows, start, end, tz_name)
+        # NIC measurements are independent from port filters. A report for
+        # TCP:8080 must still show full server NIC volume in the header.
+        nic_names = [r[0] for r in db.execute(
+            "SELECT DISTINCT interface FROM pm2_nic_byte_intervals")]
+        nic = choose_server_interface(nic_names)
+        nic_rows = (db.execute(
+            "SELECT start_utc,end_utc,upload_bytes,download_bytes "
+            "FROM pm2_nic_byte_intervals WHERE interface=? "
+            "AND end_utc>? AND start_utc<? ORDER BY start_utc",
+            (nic, start, end)).fetchall() if nic else [])
+        server = dict(network_totals(nic_rows, start, end), interface=nic)
+        for day in days:
+            day["server"] = dict(network_totals(
+                nic_rows, day["from_utc"], day["to_utc"]), interface=nic)
+        # Summed port rows are diagnostic only; may double-count forwarded
+        # packets even after duplicate chain-source de-duplication.
+        monitored_sum = {
+            "download_bytes_lower": sum(x["download_bytes_lower"] for x in grouped),
+            "upload_bytes_lower": sum(x["upload_bytes_lower"] for x in grouped),
+            "download_bytes_upper": sum(x["download_bytes_upper"] for x in grouped),
+            "upload_bytes_upper": sum(x["upload_bytes_upper"] for x in grouped)
+        }
         note = [
             "IPv4 monitored ports only; IPv6, unmatched ports and traffic of other networks may be absent.",
             "Counters are per original TCP/UDP port (or legacy combined-protocol counter). NAT/bridges can overlap; no combined billable total is asserted.",
@@ -270,7 +381,8 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
             "A missing interval is NOT zero traffic. This is not a provider billing reconciliation.",
             "Only data sampled after this byte ledger was enabled are available; older Mbps graphs are not billing data.",
             "Raw per-port byte records older than 14 days are deleted automatically on the next successful sample.",
-            "Up to 64 autodetected or forwarded ports are tracked, plus managed ports; other ports may be absent."
+            "Up to 64 autodetected or forwarded ports are tracked, plus managed ports; other ports may be absent.",
+            "Total server means one measured NIC (such as eth0), never the sum of ports or NICs; verify routing and provider billing direction."
         ]
         if any(x["missing_seconds"] > 1 or x["boundary_uncertain_bytes"] > 0
                or x["overlapping_sources"] for x in grouped):
@@ -288,6 +400,8 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
             "interval_seconds": end - start, "ports": grouped,
             "intervals_read": len(rows),
             "daily": days,
+            "server": server,
+            "monitored_port_sum": monitored_sum,
             "retention_days": RETENTION_DAYS,
             "first_recorded_utc": ledger_first,
             "latest_recorded_utc": ledger_last,
