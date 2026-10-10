@@ -310,9 +310,15 @@ class LiveScreen:
         if links:
             names = ["ALL"] + [link["interface"] for link in links]
             note = "NICs can overlap" if nic == "ALL" else "one network"
-            self._write(6, 2,
-                        f"Interface {names.index(nic) + 1}/{len(names)}: {nic} | {note} | Tab/←→ switch",
-                        3 if nic == "ALL" else 1)
+            interface_line = (f"Interface {names.index(nic) + 1}/{len(names)}: "
+                              f"{nic} | {note} | Tab/←→ switch")
+            if height < 34 and self.last:
+                other_down, other_up = self.untracked_rates(
+                    interface, self.last.get("rows", []))
+                if other_down + other_up >= .1:
+                    interface_line += (f"  | OTHER / UNKNOWN ~ "
+                                       f"↓{other_down:.0f} ↑{other_up:.0f} Mb/s")
+            self._write(6, 2, interface_line, 3 if nic == "ALL" else 1)
         self._write(7, 1, "╭" + "─" * (width - 3) + "╮", 1)
         self._write(8, 2, "PORT TRAFFIC  ·  speed + recorded volume  ·  ranked by 10m", 1, True)
 
