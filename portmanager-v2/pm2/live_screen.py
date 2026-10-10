@@ -333,14 +333,19 @@ class LiveScreen:
             self._write(10, xpos, "avg / GB", 3)
         self._write(9, limit_x, "LIMIT / HOURS", 1, True)
         if trend_x and width - trend_x > 6:
-            self._write(9, trend_x, "TREND  ▲ / ▼", 1, True)
+            self._write(9, trend_x, "TREND", 1, True)
+            self._write(10, trend_x, "▲ upload  ▼ download", 3)
         self._write(11, 2, "─" * (width - 5), 1)
 
         rows = self._candidate_rows()
         detail_height = 5 if height >= 37 else (3 if height >= 27 else 0)
         nic_slots = (min(len(links), 2) if height >= 65 else 0)
-        footer_start = height - 5
-        reserved = detail_height + (nic_slots + 2 if nic_slots else 0) + 2
+        # A short SSH window prioritizes the measured port rows. The
+        # untracked-rate footer and secondary panels may be omitted there.
+        show_other = height >= 34
+        footer_start = height - (5 if show_other else 4)
+        reserved = (detail_height + (nic_slots + 2 if nic_slots else 0) + 2
+                    if height >= 34 else 0)
         available = max(2, footer_start - 12 - reserved)
         self.row_height = 3 if available >= 45 else 2
         self.page_size = max(1, min(15, available // self.row_height))
@@ -427,7 +432,7 @@ class LiveScreen:
                             f"↓{link['rx_mbps']:>9.1f}  ↑{link['tx_mbps']:>9.1f} Mb/s",
                             1 if link["interface"] == nic else 0,
                             link["interface"] == nic)
-        if self.last and links:
+        if show_other and self.last and links:
             down, up = self.untracked_rates(interface, self.last.get("rows", []))
             if down + up >= .1:
                 self._write(height - 5, 2,
