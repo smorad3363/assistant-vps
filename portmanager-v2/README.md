@@ -39,13 +39,20 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 ## Per-port traffic volume by arbitrary date and time
 
 Open Port Manager and press **[4] Daily port traffic (download / upload)**.
-The daily report opens **immediately without asking any questions**,
-automatically showing all tracked ports for the past 14 calendar days
-in `Asia/Tehran`, newest day first, with separate Download (↓) and Upload (↑)
-columns plus measured NIC totals when available. Inside the report,
-choose **[3] Change date or time** to optionally enter another timezone,
-start/end dates and a port; choose **[4] Show full period totals** to
-switch from daily rows to an interval summary. The report stores integer iptables byte deltas in the same
+A **simple day picker opens immediately without any questions**, showing
+the past 14 days in `Asia/Tehran`, newest first. Each day shows the measured
+physical NIC download and upload (or a clear **NO DATA** warning). Use
+**↑ / ↓ and Enter** or number + Enter to select a day. The next screen shows
+**only that day's ports**, with independent Download (green) and Upload (cyan)
+columns and large, bold, five-row terminal figures for the server's NIC totals.
+Esc returns to the day picker; no repeated setup prompts, overlapping totals
+or deeply nested firewall details. The header is compact on these two screens
+so important numbers occupy most of the terminal. The font itself is terminal
+controlled, hence the enlarged figures use portable block characters.
+
+Select **[3] Change dates / select port** from the day picker only when a
+different time range, zone or specific port is wanted. **[4] Totals for
+selected date range** is an optional secondary view. The report stores integer iptables byte deltas in the same
 owned SQLite database `/var/lib/portmanager2/traffic.sqlite3`. Unlike
 Live's *rate* history, these records are not erased after 24 hours and are
 collected once per minute by the systemd sampler without opening Live.
@@ -72,10 +79,10 @@ The report now has two deliberately separate levels:
 - **Monitored ports:** independent TCP/UDP port rows with fixed, readable
   download and upload columns and a labeled sum of monitored port rows.
   This sum is **not total server traffic**; NAT, legacy rules and port
-  forwarding may duplicate bytes across rows. The requested daily period
-  displays most recent days first. Long periods do not repeat a misleading
-  identical "Unrecorded: 18933m" on every row; coverage is shown in minutes
-  actually recorded.
+  forwarding may duplicate bytes across rows. Days are selectable before
+  browsing ports, and period totals remain optional. Long periods do not
+  repeat a misleading identical "Unrecorded: 18933m" on every row;
+  coverage is shown in minutes actually recorded.
 
 The NIC total includes traffic on the selected physical interface, not
 necessarily the provider's rated volume, and does not retroactively exist
