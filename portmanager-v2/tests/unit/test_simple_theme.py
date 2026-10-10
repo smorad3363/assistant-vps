@@ -300,6 +300,53 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(detail.call_args.args[1]["date"], "2026-10-07")
         self.assertEqual(chose.call_count, 3)
 
+    def test_day_list_seven_dates_has_unique_hotkeys_even_at_slots_three_four(self):
+        from datetime import date, timedelta
+        data = self.usage_fixture()
+        data["daily"] = [
+            {"date": (date(2026, 10, 14) - timedelta(days=i)).isoformat(),
+             "server": {"has_samples": False}, "ports": []}
+            for i in reversed(range(14))]
+        real_choose = simple_ui._choose
+        choice_calls = []
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui.os, "isatty", return_value=False),
+              mock.patch.object(simple_ui, "_ask", return_value="0"),
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=data),
+              mock.patch.object(simple_ui, "_usage_detail") as show_day,
+              redirect_stdout(io.StringIO())):
+            def check_choose(*options):
+                keys = [key for key, _ in options]
+                self.assertEqual(len(keys), len(set(keys)))
+                self.assertIn("3", keys)
+                self.assertIn("4", keys)
+                self.assertIn("s", keys)
+                self.assertIn("t", keys)
+                choice_calls.append(keys)
+                real_choose(*options)  # actual validation, not just mocked
+                return "4" if len(choice_calls) == 1 else "0"
+            with mock.patch.object(simple_ui, "_choose", side_effect=check_choose):
+                simple_ui._usage_report()
+        self.assertEqual(len(choice_calls), 2)
+        self.assertEqual(show_day.call_args.args[1]["date"], "2026-10-11")
+
+    def test_letters_work_as_menu_shortcuts_and_keep_terminal_restored(self):
+        import termios
+        import tty
+        options = (("1", "Today"), ("2", "Yesterday"),
+                   ("s", "Settings"), ("t", "Totals"), ("0", "Back"))
+        with (mock.patch.object(simple_ui.sys, "stdin", mock.Mock(
+                  fileno=mock.Mock(return_value=0))),
+              mock.patch.object(simple_ui.os, "read", return_value=b"T"),
+              mock.patch.object(termios, "tcgetattr", return_value=[0]*7),
+              mock.patch.object(termios, "tcsetattr") as restored,
+              mock.patch.object(tty, "setcbreak"),
+              redirect_stdout(io.StringIO())):
+            result = simple_ui._menu_key(options, selected=0)
+        self.assertEqual(result, "t")
+        restored.assert_called_once()
+
     def test_no_samples_never_displays_fictitious_zero_server_total(self):
         data = self.usage_fixture()
         data["server"] = {"interface": "eth0", "has_samples": False}
@@ -321,7 +368,7 @@ class NewThemeTest(unittest.TestCase):
               mock.patch.object(simple_ui.usage_ledger, "report",
                                 return_value=data) as report,
               mock.patch.object(simple_ui, "_choose",
-                                side_effect=["3", "0"]),
+                                side_effect=["s", "0"]),
               redirect_stdout(io.StringIO())):
             simple_ui._usage_report()
         self.assertEqual(prompts.call_count, 4)
@@ -335,7 +382,7 @@ class NewThemeTest(unittest.TestCase):
               mock.patch.object(simple_ui.usage_ledger, "report",
                                 return_value=data),
               mock.patch.object(simple_ui, "_choose",
-                                side_effect=["4", "0", "0"]),
+                                side_effect=["t", "0", "0"]),
               redirect_stdout(io.StringIO()) as output):
             simple_ui._usage_report()
         self.assertEqual([call.args[0] for call in titles.call_args_list],
