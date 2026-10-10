@@ -258,8 +258,45 @@ class NewThemeTest(unittest.TestCase):
         self.assertIn("↓ DOWNLOAD", output)
         self.assertIn("↑ UPLOAD", output)
         self.assertIn("TCP:8080", output)
-        self.assertIn("2.00–2.10", output)
-        self.assertIn("1.00–1.10", output)
+        self.assertIn("2.00*", output)
+        self.assertIn("1.00*", output)
+
+    def test_partial_sample_shows_recorded_gb_and_possible_extra_not_dash_range(self):
+        # Reproduces the exact symptom reported by the operator: a daily
+        # range 37.35–37.87 was misread as subtraction.
+        data = {
+            "interface": "eth0", "has_samples": True,
+            "download_bytes_lower": 37_350_000_000,
+            "download_bytes_upper": 37_870_000_000,
+            "upload_bytes_lower": 37_220_000_000,
+            "upload_bytes_upper": 37_730_000_000,
+            "covered_seconds": 71*60,
+        }
+        with (mock.patch.object(simple_ui.shutil, "get_terminal_size",
+                                return_value=os.terminal_size((110, 29))),
+              redirect_stdout(io.StringIO()) as out):
+            simple_ui._usage_hero("SERVER TRAFFIC", data, 110)
+        shown = out.getvalue()
+        self.assertIn("↓ DOWNLOAD   37.35 GB recorded", shown)
+        self.assertIn("↑ UPLOAD     37.22 GB recorded", shown)
+        self.assertIn("74.57 GB recorded", shown)
+        self.assertIn("↓ up to +0.52 GB", shown)
+        self.assertIn("↑ up to +0.51 GB", shown)
+        self.assertIn("not counted above", shown)
+        self.assertNotIn("37.35–37.87", shown)
+        self.assertNotIn("Partial sample: ↓", shown)
+
+    def test_boundaries_are_marked_even_when_both_values_round_the_same(self):
+        self.assertEqual(simple_ui._usage_amount(37_350_000_000,
+                                                 37_870_000_000), "37.35*")
+        self.assertEqual(simple_ui._usage_amount(2_000_000_000,
+                                                 2_000_000_001), "2.00*")
+        self.assertEqual(simple_ui._usage_amount(1_000_000, 2_000_000), "<0.01*")
+        self.assertEqual(simple_ui._usage_amount(0, 100), "0*")
+        self.assertEqual(simple_ui._usage_amount(1_000_000_000,
+                                                 1_000_000_000), "1.00")
+        self.assertEqual(simple_ui._usage_uncertain_extra(
+            37_350_000_000, 37_870_000_000), "0.52")
 
     def test_short_terminal_suppresses_multiline_numbers(self):
         data = self.usage_fixture()
@@ -306,10 +343,10 @@ class NewThemeTest(unittest.TestCase):
         self.assertIn("↓", desc)
         self.assertIn("↑", desc)
         self.assertIn("TOTAL", desc)
-        self.assertIn("3.00–3.20", desc)
+        self.assertIn("3.00*", desc)
         self.assertEqual(simple_ui._usage_amount(500_000, 500_000), "<0.01")
         self.assertEqual(simple_ui._usage_amount(2_000_000_000,
-                                                2_000_000_001), "2.00~")
+                                                2_000_000_001), "2.00*")
         data = self.usage_fixture()
         with (mock.patch.object(simple_ui, "_title"),
               mock.patch.object(simple_ui.usage_ledger, "report",
@@ -333,9 +370,9 @@ class NewThemeTest(unittest.TestCase):
         self.assertIn("TCP:8080", rendered)
         self.assertIn("2026-10-09", rendered)
         self.assertIn("TCP:1001", rendered)
-        self.assertIn("2.00–2.10", rendered)  # download for October 10
-        self.assertIn("1.00–1.10", rendered)  # upload for October 10
-        self.assertIn("3.00–3.20", rendered)  # total for October 10
+        self.assertIn("2.00*", rendered)  # download for October 10
+        self.assertIn("1.00*", rendered)  # upload for October 10
+        self.assertIn("3.00*", rendered)  # total for October 10
         self.assertIn("0.30", rendered)       # October 9 download
         self.assertIn("0.40", rendered)       # October 9 upload
         self.assertIn("0.70", rendered)       # October 9 total
@@ -494,8 +531,8 @@ class NewThemeTest(unittest.TestCase):
             simple_ui._usage_detail(self.usage_fixture(),
                                     self.usage_fixture()["daily"][1])
         self.assertIn("TCP:8080", out.getvalue())
-        self.assertIn("2.00–2.10", out.getvalue())
-        self.assertIn("1.00–1.10", out.getvalue())
+        self.assertIn("2.00*", out.getvalue())
+        self.assertIn("1.00*", out.getvalue())
         self.assertNotIn("███", out.getvalue())
         self.assertEqual(len(simple_ui._usage_big_digits("2.23")), 5)
 
