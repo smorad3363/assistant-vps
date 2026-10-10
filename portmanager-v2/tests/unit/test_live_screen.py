@@ -141,6 +141,16 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIsNone(row)
         self.assertEqual(interface, "ens18")
 
+    def test_default_24_row_terminal_keeps_four_ports_visible(self):
+        screen = self.make_view()
+        data = sample()
+        screen.draw(data)
+        ports = [v for _,_,v in screen.window.writes if v.startswith("TCP:")]
+        self.assertEqual(ports, ["TCP:8080", "TCP:22",
+                                 "TCP:8085", "TCP:8086"])
+        self.assertEqual(screen.page_size, 4)
+        self.assertTrue(any("Page 1/1" in v for _,_,v in screen.window.writes))
+
     def test_four_periods_show_real_volume_beneath_average(self):
         screen = self.make_view()
         screen.window.getmaxyx = lambda: (65, 162)
