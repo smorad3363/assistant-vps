@@ -71,18 +71,18 @@ class LiveScreenTests(unittest.TestCase):
         self.assertEqual(screen.window.refreshes, 2)
         text = "\n".join(v for _, _, v in screen.window.writes)
         self.assertIn("TCP:8080", text)
-        self.assertNotIn("TCP:8085", text)
+        self.assertIn("TCP:8085", text)  # idle ports visible by default
         self.assertIn("550.0", text)
         self.assertIn("10 min", text)
 
-    def test_idle_ports_are_hidden_until_a_toggle(self):
+    def test_all_detected_ports_are_visible_until_user_hides_idle(self):
         screen = self.make_view([ord("a"), ord("q")])
         screen.draw(sample())
         before = "\n".join(v for _, _, v in screen.window.writes)
-        self.assertNotIn("8085", before)
+        self.assertIn("8085", before)
         screen.wait(5)
         after = "\n".join(v for _, _, v in screen.window.writes)
-        self.assertIn("8085", after)
+        self.assertNotIn("8085", after)
         self.assertEqual(screen.window.refreshes, 2)
 
     def test_partial_history_is_not_claimed_as_complete_24h(self):
@@ -93,7 +93,7 @@ class LiveScreenTests(unittest.TestCase):
     def test_keyboard_quits_without_waiting_full_refresh(self):
         screen = self.make_view([ord("q")])
         screen.draw(sample())
-        self.assertEqual(screen.wait(60), "quit")
+        self.assertEqual(screen.wait(60), "select")
 
     def test_refresh_and_scroll_keys(self):
         screen = self.make_view([ord("+"), ord("-"), FakeCurses.KEY_DOWN,
@@ -103,6 +103,205 @@ class LiveScreenTests(unittest.TestCase):
         self.assertEqual(screen.requested, 4)
         self.assertEqual(screen.wait(1), "refresh")
         self.assertEqual(screen.requested, 5)
+        self.assertEqual(screen.wait(1), "select")
+
+
+    def test_arrows_select_visible_port_and_q_confirms(self):
+        screen = self.make_view([FakeCurses.KEY_DOWN, ord("q")])
+        screen.draw(sample())
+        self.assertEqual(screen.wait(1), "select")
+        row, interface = screen.selection()
+        self.assertEqual(row["listen_port"], 22)
+        self.assertEqual(interface, "eth0")
+        display = "\\n".join(value for _, _, value in screen.window.writes)
+        self.assertIn("TCP:22", display)
+        self.assertIn("▶", display)
+
+    def test_tab_switches_nic_without_changing_port(self):
+        screen = self.make_view([9, 9, ord("q")])
+        data = sample()
+        data["interfaces"].append({"interface": "wgcf", "rx_mbps": 50,
+                                   "tx_mbps": 60})
+        screen.draw(data)
+        self.assertEqual(screen.wait(1), "select")
+        row, interface = screen.selection()
+        self.assertEqual(row["listen_port"], 8080)
+        self.assertEqual(interface, "wgcf")
+        display = "\\n".join(value for _, _, value in screen.window.writes)
+        self.assertIn("wgcf", display)
+
+    def test_global_limit_shortcut_selects_current_nic(self):
+        screen = self.make_view([9, 9, ord("g")])
+        data = sample()
+        data["interfaces"].append({"interface": "ens18", "rx_mbps": 1,
+                                   "tx_mbps": 2})
+        screen.draw(data)
+        self.assertEqual(screen.wait(1), "global")
+        row, interface = screen.selection(whole_interface=True)
+        self.assertIsNone(row)
+        self.assertEqual(interface, "ens18")
+
+    def test_default_24_row_terminal_keeps_four_ports_visible(self):
+        screen = self.make_view()
+        data = sample()
+        screen.draw(data)
+        ports = [v for _,_,v in screen.window.writes if v.startswith("TCP:")]
+        self.assertEqual(ports, ["TCP:8080", "TCP:22",
+                                 "TCP:8085", "TCP:8086"])
+        self.assertEqual(screen.page_size, 4)
+        self.assertTrue(any("Page 1/1" in v for _,_,v in screen.window.writes))
+
+    def test_four_periods_show_real_volume_beneath_average(self):
+        screen = self.make_view()
+        screen.window.getmaxyx = lambda: (65, 162)
+        data = sample()
+        data["rows"][0]["volumes"] = {
+            period: {"bytes": 2_000_000_000, "possible_bytes": 2_100_000_000,
+                     "coverage_seconds": 600, "requested_seconds": seconds}
+            for period, seconds in [("10m",600), ("1h",3600),
+                                    ("8h",28800), ("24h",86400)]}
+        screen.draw(data)
+        displayed = screen.window.writes
+        self.assertEqual(screen.row_height, 2)
+        self.assertIn("avg / GB", [v for y,x,v in displayed if y == 10])
+        for position in (29,40,51,62):
+            self.assertTrue(any(y == 13 and x == position and "2.00 GB" in value
+                                for y,x,value in displayed))
+        self.assertTrue(any(y == 12 and x == 105 for y,x,v in displayed))
+        self.assertTrue(any(y == 13 and x == 105 for y,x,v in displayed))
+        self.assertEqual(screen._volume_metric(None), "   -- GB")
+        exact = {"bytes": 1_000_000_000, "possible_bytes": 1_000_000_000,
+                 "coverage_seconds": 600, "requested_seconds": 600}
+        self.assertNotIn("*", screen._volume_metric(exact))
+        tiny = dict(exact, bytes=1_000_000, possible_bytes=1_000_000)
+        self.assertIn("<0.01 GB", screen._volume_metric(tiny))
+
+    def test_fifteen_port_pages_and_next_previous_controls(self):
+        screen = self.make_view([ord("n"), ord("p")])
+        screen.window.getmaxyx = lambda: (78, 162)
+        data = sample()
+        data["rows"] = [dict(data["rows"][0], listen_port=3000+i)
+                        for i in range(40)]
+        screen.draw(data)
+        self.assertEqual(screen.page_size, 15)
+        self.assertEqual(screen.row_height, 3)
+        self.assertTrue(any("PAGE 1/3" in v for _,_,v in screen.window.writes))
+        self.assertIn("TCP:3000", [v for _,_,v in screen.window.writes])
+        self.assertNotIn("TCP:3015", [v for _,_,v in screen.window.writes])
+        # Trigger page movement using the same key dispatch as the real UI.
+        screen._page_move(1)
+        self.assertEqual(screen.selected_index, 15)
+        self.assertTrue(any("PAGE 2/3" in v for _,_,v in screen.window.writes))
+        self.assertIn("TCP:3015", [v for _,_,v in screen.window.writes])
+        screen._page_move(1)
+        self.assertEqual(screen.selected_index, 30)
+        self.assertIn("TCP:3039", [v for _,_,v in screen.window.writes])
+        screen._page_move(-1)
+        self.assertEqual(screen.selected_index, 15)
+
+    def test_short_terminal_adapts_page_length_without_cutting_footer(self):
+        screen = self.make_view()
+        screen.window.getmaxyx = lambda: (29, 118)
+        data = sample()
+        data["rows"] = [dict(data["rows"][0], listen_port=4000+i)
+                        for i in range(35)]
+        screen.draw(data)
+        self.assertLess(screen.page_size, 15)
+        self.assertGreaterEqual(screen.page_size, 1)
+        self.assertTrue(any(y == 27 and "PgDn" in v
+                            for y,x,v in screen.window.writes))
+        self.assertTrue(any(y == 28 and "Page " in v
+                            for y,x,v in screen.window.writes))
+
+    def test_limit_column_and_large_detail_graph(self):
+        view = self.make_view()
+        view.window.getmaxyx = lambda: (42, 160)
+        data = sample()
+        data["speed_limits"] = [{
+            "id": "port8080", "port": 8080, "protocol": "tcp",
+            "interface": "eth0", "download_mbps": 20, "upload_mbps": 30,
+            "enabled": True, "scheduled_now": True,
+            "start": "18:00", "end": "02:00",
+            "days": list(range(7)), "timezone": "Asia/Tehran"}]
+        view.draw(data)
+        cells = view.window.writes
+        col = [v for y, x, v in cells if y == 9]
+        self.assertIn("LIMIT / HOURS", col)
+        self.assertIn("TREND", col)
+        self.assertTrue(any("↓20 ↑30 18:00" in v for _, _, v in cells))
+        self.assertTrue(any("SELECTED PORT: TCP:8080" in v for _, _, v in cells))
+        self.assertTrue(any("Asia/Tehran" in v for _, _, v in cells))
+        large = [v for _, _, v in cells if v.startswith("▲ UP    ")]
+        self.assertEqual(len(large), 1)
+        self.assertGreater(len(large[0]), 90)
+        self.assertTrue(any(v.startswith("▼ DOWN  ") for _, _, v in cells))
+
+    def test_highlight_is_cyan_bold_without_background(self):
+        view = self.make_view([FakeCurses.KEY_DOWN, ord("q")])
+        view.draw(sample())
+        view.wait(1)
+        selected = [(y, x, v) for y, x, v in view.window.writes
+                    if v == "TCP:22"]
+        self.assertEqual(len(selected), 1)
+        # The marker tracks selection and the background is never filled.
+        self.assertTrue(any(y == selected[0][0] and v == "▶"
+                            for y, _, v in view.window.writes))
+
+    def test_limits_show_future_and_disabled_distinct_from_current(self):
+        view = self.make_view()
+        data = sample()
+        data["speed_limits"] = [
+            {"id": "future", "port": 8080, "protocol": "tcp",
+             "interface": "eth0", "download_mbps": 20,
+             "upload_mbps": 20, "enabled": True,
+             "scheduled_now": False, "start": "18:00", "end": "02:00",
+             "days": list(range(7)), "timezone": "UTC"},
+            {"id": "off", "port": 22, "protocol": "tcp",
+             "interface": "eth0", "download_mbps": 7,
+             "upload_mbps": 8, "enabled": False,
+             "scheduled_now": False, "start": "00:00", "end": "00:00",
+             "days": list(range(7)), "timezone": "UTC"}]
+        view.draw(data)
+        content = "\n".join(v for _, _, v in view.window.writes)
+        self.assertIn("↓20 ↑20 18:00", content)
+        self.assertIn("↓7 ↑8 OFF", content)
+        self.assertEqual(view._limit_for(data["rows"][0], "ALL")["scheduled_now"], False)
+        self.assertEqual(view._limit_for(data["rows"][1], "ALL")["enabled"], False)
+
+    def test_nic_global_policy_is_not_falsely_attributed_in_all_view(self):
+        view = self.make_view()
+        data = sample()
+        data["speed_limits"] = [
+            {"id": "global", "port": 0, "protocol": "tcp,udp",
+             "interface": "eth0", "download_mbps": 50,
+             "upload_mbps": 50, "enabled": True,
+             "scheduled_now": True, "start": "00:00", "end": "00:00",
+             "days": list(range(7)), "timezone": "UTC"}]
+        view.draw(data)
+        self.assertIsNone(view._limit_for(data["rows"][0], "ALL"))
+        nic_info = view._limit_for(data["rows"][0], "eth0")
+        self.assertIn("NIC", nic_info["compact"])
+        self.assertTrue(nic_info["scheduled_now"])
+
+    def test_graph_scaling_preserves_missing_history(self):
+        trend = live_screen.LiveScreen._large_trend("  ▁▃█", 50)
+        self.assertEqual(len(trend), 50)
+        self.assertTrue(trend.startswith("    "))
+        self.assertTrue(trend.endswith("████"))
+        self.assertEqual(live_screen.LiveScreen._large_trend("", 10), "──────────")
+
+    def test_small_terminal_still_keeps_port_rows_and_limits(self):
+        view = self.make_view()
+        view.window.getmaxyx = lambda: (19, 82)
+        data = sample()
+        view.draw(data)
+        content = "\n".join(v for _, _, v in view.window.writes)
+        self.assertIn("TCP:8080", content)
+        self.assertIn("LIMIT / HOURS", content)
+
+    def test_escape_exits_without_setting_limit(self):
+        screen = self.make_view([27])
+        screen.draw(sample())
         self.assertEqual(screen.wait(1), "quit")
 
 

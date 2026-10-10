@@ -5,6 +5,7 @@ ports on each refresh, never adds firewall rules or changes tc. History persists
 for 10 minutes across viewer restarts in the existing V2-owned SQLite DB.
 """
 from collections import defaultdict
+from datetime import datetime, timezone
 from contextlib import contextmanager, nullcontext
 import json
 import math
@@ -16,7 +17,7 @@ import sqlite3
 import sys
 import time
 
-from . import accounting, auto_monitor, config, sampler, transaction
+from . import accounting, auto_monitor, config, sampler, transaction, shaping, limit_windows, usage_ledger
 from .errors import PM2Error
 from .live_screen import LiveScreen
 
@@ -229,6 +230,17 @@ def history(db, timestamp, labels):
     return series
 
 
+def saved_auto_labels(db, timestamp):
+    """Show retained historical auto ports even after their listener disappears."""
+    cutoff = timestamp - RETENTION
+    query = ("SELECT DISTINCT protocol,listen_port FROM port_live_samples "
+             "WHERE tunnel_id=? AND sample_end >= ? UNION "
+             "SELECT DISTINCT protocol,listen_port FROM port_live_minutes "
+             "WHERE tunnel_id=? AND bucket_end >= ?")
+    return {("auto", proto, port): "Local service (history)"
+            for proto, port in db.execute(query, ("auto", cutoff, "auto", cutoff))}
+
+
 def frame(labels, rates, histories, timestamp, top=20, active_only=True):
     """Structured graph data, source of truth for terminal or JSON output."""
     result = []
@@ -269,6 +281,26 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
             "rows": result[:top], "active_rows": len(result),
             "refresh_is_read_only": True,
             "all_except_note": "All-except without mapping has aggregate counters only"}
+
+
+
+def limit_descriptions(policies, when=None):
+    """Read-only status for TUI; scheduling match does not prove tc is installed."""
+    at = when or datetime.now(timezone.utc)
+    result = []
+    for policy in policies:
+        enabled = policy["enabled"]
+        result.append({
+            "id": policy["id"], "port": policy["port"],
+            "protocol": policy["protocol"], "interface": policy.get("interface"),
+            "download_mbps": policy["download_mbps"],
+            "upload_mbps": policy["upload_mbps"],
+            "enabled": enabled,
+            "scheduled_now": bool(enabled and limit_windows.matches(policy, at)),
+            "start": policy["start"], "end": policy["end"],
+            "days": list(policy["days"]), "timezone": policy["timezone"]
+        })
+    return result
 
 
 def render(data, requested, effective, rules):
@@ -333,7 +365,7 @@ def render(data, requested, effective, rules):
 
 
 def watch(refresh=5, tunnel=None, top=20, active_only=True,
-          once=False, json_mode=False, on_frame=None):
+          once=False, json_mode=False, on_frame=None, on_select=None):
     """Auto-detect Xray/Sing-box local TCP/UDP ports if no managed rules exist.
 
     Reuse existing V2/V1 counters as-is. Only if *none* exist, enable up
@@ -346,6 +378,7 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
         raise PM2Error("E_VALIDATION", "Refresh 2..60 seconds, top 1..100")
     if os.geteuid() != 0:
         raise PM2Error("E_PERMISSION", "Reading kernel mangle counters requires root")
+    from . import history_collector
     cfg = config.load(transaction.CONFIG)
     labels = port_labels(cfg["tunnels"])
     if tunnel:
@@ -355,13 +388,16 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
         t0 = time.monotonic()
         before = accounting.counters(by_port=True, include_v1=True)
         labels = add_v1_labels(labels, before, tunnel)
-        # V2 used to show "0 rules" for a busy Debian/Xray host with no
-        # configured tunnel. Explicitly collect local listening ports then.
-        # We do not run ss every N seconds or indiscriminately track 65k ports.
-        # Always discover currently unmonitored local services, even when
-        # another V1/V2 tunnel already has its own accounting chain.
-        # Otherwise one configured idle port could hide a busy Xray listener.
+        # A minute-based, independent history timer owns the persistent rules.
+        # The viewer never resets those counters or claims the timer's lock.
         use_auto = tunnel is None
+        history_active = use_auto and history_collector.healthy(db)
+        history_ports = []
+        if history_active:
+            try:
+                history_ports = history_collector.active_ports()
+            except PM2Error:
+                history_active = False
         known = set()
         for _tid, protocol, port in labels:
             if not port:
@@ -370,7 +406,8 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                 known.update((("tcp", port), ("udp", port)))
             else:
                 known.add((protocol, port))
-        monitor = auto_monitor.AutoMonitor(existing=known) if use_auto else nullcontext()
+        monitor = (auto_monitor.AutoMonitor(existing=known)
+                   if use_auto and not history_active else nullcontext())
         try:
             # curses gives an actual fixed screen; stdout/JSON remain
             # machine-readable and never leak terminal control characters.
@@ -380,28 +417,45 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
             # graceful SIGTERM can unwind the active contexts and clean its
             # temporary, counter-only netfilter chains.
             with monitor as session, view as screen, _graceful_sigterm():
-                if use_auto and session.ports:
+                monitored_ports = (history_ports if history_active else
+                                   session.ports if use_auto else [])
+                if use_auto:
                     labels.update({("auto", proto, port): "Local service"
-                                   for proto, port in session.ports})
-                    t0 = time.monotonic()
-                    before = accounting.counters(by_port=True, include_v1=True,
-                                                 include_probe=True)
+                                   for proto, port in monitored_ports})
+                    if monitored_ports or history_active:
+                        t0 = time.monotonic()
+                        before = accounting.counters(by_port=True, include_v1=True,
+                                                     include_probe=not history_active,
+                                                     include_history=history_active)
                 net_before = auto_monitor.interface_counters()
                 sample_cost = time.monotonic() - t0
                 interval = refresh_interval(refresh, len(before), sample_cost)
                 next_reload = time.time() + 30
+                next_limit_reload = 0
+                speed_policies = []
+                speed_policies_error = None
+                next_volume_reload = 0
+                volume_windows = {}
                 while True:
                     try:
                         if screen is not None:
                             action = screen.wait(interval)
                             refresh = screen.requested
+                            if action in ("select", "global"):
+                                if on_select is not None:
+                                    row, interface = screen.selection(
+                                        whole_interface=action == "global")
+                                    if row is not None or action == "global":
+                                        on_select(row, interface)
+                                return 0
                             if action == "quit":
-                                return 130
+                                return 0
                         else:
                             time.sleep(interval)
                         t1 = time.monotonic()
                         after = accounting.counters(by_port=True, include_v1=True,
-                                                    include_probe=use_auto)
+                                                    include_probe=use_auto and not history_active,
+                                                    include_history=history_active)
                         net_after = auto_monitor.interface_counters()
                         labels = add_v1_labels(labels, after, tunnel)
                         t2 = time.monotonic()
@@ -409,15 +463,46 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         effective = refresh_interval(refresh, len(after), t2 - t1)
                         now = time.time()
                         rates = deltas(before, after, elapsed, labels)
-                        record(db, now, elapsed, rates)
+                        # If the background timer started after this Live
+                        # screen opened, avoid duplicate auto-port samples.
+                        if not history_active and not history_collector.healthy(db):
+                            record(db, now, elapsed, rates)
+                        if use_auto:
+                            labels.update(saved_auto_labels(db, now))
                         result = frame(labels, rates, history(db, now, labels),
                                        now, top=top, active_only=active_only)
+                        if now >= next_volume_reload:
+                            try:
+                                volume_windows = usage_ledger.live_window_volumes(db, now)
+                                result.pop("byte_volume_error", None)
+                            except (OSError, ValueError, PM2Error) as exc:
+                                volume_windows = {}
+                                result["byte_volume_error"] = str(exc)[:100]
+                            next_volume_reload = now + 30
+                        for row in result["rows"]:
+                            proto, port = row.get("protocol"), row.get("listen_port")
+                            row["volumes"] = volume_windows.get((proto, port), {})
                         result["interfaces"] = auto_monitor.interface_rates(
-                            net_before, net_after, elapsed)[:5]
+                            net_before, net_after, elapsed)
+                        # Loaded read-only; refresh policies at most twice per
+                        # minute and re-evaluate clock windows on every frame.
+                        if now >= next_limit_reload:
+                            try:
+                                speed_policies = shaping.schedule_load()["policies"]
+                                speed_policies_error = None
+                            except (PM2Error, OSError, ValueError) as exc:
+                                speed_policies = []
+                                speed_policies_error = str(exc)[:130]
+                            next_limit_reload = now + 30
+                        result["speed_limits"] = limit_descriptions(
+                            speed_policies, datetime.fromtimestamp(now, timezone.utc))
+                        if speed_policies_error:
+                            result["speed_limits_error"] = speed_policies_error
                         result.update({"requested_refresh_seconds": refresh,
                                        "effective_refresh_seconds": interval,
                                        "rule_count": len(after),
-                                       "auto_discovered_ports": len(session.ports) if use_auto else 0,
+                                       "auto_discovered_ports": len(monitored_ports) if use_auto else 0,
+                                       "background_history_active": bool(history_active),
                                        "port_coverage": "selected_ipv4_listening_ports"
                                        if use_auto else "configured_monitor_rules"})
                         if on_frame is not None:
@@ -431,6 +516,17 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         if once:
                             return 0
                         before, net_before, t0, interval = after, net_after, t2, effective
+                        if use_auto and history_active and now >= next_reload:
+                            # The minute sampler can pick up newly opened ports
+                            # while the viewer remains on screen.
+                            try:
+                                history_ports = history_collector.active_ports()
+                                monitored_ports = history_ports
+                                labels.update({("auto", proto, port): "Local service"
+                                               for proto, port in history_ports})
+                            except PM2Error:
+                                pass
+                            next_reload = now + 30
                         if not use_auto and now >= next_reload:
                             cfg = config.load(transaction.CONFIG)
                             labels = port_labels(cfg["tunnels"])

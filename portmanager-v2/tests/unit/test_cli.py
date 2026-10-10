@@ -47,6 +47,69 @@ class CLITests(TestCase):
         self.assertEqual(code, 3)
         self.assertIn("E_PERMISSION", err)
 
+    def test_byte_usage_json_and_csv_options(self):
+        sample = {"from": "2026-10-10 00:00", "to": "2026-10-10 01:00",
+                  "timezone": "Asia/Tehran",
+                  "ports": [{"protocol": "tcp", "port": 8080,
+                             "download_bytes_lower": 100,
+                             "download_bytes_upper": 200,
+                             "upload_bytes_lower": 50,
+                             "upload_bytes_upper": 60,
+                             "missing_seconds": 30,
+                             "boundary_uncertain_bytes": 110,
+                             "overlapping_sources": False}],
+                  "not_provider_billable": True}
+        cmd = ["usage", "--from", "2026-10-10 00:00", "--to",
+               "2026-10-10 01:00", "--tz", "Asia/Tehran", "--port", "8080"]
+        with mock.patch.object(cli.usage_ledger, "report", return_value=sample) as report:
+            code, out, err = self.invoke(cmd + ["--json"])
+            self.assertEqual(code, 0, err)
+            self.assertTrue(json.loads(out)["details"]["not_provider_billable"])
+            report.assert_called_once_with(
+                "2026-10-10 00:00", "2026-10-10 01:00",
+                "Asia/Tehran", 8080, None)
+            code, out, err = self.invoke(cmd + ["--csv"])
+            self.assertEqual(code, 0, err)
+            self.assertIn("download_bytes_lower", out)
+            self.assertIn("8080", out)
+
+    def test_daily_usage_cli_keeps_download_upload_separate(self):
+        row = {"protocol": "tcp", "port": 8080,
+               "download_bytes_lower": 3_000_000_000,
+               "download_bytes_upper": 3_100_000_000,
+               "upload_bytes_lower": 1_000_000_000,
+               "upload_bytes_upper": 1_100_000_000,
+               "missing_seconds": 60, "boundary_uncertain_bytes": 200,
+               "overlapping_sources": False}
+        payload = {"from": "2026-10-10 00:00", "to": "2026-10-11 00:00",
+                   "timezone": "Asia/Tehran",
+                   "daily": [{"date": "2026-10-10", "ports": [row]}],
+                   "ports": [row]}
+        args = ["usage", "--from", "2026-10-10 00:00",
+                "--to", "2026-10-11 00:00",
+                "--tz", "Asia/Tehran", "--daily"]
+        with mock.patch.object(cli.usage_ledger, "report", return_value=payload):
+            code, display, error = self.invoke(args)
+            self.assertEqual(code, 0, error)
+            self.assertIn("DAILY PORT USAGE", display)
+            self.assertIn("DOWNLOAD", display)
+            self.assertIn("UPLOAD", display)
+            code, csv_text, error = self.invoke(args + ["--csv"])
+            self.assertEqual(code, 0, error)
+            self.assertIn("date,timezone,protocol,port,download_bytes_lower", csv_text)
+            self.assertIn("2026-10-10,Asia/Tehran,tcp,8080,3000000000,3100000000,1000000000", csv_text)
+
+    def test_sample_lock_collision_is_warning_not_failed_service(self):
+        from pm2.errors import PM2Error
+        with (mock.patch.object(cli, "mutation_lock", side_effect=PM2Error(
+                  "E_LOCKED", "test conflicting writer")) as held,
+              mock.patch.object(cli.sampler, "sample") as sampled):
+            code, out, err = self.invoke(["sample"])
+        self.assertEqual(code, 0, err)
+        self.assertIn("SKIPPED_LOCK", out)
+        sampled.assert_not_called()
+        held.assert_called_once_with(wait_seconds=15)
+
     def test_report_window_json_is_parsed(self):
         with mock.patch("pm2.sampler.report", return_value={
             "window": "1h", "coverage_seconds": 0, "tunnels": []

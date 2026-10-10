@@ -147,8 +147,23 @@ def preflight():
                     raise PM2Error("E_CONFLICT", f"Unexpected V2 enable state ({val}): {name}")
             if kind == "is-active":
                 expected = "active" if active and name == "portmanager2-sample.timer" else "inactive"
-                if val != expected:
+                # A timer-triggered oneshot can legitimately be in "failed"
+                # after its last invocation; it is still the exact owned unit
+                # verified above, so that result cannot mean a foreign unit.
+                # Preserve the error in systemd/journald and warn visibly,
+                # while allowing verified upgrades that may repair the cause.
+                recoverable_sample_failure = (
+                    marker["activation"] == "active"
+                    and name == "portmanager2-sample.service"
+                    and val == "failed"
+                )
+                if val != expected and not recoverable_sample_failure:
                     raise PM2Error("E_CONFLICT", f"Unexpected V2 runtime state ({val}): {name}")
+                if recoverable_sample_failure:
+                    print("[portmanager2] WARNING: sampler service previously failed; "
+                          "install can continue, but check its journal: "
+                          "journalctl -u portmanager2-sample.service -n 60 --no-pager",
+                          file=sys.stderr)
     return marker
 
 

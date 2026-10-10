@@ -21,7 +21,7 @@ from . import VERSION
 from .errors import PM2Error
 from . import services, tunnels, sampler, persistence, bandwidth, dashboard, firewall
 from . import config as safe_config
-from . import backup, guard, logbook, live, forwarding, limit_windows, port_graph, shaping
+from . import backup, guard, logbook, live, forwarding, limit_windows, port_graph, shaping, history_collector, usage_ledger
 
 
 ETC = Path(os.environ.get("PM2_ETC", "/etc/portmanager2"))
@@ -37,14 +37,14 @@ LOCK = Path("/run/lock/portmanager2.lock")
 
 
 @contextlib.contextmanager
-def mutation_lock(wait=False):
+def mutation_lock(wait=False, wait_seconds=None):
     """Coordinate V2 writers; watchdog may wait for a bounded 180 seconds."""
     try:
         fd = os.open(LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     except OSError as exc:
         raise PM2Error("E_APPLY", "Cannot open V2 mutation lock") from exc
     try:
-        deadline = time.monotonic() + 180 if wait else time.monotonic()
+        deadline = time.monotonic() + (180 if wait_seconds is None else wait_seconds) if (wait or wait_seconds) else time.monotonic()
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -329,6 +329,18 @@ def parser():
     graph_parser.add_argument("--all-ports", action="store_true")
     graph_parser.add_argument("--once", action="store_true")
     graph_parser.add_argument("--json", action="store_true")
+    usage = sub.add_parser("usage", help="Read recorded per-port bytes for any local-time range")
+    usage.add_argument("--from", dest="from_time", required=True,
+                       help="Start YYYY-MM-DD HH:MM")
+    usage.add_argument("--to", dest="to_time", required=True,
+                       help="End YYYY-MM-DD HH:MM")
+    usage.add_argument("--tz", default="UTC", help="IANA timezone (default UTC)")
+    usage.add_argument("--port", type=int)
+    usage.add_argument("--protocol", choices=("tcp", "udp"))
+    usage.add_argument("--json", action="store_true")
+    usage.add_argument("--csv", action="store_true", help="CSV report to stdout")
+    usage.add_argument("--daily", action="store_true",
+                       help="Show one day/port with separate upload and download")
     logs_parser = sub.add_parser("logs")
     logs_parser.add_argument("--lines", type=int, default=100)
     for name in ("sample", "restore", "backup", "confirm", "rollback-pending"):
@@ -417,11 +429,32 @@ def main(argv=None):
                 payload = guard.rollback(args.args[0])
             response(True, "OK", "Protected change rolled back", payload, json_mode)
         elif args.command == "sample":
-            with mutation_lock():
-                payload = sampler.sample()
-                payload["shaping"] = shaping.reconcile()
+            try:
+                # A scheduled oneshot has 30s max runtime. Wait briefly for
+                # installer/limit writes instead of failing systemd on collision.
+                with mutation_lock(wait_seconds=15):
+                    payload = sampler.sample()
+                    payload["shaping"] = shaping.reconcile()
+                    payload["port_history"] = history_collector.collect()
+            except PM2Error as exc:
+                if exc.code != "E_LOCKED":
+                    raise
+                response(True, "SKIPPED_LOCK", "Sampler was busy; no measurements recorded for this tick",
+                         {"warning": "Next sample may cover this gap; never treat it as zero usage"}, json_mode)
+                return 0
             logbook.record("TRAFFIC_SAMPLED")
             response(True, "OK", "Traffic counters sampled", payload, json_mode)
+        elif args.command == "usage":
+            payload = usage_ledger.report(args.from_time, args.to_time, args.tz,
+                                         args.port, args.protocol)
+            if args.csv:
+                print((usage_ledger.to_daily_csv(payload) if args.daily
+                       else usage_ledger.to_csv(payload)), end="")
+            elif json_mode:
+                response(True, "OK", "Recorded per-port byte usage", payload, True)
+            else:
+                print(usage_ledger.pretty_daily(payload) if args.daily
+                      else usage_ledger.pretty(payload))
         elif args.command == "restore":
             with mutation_lock():
                 payload = persistence.restore()

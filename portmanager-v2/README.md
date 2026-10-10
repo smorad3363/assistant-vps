@@ -36,22 +36,230 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 - The same cyan-bordered compact menu cards are used for Home, IPtables
   and Configuration.
 
+## Per-port traffic volume by arbitrary date and time
+
+Open Port Manager and press **[4] Daily port traffic (download / upload)**.
+A **simple day picker opens immediately without any questions**, showing
+the past 14 days in `Asia/Tehran`, newest first. Each day shows the measured
+physical NIC download and upload (or a clear **NO DATA** warning). Use
+**↑ / ↓ and Enter** or number + Enter to select a day. The next screen shows
+**only that day's ports**, with independent Download (green) and Upload (cyan)
+columns and large, bold, five-row terminal figures for the server's NIC totals.
+Esc returns to the day picker; no repeated setup prompts, overlapping totals
+or deeply nested firewall details. The header is compact on these two screens
+so important numbers occupy most of the terminal. The font itself is terminal
+controlled, hence the enlarged figures use portable block characters.
+
+For cross-date port accounting, press **P** directly from the day picker or
+inside any single-day port breakdown. This opens **PORT CONSUMPTION BY DATE**:
+a paginated table of **date, TCP/UDP port, Download GB, Upload GB, combined
+port Total GB, and measured minutes**. It uses the already-saved daily byte
+records, not Mbps estimates. Press **F** there to filter to one numeric port,
+such as `1001`, and compare all available local calendar days for that
+specific port. A missing day/port is **NO RECORD (unknown)**, never a fake
+zero. Use **8/9** to turn pages and **0/Esc** to go back. No historical
+consumption can be recovered before the background byte logger began.
+
+Each date line now shows the physical NIC's **download, upload and their
+combined total** side-by-side, and the period-wide total is displayed above
+the dates. GB readings have two decimals (tiny nonzero readings show
+`<0.01`); a dash range means the minute-boundary portion is uncertain.
+Actions do not occupy extra numbered menu rows: press **S** to change the
+range/port, or **T** for an optional period port table. The shortcuts are
+shown inline above the dates; the numbered date rows remain entirely
+available for fast Enter selection. The report stores integer iptables byte deltas in the same
+owned SQLite database `/var/lib/portmanager2/traffic.sqlite3`. Unlike
+Live's *rate* history, these records are not erased after 24 hours and are
+collected once per minute by the systemd sampler without opening Live.
+
+For exact export suitable for checking a purchasing discrepancy:
+
+```bash
+portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran
+portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran --port 8080 --csv > /root/port8080-usage.csv
+portmanager2 usage --from "2026-10-10 00:00" --to "2026-10-10 12:00" --tz Asia/Tehran --json
+portmanager2 usage --from "2026-10-01 00:00" --to "2026-10-10 23:59" --tz Asia/Tehran --daily
+portmanager2 usage --from "2026-10-01 00:00" --to "2026-10-10 23:59" --tz Asia/Tehran --daily --csv > /root/daily-port-usage.csv
+```
+
+The report now has two deliberately separate levels:
+
+- **WHOLE SERVER NETWORK (eth0/primary physical NIC):** independent NIC
+  RX download, TX upload and both directions total, recorded persistently
+  every minute. Docker bridges/tunnels are never added to the physical NIC,
+  which would double-count the same bytes. Per-day primary NIC totals appear
+  above each day's port rows. If the new NIC counter sampler hasn't been
+  running for the requested period, the UI says **no recorded physical
+  network totals** instead of misleadingly substituting port sums.
+- **Monitored ports:** independent TCP/UDP port rows with fixed, readable
+  download and upload columns and a labeled sum of monitored port rows.
+  This sum is **not total server traffic**; NAT, legacy rules and port
+  forwarding may duplicate bytes across rows. Days are selectable before
+  browsing ports, and period totals remain optional. Long periods do not
+  repeat a misleading identical "Unrecorded: 18933m" on every row;
+  coverage is shown in minutes actually recorded.
+
+The NIC total includes traffic on the selected physical interface, not
+necessarily the provider's rated volume, and does not retroactively exist
+for days before this feature was installed. For real billing decisions,
+compare the physical NIC's two directional volumes and coverage with
+the provider's billing policy. NIC intervals are removed after 14 days
+alongside port byte intervals.
+
+The report separates **lower-bound measured bytes** from the **upper-bound
+bytes that may fall inside a partially overlapping first or last minute**.
+Unknown within-minute timing is not silently estimated. A sample crossing
+local midnight contributes **zero verified bytes** to either day's LOWER
+bound, but may contribute to the possible UPPER bound for both days. These
+daily UPPER bounds must **not** be added across days. Interrupted samples,
+a reboot, counter resets, and unavailable ports are shown as coverage gaps,
+**not zero usage**. Dates with no measured samples say **No stored
+measurements**, never 0 GB. Existing rate-only history cannot be
+converted into authoritative historical byte volumes: accurate byte
+logging starts only when this upgrade's ledger has established its baseline.
+
+This is a host-side IPv4, original-destination-port measurement—not
+the network provider's bill. Up to 64 autodiscovered or forwarded ports are continuously
+sampled, plus owned/legacy accounting rules. IPv6, untracked ports, VPS
+hypervisor overhead, and internal Docker/NAT paths may be absent or overlap.
+Do **not** add network-interface totals or duplicate sources to a port's
+recorded bytes. Totals are offered for investigation, *not* as audited
+payable balances. Raw per-port records and legacy V2 tunnel samples are
+automatically trimmed to the most recent **14 days**, once per successful
+background minute sample. Expired SQLite pages are reused; file size does
+not necessarily shrink immediately after deletion. Backups and journalctl
+logs are separate from database retention.
+
+The systemd sampler now briefly waits for a concurrent Port Manager
+mutation; if still locked it marks that tick as `SKIPPED_LOCK`, rather than
+failing the unit. Consecutive lost ticks still create gaps in the
+measurement history.
+
+Normal new installs and upgrades **activate** the V2-owned systemd
+sampling timer automatically, even if the Live viewer is closed. The
+first scheduled run establishes a counter baseline (generally within a
+minute); the next successful sample can then write byte differences. To explicitly opt out on a
+test-only host, set `PORTMANAGER2_ENABLE_SERVICES=0` during installation.
+Monitoring rules are counter-only, but setup still requires root and
+iptables/netfilter support. Confirm the timer is healthy with:
+`systemctl is-active portmanager2-sample.timer` and
+`journalctl -u portmanager2-sample.service -n 30 --no-pager`.
+
+## Live graphs, speed limits and selection
+
+The wide Live view shows `LIMIT / HOURS` beside each monitored port, based
+on saved policies and their current local-time schedule windows. Enabled
+policies outside their window show their planned times; disabled policies
+show `OFF`. This is **configured policy and scheduled-window status**,
+not proof that a `tc` kernel filter is currently installed. On a specific
+NIC the view also labels a network-wide limit; the `ALL` overview does not
+falsely attribute that NIC's global cap to every port.
+
+The selected port has a large, full-width upload and download 10-minute
+trend, derived from the same measured history without inventing missing
+samples. Small terminal sizes prioritize the port table and show detail only
+when space allows. Selection is marked by a cyan arrow and bold text,
+**without colored text backgrounds**, including in ordinary menus.
+Only Live presentation and read-only policy lookup are changed here;
+saving or removing a limit still requires the separate, confirmed wizard.
+
+## Live: 15 ports per page with measured volume under averages
+
+The Live table shows four windows (10m, 1h, 8h and 24h) with a rolling
+**average in Mb/s** on the first line and independently logged
+**consumption in GB** on the second. Values are taken from the persistent
+integer-byte ledger, *not* by assuming a rate lasts for the entire window.
+An asterisk flags partial coverage or an uncertain edge. Missing history is
+`-- GB`, never zero. Each row's trend has separate upload and download
+lines plus optional blank spacing on tall terminals.
+
+The viewer shows up to **15 ports per page** on a sufficiently tall screen;
+it chooses fewer when the terminal is short rather than hiding controls.
+Use **PgDn/PgUp** or **n/p** to switch pages, **↑/↓** to choose a port,
+and Enter for the limit wizard. Footer shows the current page and port count.
+The list continues to auto-discover supported ports, while Live remains
+read-only except when a limit operation is explicitly confirmed.
+
+## Persistent per-port history (10m / 1h / 8h / 24h)
+
+When the installer is run with `PORTMANAGER2_ENABLE_SERVICES=1`, it
+activates the owned `portmanager2-sample.timer`; installations without
+this flag retain the original disabled-by-default safety behavior. Every ~60 seconds it snapshots
+TCP/UDP port counters (up to 24 selected local-service or externally
+DNAT-forwarded ports, plus existing V1/V2 tracked ports) into `traffic.sqlite3`, without opening Live.
+This is a *rate history* in Mb/s, not a claim of full-day transferred bytes.
+First minute establishes a baseline; after a reboot, counter reset, newly
+discovered port, or gap over two minutes, unavailable time is not fabricated.
+An asterisk denotes an incomplete observation window. The Live cards' `Session
+GB~` are estimates *from the currently open viewer*, not totals since boot.
+History can't recover periods before continuous sampling was enabled.
+
+```bash
+systemctl is-active portmanager2-sample.timer
+systemctl list-timers --all portmanager2-sample.timer
+journalctl -u portmanager2-sample.service -n 40 --no-pager
+```
+
+Only owned, validated `PM2_HIST_RX` / `PM2_HIST_TX` mangle counters
+are installed for long-term local-port tracking. They do not forward,
+block, or throttle packets and do not remove external firewall rules.
+Use `PORTMANAGER2_ENABLE_SERVICES=1` when installing/updating to enable
+persistent collection. Already active timers stay enabled after future updates.
+
+## Simple keyboard menus
+
+Every main menu and speed-setting menu supports Up / Down to move the
+highlighted arrow, Enter to open the highlighted choice, number + Enter as
+a shortcut, and Esc or 0 to go back. A menu is replaced rather than appended
+to SSH scrollback, and longer existing-rule or saved-connection lists are
+paginated with Previous / Next choices. The main Ports and Edit pages
+show short previews so long lists never push the menu off-screen. The menu uses a short-lived
+cbreak tty reader and always restores the terminal settings after selecting
+or leaving; ordinary numeric entry remains as a fallback for unsupported TTYs.
+No firewall, routing or bandwidth policy is applied by merely navigating.
+
+Menu titles and traffic/port labels use plain language (forward a port,
+change or remove it, or view rules from other apps). NAT chains and firewall
+rules stay intact; foreign rules remain view-only.
+
+## Unified terminal navigation and interfaces
+
+Navigation replaces the old terminal page instead of appending menus to SSH
+scrollback. Live opens immediately with a 5-second refresh (use + / - to
+adjust). By default, all measured non-loopback network interfaces are listed,
+and all discovered ports including idle entries are visible. The ALL overview
+shows a **sum of interfaces**, not de-duplicated physical bandwidth:
+bridges, NAT and tunnels can count packets twice. Use Tab / left / right to
+switch to one exact NIC; long interface lists page without discarding data.
+Use ↑ / ↓ to highlight a port and Enter / q for a speed limit. From ALL
+overview, choosing a limit requires choosing an actual NIC first. Press g
+for an interface-wide limit, Esc to leave, or Ctrl+C for manual port entry.
+
+The Ports screen now shows existing NAT rules directly, alongside tunnels
+created by Port Manager. Previously created third-party or legacy NAT rules
+can be inspected regardless of V2 ownership. **Editing or deleting foreign
+iptables rules is intentionally blocked** pending a verified, reversible
+import: Docker/UFW/manual rules cannot safely be adopted or modified on
+sight. No third-party firewall rule is changed by the inspection screens.
+
 ## Live monitor lock and exit
 
-`q` / Esc / Ctrl+C exits Live and releases its exclusive `flock`; the
-monitor is **not** a persistent background service. An independent scheduled
+`q`/Enter chooses the highlighted port for a speed limit; `g` chooses
+an interface-wide limit, Esc exits without changing limits, and Ctrl+C
+opens manual port selection. All exits release the viewer\'s temporary `flock`;
+the viewer is **not** the persistent history service. An independent scheduled
 sample timer may continue running after the menu closes.
 
 If `E_LOCKED` appears, another **running** Live window holds the monitor
 lock (the lock file's mere existence is normal). The error includes a
-possible PID. Check it using `ps -fp PID`, exit that Live window, or send
+possible PID. Check it using `ps -fp PID`, exit that Live window with Esc, or send
 SIGTERM only to the confirmed old viewer. SIGTERM now unwinds the monitor,
 restores the terminal and removes only its own ephemeral counter rules.
 **Never** remove `/run/lock/portmanager2-view.lock` to bypass a live lock.
 
 ## Included features
 
-- **Fixed-screen live terminal dashboard (curses):** single-screen real-time redraw on Debian/Ubuntu without spilling each interval into SSH scrollback. Default shows busiest active ports only, terminal-height bounded, with 10m/1h/8h/24h averages. Keys: `q` or `Esc` to choose a port, `a` show idle ports, `+/-` refresh seconds, arrows to scroll. JSON/once modes stay plain text.
+- **Fixed-screen live terminal dashboard (curses):** single-screen real-time redraw on Debian/Ubuntu without spilling each interval into SSH scrollback. Default shows busiest active ports only, terminal-height bounded, with 10m/1h/8h/24h averages. Keys: `↑↓` choose a port, `Enter`/`q` open the limit wizard, `Tab`/`←→` switch NICs, `g` limit entire selected NIC, `Esc` exits, `Ctrl+C` manual port selection, `a` shows idle ports and `+/-` changes refresh. JSON/once modes stay plain text.
 - **Simple V1-inspired menu:** only [1] Live & speed limits, [2] IPTABLES & tunnels,
   [3] Edit/remove configurations. No IDs or iptables syntax required.
 - **No more false “0 traffic” assumption:** autodetect TCP/UDP IPv4 local sockets

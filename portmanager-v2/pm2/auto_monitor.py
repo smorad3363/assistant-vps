@@ -91,7 +91,10 @@ def parse_established(text):
     return counts
 
 
-def discover(existing=()):
+def discover(existing=(), limit=MAX_PORTS):
+    """Return up to the requested bounded number of IPv4 listener ports."""
+    if type(limit) is not int or not 1 <= limit <= 128:
+        raise PM2Error("E_VALIDATION", "Listener discovery limit must be 1..128")
     existing = set(existing)
     listeners = parse_listeners(run(["ss", "-H", "-lntu"], timeout=12))
     try:
@@ -100,7 +103,7 @@ def discover(existing=()):
         busy = {}
     ports = [key for key in listeners if key not in existing]
     ports.sort(key=lambda p: (-busy.get(p[1], 0), p[1], p[0]))
-    return ports[:MAX_PORTS]
+    return ports[:limit]
 
 
 def interface_counters(path=Path("/proc/net/dev")):
