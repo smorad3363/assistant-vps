@@ -899,11 +899,17 @@ def _live():
 
 
 def _usage_amount(lower, upper):
-    """Use one value when exact; two clearly separated values otherwise."""
-    lo, hi = lower / 1e9, upper / 1e9
+    """Compact GB labels; sub-0.01 GB measurements are never shown as zero."""
+    def short(byte_count):
+        if byte_count == 0:
+            return "0"
+        if 0 < byte_count < 10_000_000:
+            return "<0.01"
+        return f"{byte_count / 1e9:.2f}"
+    lo, hi = short(lower), short(upper)
     if lower == upper:
-        return f"{lo:.4f}"
-    return f"{lo:.4f}..{hi:.4f}"
+        return lo
+    return f"{lo}–{hi}" if lo != hi else f"{lo}~"
 
 
 def _usage_row(label, item, wide=True, date=None):
