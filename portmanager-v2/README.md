@@ -58,6 +58,30 @@ portmanager2 usage --from "2026-10-01 00:00" --to "2026-10-10 23:59" --tz Asia/T
 portmanager2 usage --from "2026-10-01 00:00" --to "2026-10-10 23:59" --tz Asia/Tehran --daily --csv > /root/daily-port-usage.csv
 ```
 
+The report now has two deliberately separate levels:
+
+- **WHOLE SERVER NETWORK (eth0/primary physical NIC):** independent NIC
+  RX download, TX upload and both directions total, recorded persistently
+  every minute. Docker bridges/tunnels are never added to the physical NIC,
+  which would double-count the same bytes. Per-day primary NIC totals appear
+  above each day's port rows. If the new NIC counter sampler hasn't been
+  running for the requested period, the UI says **no recorded physical
+  network totals** instead of misleadingly substituting port sums.
+- **Monitored ports:** independent TCP/UDP port rows with fixed, readable
+  download and upload columns and a labeled sum of monitored port rows.
+  This sum is **not total server traffic**; NAT, legacy rules and port
+  forwarding may duplicate bytes across rows. The requested daily period
+  displays most recent days first. Long periods do not repeat a misleading
+  identical "Unrecorded: 18933m" on every row; coverage is shown in minutes
+  actually recorded.
+
+The NIC total includes traffic on the selected physical interface, not
+necessarily the provider's rated volume, and does not retroactively exist
+for days before this feature was installed. For real billing decisions,
+compare the physical NIC's two directional volumes and coverage with
+the provider's billing policy. NIC intervals are removed after 14 days
+alongside port byte intervals.
+
 The report separates **lower-bound measured bytes** from the **upper-bound
 bytes that may fall inside a partially overlapping first or last minute**.
 Unknown within-minute timing is not silently estimated. A sample crossing
