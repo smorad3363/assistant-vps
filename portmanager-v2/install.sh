@@ -237,15 +237,9 @@ new_release=""
 swapped=0
 trap - EXIT
 rm -rf -- "$tmp"
-# Queue the first counter baseline immediately after installation; the
-# sampler waits briefly for the install lock to be released. The systemd timer
-# continues running every minute even when the Live viewer is closed.
-if [[ "${PORTMANAGER2_ENABLE_SERVICES:-1}" == "1" ]]; then
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl start --no-block portmanager2-sample.service \
-      || log "WARNING: first background sample could not be queued; check sample timer"
-  fi
-fi
+# The enabled timer starts sampling after installation. Do not start the
+# oneshot concurrently while installer holds the global V2 mutation lock:
+# that races service preflight and can cause a false "activating" failure.
 log "Installed $VERSION (commit $SHA); primary command: portmanager"
 log "Continuous port-byte logging: ${PORTMANAGER2_ENABLE_SERVICES:-1} (1=on, 0=off); retention: 14 days"
 log "Original V1 executable/cron archived under /var/lib/portmanager2/legacy-v1 when present."
