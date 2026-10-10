@@ -243,6 +243,8 @@ class NewThemeTest(unittest.TestCase):
         data = self.usage_fixture()
         day = data["daily"][1]
         with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui.shutil, "get_terminal_size",
+                                return_value=os.terminal_size((130, 45))),
               mock.patch.object(simple_ui.os, "isatty", return_value=True),
               mock.patch.dict(simple_ui.os.environ,
                               {"TERM": "xterm-256color"}, clear=False),
@@ -258,6 +260,18 @@ class NewThemeTest(unittest.TestCase):
         self.assertIn("TCP:8080", output)
         self.assertIn("2.0000..2.1000", output)
         self.assertIn("1.0000..1.1000", output)
+
+    def test_short_terminal_suppresses_multiline_numbers(self):
+        data = self.usage_fixture()
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui.shutil, "get_terminal_size",
+                                return_value=os.terminal_size((112, 29))),
+              mock.patch.object(simple_ui, "_choose", return_value="0"),
+              redirect_stdout(io.StringIO()) as out):
+            simple_ui._usage_detail(data, data["daily"][1])
+        self.assertIn("↓ DOWNLOAD   2.00 GB", out.getvalue())
+        self.assertIn("↑ UPLOAD     1.00 GB", out.getvalue())
+        self.assertNotIn("███", out.getvalue())
 
     def test_compact_usage_header_hides_unneeded_network_status(self):
         with (mock.patch.object(simple_ui, "_clear_screen"),
