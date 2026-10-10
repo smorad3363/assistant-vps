@@ -37,9 +37,9 @@ def _clear_screen():
         print("\033[2J\033[H", end="", flush=True)
 
 
-def _title(subtitle):
+def _title(subtitle, compact=False):
     _clear_screen()
-    _ui_header(subtitle.upper())
+    _ui_header(subtitle.upper(), compact=compact)
 
 
 def _options(*choices):
@@ -218,7 +218,7 @@ def _ui_edge(kind, width=None):
                  (width - 2) + right))
 
 
-def _ui_header(page):
+def _ui_header(page, compact=False):
     from . import VERSION
     import socket
     width = _ui_width()
@@ -233,6 +233,8 @@ def _ui_header(page):
     _ui_edge("top", width)
     _ui_line(_paint("96;1", label) + " " * gap + _paint("92;1", right), width)
     _ui_edge("bottom", width)
+    if compact:
+        return
     from .auto_monitor import interface_counters
     try:
         detected = interface_counters()
@@ -916,22 +918,167 @@ def _usage_row(label, item, wide=True, date=None):
             f"    {coverage}")
 
 
+_BIG_DIGITS = {
+    "0": ("███", "█ █", "█ █", "█ █", "███"),
+    "1": (" ██", "  █", "  █", "  █", "███"),
+    "2": ("███", "  █", "███", "█  ", "███"),
+    "3": ("███", "  █", "███", "  █", "███"),
+    "4": ("█ █", "█ █", "███", "  █", "  █"),
+    "5": ("███", "█  ", "███", "  █", "███"),
+    "6": ("███", "█  ", "███", "█ █", "███"),
+    "7": ("███", "  █", "  █", "  █", "  █"),
+    "8": ("███", "█ █", "███", "█ █", "███"),
+    "9": ("███", "█ █", "███", "  █", "███"),
+    ".": ("   ", "   ", "   ", "   ", " █ "),
+    "-": ("   ", "   ", "███", "   ", "   "),
+}
+
+
+def _usage_big_digits(text):
+    """Five-terminal-row digits, no special fonts or terminal extensions."""
+    glyphs = [_BIG_DIGITS.get(char, _BIG_DIGITS["-"])
+              for char in str(text)]
+    return [" ".join(glyph[i] for glyph in glyphs) for i in range(5)]
+
+
+def _usage_hero(label, data, width):
+    """One compact, high-contrast totals display; never equate missing with 0."""
+    iface = data.get("interface") if data else None
+    known = bool(data and data.get("has_samples"))
+    _ui_line(_paint("97;1", f"  {label}") +
+             _paint("90", f"  ·  {iface}" if iface else ""))
+    if not known:
+        _ui_line(_paint("93;1", "  NOT RECORDED") +
+                 _paint("90", "   Traffic before logging started is unknown."))
+        return
+    down_lo, down_hi = data["download_bytes_lower"], data["download_bytes_upper"]
+    up_lo, up_hi = data["upload_bytes_lower"], data["upload_bytes_upper"]
+    dl, ul = down_lo / 1e9, up_lo / 1e9
+    wide = width >= 99
+    if wide:
+        col = (width - 12) // 2
+        _ui_line("  " + _paint("92;1", "↓ DOWNLOAD".ljust(col)) +
+                 _paint("96;1", "↑ UPLOAD"))
+        down_art = _usage_big_digits(f"{dl:.2f}")
+        up_art = _usage_big_digits(f"{ul:.2f}")
+        for i in range(5):
+            _ui_line("  " + _paint("92;1", down_art[i].ljust(col)) +
+                     _paint("96;1", up_art[i]))
+        _ui_line("  " + _paint("92;1", "GB".ljust(col)) +
+                 _paint("96;1", "GB"))
+    else:
+        _ui_line("  " + _paint("92;1", f"↓ DOWNLOAD   {dl:.2f} GB"))
+        _ui_line("  " + _paint("96;1", f"↑ UPLOAD     {ul:.2f} GB"))
+    if down_lo != down_hi or up_lo != up_hi:
+        _ui_line(_paint("93",
+            "  Partial sample: ↓ " +
+            _usage_amount(down_lo, down_hi) + " GB  |  ↑ " +
+            _usage_amount(up_lo, up_hi) + " GB"))
+    total = down_lo + up_lo
+    _ui_line("  " + _paint("93;1", f"↓ + ↑  {total/1e9:.2f} GB recorded") +
+             _paint("90", "    (both directions, not the provider bill)"))
+    covered = data.get("covered_seconds", 0)
+    _ui_line(_paint("90", f"  Measured {covered/60:.0f} minutes. "
+               "Gaps are unknown—not zero."))
+
+
+def _usage_day_label(day, width):
+    """Day list: one recognizable line, never merge day and port views."""
+    network = day.get("server") or {}
+    if network.get("has_samples"):
+        dl = _usage_amount(network["download_bytes_lower"],
+                           network["download_bytes_upper"])
+        ul = _usage_amount(network["upload_bytes_lower"],
+                           network["upload_bytes_upper"])
+        # The network is measured independently and is never a sum of ports.
+        label = f'{day["date"]}   ↓ {dl:>11} GB   ↑ {ul:>11} GB'
+        return _ui_cut(label, max(15, width - 19))
+    if day.get("ports"):
+        return _ui_cut(
+            f'{day["date"]}   Ports recorded · server total unavailable',
+            max(15, width - 19))
+    return f'{day["date"]}   No recordings (unknown)'
+
+
+def _usage_detail(result, day=None):
+    """One selected day -> only its per-port table; Esc returns to day list."""
+    rows = day["ports"] if day is not None else result["ports"]
+    network = day.get("server") if day is not None else result.get("server")
+    label = day["date"] if day is not None else "SELECTED PERIOD"
+    page = 0
+    while True:
+        width = _ui_width()
+        max_rows = max(4, min(15, shutil.get_terminal_size((110, 34)).lines - 22))
+        max_page = max(0, (len(rows) - 1) // max_rows)
+        page = min(page, max_page)
+        _title("PORTS · " + label, compact=True)
+        _ui_edge("top")
+        _usage_hero("SERVER TRAFFIC", network, width)
+        _ui_edge("rule")
+        _ui_line(_paint("97;1", "  PORT BREAKDOWN") +
+                 _paint("90", f"   ·   {len(rows)} monitored ports"))
+        if width >= 94:
+            _ui_line(_paint("96;1",
+                f"  {'PORT':<13}  {'↓ DOWNLOAD (GB)':>18}  {'↑ UPLOAD (GB)':>18}   MEASURED"))
+        else:
+            _ui_line(_paint("96;1", "  PORT     ↓ DOWNLOAD  |  ↑ UPLOAD"))
+        shown = rows[page * max_rows:(page + 1) * max_rows]
+        if not shown:
+            _ui_line(_paint("93;1",
+                "  No port samples for this date. Usage is unknown, not 0 GB."))
+        for item in shown:
+            name = f'{item["protocol"].upper()}:{item["port"]}'
+            down = _usage_amount(item["download_bytes_lower"],
+                                 item["download_bytes_upper"])
+            up = _usage_amount(item["upload_bytes_lower"],
+                               item["upload_bytes_upper"])
+            mins = item.get("covered_seconds", 0) / 60
+            if width >= 94:
+                line = (f"  {name:<13}  " +
+                        _paint("92;1", f"{down:>18}") + "  " +
+                        _paint("96;1", f"{up:>18}") +
+                        _paint("90", f"   {mins:.0f}m"))
+                _ui_line(line)
+            else:
+                _ui_line(_paint("97;1", f"  {name}") + "  " +
+                         _paint("92;1", f"↓ {down} GB") + "  " +
+                         _paint("96;1", f"↑ {up} GB"))
+        _ui_edge("bottom")
+        if len(rows) > max_rows:
+            print(_paint("90", f"  Page {page+1}/{max_page+1}"))
+        print(_paint("90",
+            "  Port amounts can overlap due to forwarding; don't add them for billing."))
+        buttons = []
+        if page > 0:
+            buttons.append(("8", "Previous ports"))
+        if page < max_page:
+            buttons.append(("9", "Next ports"))
+        buttons.append(("0", "Back to days"))
+        action = _choose(*buttons)
+        if action == "8" and page > 0:
+            page -= 1
+        elif action == "9" and page < max_page:
+            page += 1
+        else:
+            return
+
+
 def _usage_report(custom=False):
-    """Open daily history instantly; ask for settings only on explicit request."""
+    """Home [4] goes directly to a 14-day date chooser with no questions."""
     zone_name = "Asia/Tehran"
     port = None
     if custom:
-        _title("CHANGE REPORT RANGE")
+        _title("REPORT SETTINGS", compact=True)
         _ui_edge("top")
-        _ui_line("  Adjust dates or select one port; press Enter for defaults.")
+        _ui_line("  Change dates or choose one port. Press Enter for defaults.")
         _ui_edge("bottom")
-        zone_name = _ask("Time zone (for example Asia/Tehran)", zone_name)
+        zone_name = _ask("Time zone", zone_name)
         if not zone_name:
             return
     try:
         zone = ZoneInfo(zone_name)
     except (ZoneInfoNotFoundError, KeyError, ValueError):
-        print("  Unknown time zone. Try UTC or Asia/Tehran.")
+        print("  Unknown time zone. Try Asia/Tehran or UTC.")
         _ask("Enter to return")
         return
     now = datetime.now(zone).replace(second=0, microsecond=0)
@@ -941,144 +1088,56 @@ def _usage_report(custom=False):
     if custom:
         start = _ask("From date/time (YYYY-MM-DD HH:MM)", start)
         end = _ask("Until date/time (YYYY-MM-DD HH:MM)", end)
-        port_text = _ask("Port number (ALL for all ports)", "ALL")
-        if start is None or end is None or port_text is None:
+        chosen_port = _ask("Port (ALL = all ports)", "ALL")
+        if start is None or end is None or chosen_port is None:
             return
-        if port_text.upper() == "ALL":
-            port = None
-        elif port_text.isdecimal() and 1 <= int(port_text) <= 65535:
-            port = int(port_text)
-        else:
-            print("  Enter ALL or a port from 1 to 65535.")
-            _ask("Enter to return")
-            return
+        if chosen_port.upper() != "ALL":
+            if not chosen_port.isdecimal() or not 1 <= int(chosen_port) <= 65535:
+                print("  Enter ALL or a port between 1 and 65535.")
+                return
+            port = int(chosen_port)
     result = usage_ledger.report(start, end, zone_name, port=port)
-    rows = result["ports"]
-    daily = result.get("daily")
-    view = "daily" if daily is not None else "total"
+    days = list(reversed(result.get("daily", [])))
     page = 0
     while True:
         width = _ui_width()
-        wide = width >= 106
-        page_size = max(3, min(9, (shutil.get_terminal_size((100, 28)).lines - 20)
-                                // (1 if wide else 3)))
-        if view == "daily":
-            # Most recent day first; put the day's actual NIC total before
-            # its individual monitored-port entries.
-            entries = []
-            for day in reversed(daily or []):
-                entries.append(("day", day["date"], None, day))
-                for item in day["ports"]:
-                    entries.append(("port", day["date"], item, day))
-        else:
-            entries = [("port", None, item, None) for item in rows]
-        max_page = max(0, (len(entries) - 1) // page_size)
+        page_size = max(3, min(7, shutil.get_terminal_size((110, 34)).lines - 15))
+        max_page = max(0, (len(days) - 1) // page_size)
         page = min(page, max_page)
-        visible = entries[page * page_size:(page + 1) * page_size]
-        _title("DAILY PORT USAGE" if view == "daily" else "PORT USAGE TOTALS")
+        _title("TRAFFIC BY DAY", compact=True)
         _ui_edge("top")
-        _ui_line("  " + _ui_cut(f"{start} → {end} ({zone_name})", width - 8))
-        server = result.get("server", {})
-        iface = server.get("interface")
-        if iface and server.get("has_samples"):
-            down = _usage_amount(server["download_bytes_lower"],
-                                 server["download_bytes_upper"])
-            up = _usage_amount(server["upload_bytes_lower"],
-                               server["upload_bytes_upper"])
-            total_lo = server["download_bytes_lower"] + server["upload_bytes_lower"]
-            total_hi = server["download_bytes_upper"] + server["upload_bytes_upper"]
-            _ui_line(_paint("96;1", f"  WHOLE SERVER NETWORK ({iface})  |  Recorded bytes"))
-            _ui_line(f"  ↓ DOWNLOAD  {down} GB     ↑ UPLOAD  {up} GB")
-            _ui_line(f"  BOTH DIRECTIONS: {_usage_amount(total_lo, total_hi)} GB")
-            _ui_line(_paint("93",
-                f'  Network coverage: {server["covered_seconds"]/60:.0f} minutes. '
-                'Missing time is unknown.'))
-        else:
-            _ui_line(_paint("93",
-                "  WHOLE SERVER: no recorded physical network totals for this period."))
-            _ui_line(_paint("93",
-                "  NIC-wide byte totals start after this version samples eth0."))
-        monitored = result.get("monitored_port_sum")
-        if monitored is None:
-            monitored = {
-                "download_bytes_lower": sum(r["download_bytes_lower"] for r in rows),
-                "download_bytes_upper": sum(r["download_bytes_upper"] for r in rows),
-                "upload_bytes_lower": sum(r["upload_bytes_lower"] for r in rows),
-                "upload_bytes_upper": sum(r["upload_bytes_upper"] for r in rows)}
-        if rows:
-            _ui_line(_paint("90",
-                "  Monitored ports sum (NOT server total; NAT may overlap):"))
-            down = _usage_amount(monitored["download_bytes_lower"],
-                                 monitored["download_bytes_upper"])
-            up = _usage_amount(monitored["upload_bytes_lower"],
-                               monitored["upload_bytes_upper"])
-            _ui_line(_paint("90", f"  ↓ {down} GB     ↑ {up} GB"))
-        _ui_line(_paint("90",
-            "  Single number = recorded bytes; range = uncertain boundary bytes."))
-        first, last = result.get("first_recorded_utc"), result.get("latest_recorded_utc")
-        if first is not None and last is not None:
-            since = datetime.fromtimestamp(first, zone).strftime("%Y-%m-%d %H:%M")
-            until = datetime.fromtimestamp(last, zone).strftime("%Y-%m-%d %H:%M")
-            _ui_line(_paint("90", "  Port records: " + _ui_cut(
-                f"{since} → {until}", width - 24)))
-        _ui_edge("rule")
-        if wide:
-            header = ("  PORT                   DOWNLOAD (GB)"
-                      "         UPLOAD (GB)      RECORDED")
-            if view == "total":
-                header = ("  PORT                   DOWNLOAD (GB)"
-                          "         UPLOAD (GB)      RECORDED")
-            _ui_line(_paint("96;1", header))
-        else:
-            _ui_line(_paint("96;1", "  PORT  |  DOWNLOAD GB  |  UPLOAD GB"))
-        if not entries:
-            _ui_line(_paint("93", "  No stored measurements for the chosen period."))
-        for kind, date, item, day in visible:
-            if kind == "day":
-                _ui_line(_paint("96;1", "  ─ " + date + " ─"))
-                nic = day.get("server", {})
-                if nic.get("has_samples"):
-                    dl = _usage_amount(nic["download_bytes_lower"],
-                                       nic["download_bytes_upper"])
-                    ul = _usage_amount(nic["upload_bytes_lower"],
-                                       nic["upload_bytes_upper"])
-                    _ui_line(_paint("92",
-                        f"  WHOLE SERVER ({nic['interface']}): ↓ {dl} GB  ↑ {ul} GB"))
-                else:
-                    _ui_line(_paint("93",
-                        "  Whole server: no network data recorded for this date"))
-                if not day["ports"]:
-                    _ui_line(_paint("93",
-                        "  No stored port measurements (unknown, not zero)"))
-                continue
-            label = f'{item["protocol"].upper()}:{item["port"]}'
-            for line in _usage_row(label, item, wide=wide,
-                                   date=None if view == "daily" else date).split("\n"):
-                _ui_line(_ui_cut(line, width - 4))
+        _ui_line(_paint("97;1", "  CHOOSE A DAY") +
+                 _paint("90", f"  ·  last 14 days  ·  {zone_name}"))
+        _ui_line("  " + _paint("92;1", "↓ DOWNLOAD") +
+                 "     " + _paint("96;1", "↑ UPLOAD") +
+                 _paint("90", "     ·     recorded server traffic"))
+        _ui_line(_paint("93",
+            "  Unknown days show NO DATA; zero is never assumed."))
         _ui_edge("bottom")
-        if len(entries) > page_size:
-            print(_paint("90", f"  Page {page + 1}/{max_page + 1}"))
-        print(_paint("90",
-            "  Incomplete tracking ≠ zero. Provider bills may include other traffic."))
-        choices = []
-        if page:
-            choices.append(("1", "Previous page"))
-        if (page + 1) * page_size < len(entries):
-            choices.append(("2", "Next page"))
-        choices.extend([("4", "Show full period totals" if view == "daily"
-                        else "Show daily breakdown"),
-                        ("3", "Choose another date or time"),
+        chunk = days[page * page_size:(page + 1) * page_size]
+        choices = [(str(i + 1), _usage_day_label(day, width))
+                   for i, day in enumerate(chunk)]
+        if page > 0:
+            choices.append(("8", "← Newer days"))
+        if page < max_page:
+            choices.append(("9", "Older days →"))
+        choices.extend([("3", "Change dates / select port"),
+                        ("4", "Totals for selected date range"),
                         ("0", "Back to home")])
-        selected = _choose(*choices)
-        if selected == "1" and page:
+        action = _choose(*choices)
+        if action and action.isdecimal() and 1 <= int(action) <= len(chunk):
+            _usage_detail(result, chunk[int(action) - 1])
+        elif action == "8" and page > 0:
             page -= 1
-        elif selected == "2" and (page + 1) * page_size < len(entries):
+        elif action == "9" and page < max_page:
             page += 1
-        elif selected == "4":
-            view = "total" if view == "daily" else "daily"
-            page = 0
-        elif selected == "3":
+        elif action == "3":
             return _usage_report(custom=True)
+        elif action == "4":
+            _usage_detail(result)
+        elif action == "r":
+            result = usage_ledger.report(start, end, zone_name, port=port)
+            days = list(reversed(result.get("daily", [])))
         else:
             return
 
