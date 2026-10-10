@@ -899,17 +899,29 @@ def _live():
 
 
 def _usage_amount(lower, upper):
-    """Compact GB labels; sub-0.01 GB measurements are never shown as zero."""
-    def short(byte_count):
-        if byte_count == 0:
-            return "0"
-        if 0 < byte_count < 10_000_000:
-            return "<0.01"
-        return f"{byte_count / 1e9:.2f}"
-    lo, hi = short(lower), short(upper)
-    if lower == upper:
-        return lo
-    return f"{lo}–{hi}" if lo != hi else f"{lo}~"
+    """Show only confirmed GB, with * when boundary bytes may be additional.
+
+    Two long endpoints joined by a dash looked like subtraction or a
+    negative amount. The asterisk is not silently rounded away even when
+    the uncertain bytes are less than 0.01 GB.
+    """
+    if lower == 0:
+        shown = "0"
+    elif 0 < lower < 10_000_000:
+        shown = "<0.01"
+    else:
+        shown = f"{lower / 1e9:.2f}"
+    return shown + ("*" if upper > lower else "")
+
+
+def _usage_uncertain_extra(lower, upper):
+    """Extra GB which MIGHT fall in the requested period, never confirmed."""
+    extra = max(0, upper - lower)
+    if extra == 0:
+        return "0"
+    if extra < 10_000_000:
+        return "<0.01"
+    return f"{extra / 1e9:.2f}"
 
 
 def _usage_row(label, item, wide=True, date=None):
@@ -971,8 +983,8 @@ def _usage_hero(label, data, width):
             shutil.get_terminal_size((110, 34)).lines >= 36)
     if wide:
         col = (width - 12) // 2
-        _ui_line("  " + _paint("92;1", "↓ DOWNLOAD".ljust(col)) +
-                 _paint("96;1", "↑ UPLOAD"))
+        _ui_line("  " + _paint("92;1", "↓ DOWNLOAD (recorded)".ljust(col)) +
+                 _paint("96;1", "↑ UPLOAD (recorded)"))
         down_art = _usage_big_digits(f"{dl:.2f}")
         up_art = _usage_big_digits(f"{ul:.2f}")
         for i in range(5):
@@ -981,13 +993,17 @@ def _usage_hero(label, data, width):
         _ui_line("  " + _paint("92;1", "GB".ljust(col)) +
                  _paint("96;1", "GB"))
     else:
-        _ui_line("  " + _paint("92;1", f"↓ DOWNLOAD   {dl:.2f} GB"))
-        _ui_line("  " + _paint("96;1", f"↑ UPLOAD     {ul:.2f} GB"))
+        _ui_line("  " + _paint("92;1", f"↓ DOWNLOAD   {dl:.2f} GB recorded"))
+        _ui_line("  " + _paint("96;1", f"↑ UPLOAD     {ul:.2f} GB recorded"))
     if down_lo != down_hi or up_lo != up_hi:
+        # Keep one clear recorded amount. Uncertain boundary bytes are NOT
+        # silently added to the displayed usage or called a negative number.
+        _ui_line(_paint("93;1",
+            "  * A sample crossed the report time boundary."))
         _ui_line(_paint("93",
-            "  Partial sample: ↓ " +
-            _usage_amount(down_lo, down_hi) + " GB  |  ↑ " +
-            _usage_amount(up_lo, up_hi) + " GB"))
+            "    Additional possible (not counted above): " +
+            "↓ up to +" + _usage_uncertain_extra(down_lo, down_hi) + " GB" +
+            "   ↑ up to +" + _usage_uncertain_extra(up_lo, up_hi) + " GB"))
     total = down_lo + up_lo
     _ui_line("  " + _paint("93;1", f"↓ + ↑  {total/1e9:.2f} GB recorded") +
              _paint("90", "    (both directions, not the provider bill)"))
@@ -1060,7 +1076,8 @@ def _usage_cross_date(result):
                  if filter_port else "ALL MONITORED PORTS")
         _ui_line(_paint("97;1", f"  {label}") +
                  _paint("90", f"  ·  {result.get('timezone', 'Asia/Tehran')}  ·  past 14 days"))
-        _ui_line(_paint("90", "  Values = recorded GB; unknown days are not zero usage."))
+        _ui_line(_paint("90",
+            "  Recorded GB only. * = extra boundary bytes possible; missing day ≠ 0."))
         if filter_port is not None:
             selected = next((item for item in result.get("ports", [])
                              if (item["protocol"], item["port"]) == filter_port), None)
@@ -1114,7 +1131,7 @@ def _usage_cross_date(result):
         _ui_edge("bottom")
         print(_paint("90", f"  Page {page+1}/{max_page+1}  ·  {len(entries)} day/port entries"))
         print(_paint("90",
-            "  Port counters may overlap due to NAT; do not add ports to estimate the server bill."))
+            "  * = possible additional boundary bytes. NAT ports may overlap; not a bill."))
         choices = []
         if page > 0:
             choices.append(("8", "Previous page"))
@@ -1201,7 +1218,7 @@ def _usage_detail(result, day=None):
         if len(rows) > max_rows:
             print(_paint("90", f"  Page {page+1}/{max_page+1}"))
         print(_paint("90",
-            "  Port amounts can overlap due to forwarding; don't add them for billing."))
+            "  * = possible extra boundary bytes. Forwarded ports can overlap."))
         buttons = []
         if page > 0:
             buttons.append(("8", "Previous ports"))
@@ -1270,7 +1287,7 @@ def _usage_report(custom=False):
                  "     " + _paint("93;1", "TOTAL (↓ + ↑)") +
                  _paint("90", "   ·   GB on main network interface"))
         _ui_line(_paint("93",
-            "  Unknown days show NO DATA; zero is never assumed."))
+            "  * = extra boundary bytes possible, not counted. NO DATA ≠ zero."))
         summary = result.get("server") or {}
         if summary.get("has_samples"):
             summed_dl = _usage_amount(summary["download_bytes_lower"],
