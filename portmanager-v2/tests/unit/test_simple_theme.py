@@ -320,6 +320,79 @@ class NewThemeTest(unittest.TestCase):
         self.assertIn("PERIOD TOTAL", shown.getvalue())
         self.assertIn("TOTAL", shown.getvalue())
 
+    def test_multi_date_port_table_shows_date_port_download_upload_total(self):
+        data = self.usage_fixture()
+        with (mock.patch.object(simple_ui, "_title") as title,
+              mock.patch.object(simple_ui, "_choose", return_value="0"),
+              mock.patch.object(simple_ui, "_ui_width", return_value=120),
+              redirect_stdout(io.StringIO()) as shown):
+            simple_ui._usage_cross_date(data)
+        rendered = shown.getvalue()
+        self.assertEqual(title.call_args.args[0], "PORT CONSUMPTION BY DATE")
+        self.assertIn("2026-10-10", rendered)
+        self.assertIn("TCP:8080", rendered)
+        self.assertIn("2026-10-09", rendered)
+        self.assertIn("TCP:1001", rendered)
+        self.assertIn("2.00–2.10", rendered)  # download for October 10
+        self.assertIn("1.00–1.10", rendered)  # upload for October 10
+        self.assertIn("3.00–3.20", rendered)  # total for October 10
+        self.assertIn("0.30", rendered)       # October 9 download
+        self.assertIn("0.40", rendered)       # October 9 upload
+        self.assertIn("0.70", rendered)       # October 9 total
+        self.assertIn("MEASURED", rendered)
+
+    def test_multi_date_filter_one_port_never_substitutes_missing_day_zero(self):
+        data = self.usage_fixture()
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_choose",
+                                side_effect=["f", "0"]),
+              mock.patch.object(simple_ui, "_ask",
+                                return_value="8080") as asked,
+              redirect_stdout(io.StringIO()) as shown):
+            simple_ui._usage_cross_date(data)
+        output = shown.getvalue()
+        asked.assert_called_once()
+        self.assertIn("TCP:8080", output)
+        self.assertIn("2026-10-09", output)
+        self.assertIn("NO RECORD (unknown)", output)
+        self.assertIn("RECORDED PERIOD TOTAL", output)
+        self.assertNotIn("2026-10-09   0.00", output)
+
+    def test_day_picker_and_day_detail_can_open_cross_date_port_history(self):
+        data = self.usage_fixture()
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=data),
+              mock.patch.object(simple_ui, "_usage_cross_date") as cross,
+              mock.patch.object(simple_ui, "_choose",
+                                side_effect=["p", "0"]),
+              redirect_stdout(io.StringIO())):
+            simple_ui._usage_report()
+        cross.assert_called_once_with(data)
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_usage_cross_date") as cross,
+              mock.patch.object(simple_ui, "_choose",
+                                side_effect=["p", "0"]),
+              redirect_stdout(io.StringIO())):
+            simple_ui._usage_detail(data, data["daily"][1])
+        cross.assert_called_once_with(data)
+
+    def test_multi_date_table_paginated_and_prints_no_data_days(self):
+        data = self.usage_fixture()
+        data["daily"] = [{"date": f"2026-10-{day:02d}",
+                          "ports": ([data["ports"][0]] if day == 10 else [])}
+                         for day in range(1, 11)]
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_choose",
+                                side_effect=["9", "0"]) as menu,
+              mock.patch.object(simple_ui.shutil, "get_terminal_size",
+                                return_value=os.terminal_size((116, 21))),
+              redirect_stdout(io.StringIO()) as shown):
+            simple_ui._usage_cross_date(data)
+        self.assertEqual(menu.call_count, 2)
+        self.assertIn("NO RECORD (unknown)", shown.getvalue())
+        self.assertIn("Page 2/", shown.getvalue())
+
     def test_day_list_seven_dates_has_unique_hotkeys_even_at_slots_three_four(self):
         from datetime import date, timedelta
         data = self.usage_fixture()
@@ -344,7 +417,7 @@ class NewThemeTest(unittest.TestCase):
                 self.assertNotIn("s", keys)
                 self.assertNotIn("t", keys)
                 choice_calls.append(keys)
-                self.assertEqual(kwargs.get("shortcuts"), ("s", "t"))
+                self.assertEqual(kwargs.get("shortcuts"), ("s", "t", "p"))
                 real_choose(*options, **kwargs)  # verify the real menu contract
                 return "4" if len(choice_calls) == 1 else "0"
             with mock.patch.object(simple_ui, "_choose", side_effect=check_choose):
