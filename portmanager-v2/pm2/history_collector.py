@@ -245,6 +245,10 @@ def collect(timestamp=None):
         _schema(db)
         boot = usage_ledger.boot_id()
         same_boot = usage_ledger.baseline_matches(db, boot)
+        try:
+            nic_counters = auto_monitor.interface_counters()
+        except (OSError, ValueError):
+            nic_counters = {}  # Port history still works if /proc is absent
         inspected = _inspect()
         current_ports = inspected[1]
         valid_old = all(row[2] for row in inspected[0])
@@ -296,6 +300,8 @@ def collect(timestamp=None):
             current = _history_counters()
         with db:
             usage_ledger.record(db, byte_intervals)
+            nic_written = usage_ledger.record_interfaces(
+                db, nic_counters, now, same_boot)
             expired = usage_ledger.prune(db, now)
             usage_ledger.remember_boot(db, boot)
             db.execute("DELETE FROM pm2_history_last")
@@ -306,6 +312,7 @@ def collect(timestamp=None):
                        (now,))
         return {"monitored_ports": len(wanted), "samples_written": len(rates),
                 "byte_intervals_written": len(byte_intervals),
+                "nic_intervals_written": nic_written,
                 "expired_byte_intervals_removed": expired,
                 "retention_days": usage_ledger.RETENTION_DAYS,
                 "history_active": True, "sampled_at": now}
