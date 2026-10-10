@@ -67,13 +67,26 @@ sampled, plus owned/legacy accounting rules. IPv6, untracked ports, VPS
 hypervisor overhead, and internal Docker/NAT paths may be absent or overlap.
 Do **not** add network-interface totals or duplicate sources to a port's
 recorded bytes. Totals are offered for investigation, *not* as audited
-payable balances. Large long-term histories grow SQLite: monitor free
-disk space and back up the database. Never delete it just to clear history.
+payable balances. Raw per-port records and legacy V2 tunnel samples are
+automatically trimmed to the most recent **14 days**, once per successful
+background minute sample. Expired SQLite pages are reused; file size does
+not necessarily shrink immediately after deletion. Backups and journalctl
+logs are separate from database retention.
 
 The systemd sampler now briefly waits for a concurrent Port Manager
 mutation; if still locked it marks that tick as `SKIPPED_LOCK`, rather than
 failing the unit. Consecutive lost ticks still create gaps in the
 measurement history.
+
+Normal new installs and upgrades **activate** the V2-owned systemd
+sampling timer automatically, even if the Live viewer is closed. An initial
+counter baseline is queued as installation finishes; the next successful
+minute sample can then write byte differences. To explicitly opt out on a
+test-only host, set `PORTMANAGER2_ENABLE_SERVICES=0` during installation.
+Monitoring rules are counter-only, but setup still requires root and
+iptables/netfilter support. Confirm the timer is healthy with:
+`systemctl is-active portmanager2-sample.timer` and
+`journalctl -u portmanager2-sample.service -n 30 --no-pager`.
 
 ## Live graphs, speed limits and selection
 
