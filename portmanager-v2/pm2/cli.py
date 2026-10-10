@@ -339,6 +339,8 @@ def parser():
     usage.add_argument("--protocol", choices=("tcp", "udp"))
     usage.add_argument("--json", action="store_true")
     usage.add_argument("--csv", action="store_true", help="CSV report to stdout")
+    usage.add_argument("--daily", action="store_true",
+                       help="Show one day/port with separate upload and download")
     logs_parser = sub.add_parser("logs")
     logs_parser.add_argument("--lines", type=int, default=100)
     for name in ("sample", "restore", "backup", "confirm", "rollback-pending"):
@@ -446,11 +448,13 @@ def main(argv=None):
             payload = usage_ledger.report(args.from_time, args.to_time, args.tz,
                                          args.port, args.protocol)
             if args.csv:
-                print(usage_ledger.to_csv(payload), end="")
+                print((usage_ledger.to_daily_csv(payload) if args.daily
+                       else usage_ledger.to_csv(payload)), end="")
             elif json_mode:
                 response(True, "OK", "Recorded per-port byte usage", payload, True)
             else:
-                print(usage_ledger.pretty(payload))
+                print(usage_ledger.pretty_daily(payload) if args.daily
+                      else usage_ledger.pretty(payload))
         elif args.command == "restore":
             with mutation_lock():
                 payload = persistence.restore()
