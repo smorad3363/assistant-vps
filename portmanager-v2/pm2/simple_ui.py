@@ -954,7 +954,8 @@ def _usage_hero(label, data, width):
     down_lo, down_hi = data["download_bytes_lower"], data["download_bytes_upper"]
     up_lo, up_hi = data["upload_bytes_lower"], data["upload_bytes_upper"]
     dl, ul = down_lo / 1e9, up_lo / 1e9
-    wide = width >= 99
+    wide = (width >= 99 and
+            shutil.get_terminal_size((110, 34)).lines >= 36)
     if wide:
         col = (width - 12) // 2
         _ui_line("  " + _paint("92;1", "↓ DOWNLOAD".ljust(col)) +
@@ -1008,7 +1009,11 @@ def _usage_detail(result, day=None):
     page = 0
     while True:
         width = _ui_width()
-        max_rows = max(4, min(15, shutil.get_terminal_size((110, 34)).lines - 22))
+        terminal_rows = shutil.get_terminal_size((110, 34)).lines
+        uses_big_figures = width >= 99 and terminal_rows >= 36
+        # Budget for compact header, 5-row figure, table labels and menu.
+        reserved_rows = 29 if uses_big_figures else 23
+        max_rows = max(1, min(12, terminal_rows - reserved_rows))
         max_page = max(0, (len(rows) - 1) // max_rows)
         page = min(page, max_page)
         _title("PORTS · " + label, compact=True)
