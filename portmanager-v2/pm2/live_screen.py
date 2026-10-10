@@ -317,7 +317,7 @@ class LiveScreen:
                     interface, self.last.get("rows", []))
                 if other_down + other_up >= .1:
                     interface_line += (f"  | OTHER / UNKNOWN ~ "
-                                       f"↓{other_down:.0f} ↑{other_up:.0f} Mb/s")
+                                       f"↓{other_down:.1f} ↑{other_up:.1f} Mb/s")
             self._write(6, 2, interface_line, 3 if nic == "ALL" else 1)
         self._write(7, 1, "╭" + "─" * (width - 3) + "╮", 1)
         self._write(8, 2, "PORT TRAFFIC  ·  speed + recorded volume  ·  ranked by 10m", 1, True)
