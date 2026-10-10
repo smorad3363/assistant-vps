@@ -173,6 +173,8 @@ class LiveScreenTests(unittest.TestCase):
         exact = {"bytes": 1_000_000_000, "possible_bytes": 1_000_000_000,
                  "coverage_seconds": 600, "requested_seconds": 600}
         self.assertNotIn("*", screen._volume_metric(exact))
+        tiny = dict(exact, bytes=1_000_000, possible_bytes=1_000_000)
+        self.assertIn("<0.01 GB", screen._volume_metric(tiny))
 
     def test_fifteen_port_pages_and_next_previous_controls(self):
         screen = self.make_view([ord("n"), ord("p")])
