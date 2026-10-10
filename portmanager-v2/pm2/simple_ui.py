@@ -1020,7 +1020,7 @@ def _usage_report():
                 f"{since} → {until}", width - 24)))
         _ui_edge("rule")
         if wide:
-            header = ("  DATE         PORT              DOWNLOAD (GB)"
+            header = ("  PORT                   DOWNLOAD (GB)"
                       "         UPLOAD (GB)      RECORDED")
             if view == "total":
                 header = ("  PORT                   DOWNLOAD (GB)"
