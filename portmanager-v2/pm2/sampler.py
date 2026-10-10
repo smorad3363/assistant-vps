@@ -89,6 +89,10 @@ def sample(now=None, values=None):
                     "total_bytes=excluded.total_bytes,counter_epoch=excluded.counter_epoch",
                     (tid, proto, direction, timestamp, total, epoch))
                 entries += 1
+            # The old V2 per-tunnel sample table also grows without a cap.
+            # Retain the same 14-day window as per-port byte accounting.
+            db.execute("DELETE FROM samples WHERE timestamp_utc <= ?",
+                       (timestamp - 14 * 86400,))
     finally:
         db.close()
     return {"timestamp_utc": timestamp, "samples_written": entries}
