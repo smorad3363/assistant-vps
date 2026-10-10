@@ -171,6 +171,7 @@ def prune(db, now):
     cursor = db.execute(
         "DELETE FROM pm2_port_byte_intervals WHERE end_utc <= ?", (cutoff,))
     db.execute("DELETE FROM pm2_nic_byte_intervals WHERE end_utc <= ?", (cutoff,))
+    db.execute("DELETE FROM pm2_nic_byte_latest WHERE sampled_at <= ?", (cutoff,))
     return cursor.rowcount
 
 
