@@ -50,9 +50,10 @@ or deeply nested firewall details. The header is compact on these two screens
 so important numbers occupy most of the terminal. The font itself is terminal
 controlled, hence the enlarged figures use portable block characters.
 
-Select **[3] Change dates / select port** from the day picker only when a
-different time range, zone or specific port is wanted. **[4] Totals for
-selected date range** is an optional secondary view. The report stores integer iptables byte deltas in the same
+Select **[S] Settings: date / port** from the day picker only when a
+different time range, zone or specific port is wanted. **[T] Totals for
+selected range** is an optional secondary view. Numbered day shortcuts stay
+unique (1–7 per page); S and T also work directly on the keyboard. The report stores integer iptables byte deltas in the same
 owned SQLite database `/var/lib/portmanager2/traffic.sqlite3`. Unlike
 Live's *rate* history, these records are not erased after 24 hours and are
 collected once per minute by the systemd sampler without opening Live.
