@@ -161,6 +161,48 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(selected["name"], "Port-8")
         self.assertEqual(picked.call_count, 2)
 
+    def test_home_daily_report_opens_without_asking_for_dates_or_port(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo("Asia/Tehran")
+        fake = {"ports": [], "daily": [],
+                "server": {"has_samples": False, "interface": None}}
+        with (mock.patch.object(simple_ui, "_title") as title,
+              mock.patch.object(simple_ui, "_ask") as prompt,
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=fake) as queried,
+              mock.patch.object(simple_ui, "_choose", return_value="0"),
+              redirect_stdout(io.StringIO())):
+            before = datetime.now(zone)
+            simple_ui._usage_report()
+            after = datetime.now(zone)
+        prompt.assert_not_called()
+        self.assertEqual(title.call_args_list[-1].args[0], "DAILY PORT USAGE")
+        args = queried.call_args.args
+        self.assertEqual(args[2], "Asia/Tehran")
+        self.assertIsNone(queried.call_args.kwargs["port"])
+        self.assertEqual(args[0], (before - simple_ui.timedelta(days=13))
+                         .replace(hour=0, minute=0).strftime("%Y-%m-%d %H:%M"))
+        self.assertIn(args[1], [
+            before.replace(second=0, microsecond=0).strftime("%Y-%m-%d %H:%M"),
+            after.replace(second=0, microsecond=0).strftime("%Y-%m-%d %H:%M")])
+
+    def test_range_customization_prompts_only_after_request(self):
+        data = {"ports": [], "daily": []}
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ask", side_effect=[
+                  "Asia/Tehran", "2026-10-09 00:00",
+                  "2026-10-10 12:00", "1001"]) as prompt,
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=data) as queried,
+              mock.patch.object(simple_ui, "_choose", side_effect=["3", "0"]),
+              redirect_stdout(io.StringIO())):
+            simple_ui._usage_report()
+        self.assertEqual(prompt.call_count, 4)
+        queried.assert_any_call(
+            "2026-10-09 00:00", "2026-10-10 12:00",
+            "Asia/Tehran", port=1001)
+
     def test_report_displays_distinct_network_total_and_port_rows(self):
         row = {"protocol": "tcp", "port": 1001,
                "download_bytes_lower": 870_200_000,
@@ -192,7 +234,7 @@ class NewThemeTest(unittest.TestCase):
                                 return_value=data),
               mock.patch.object(simple_ui, "_choose", side_effect=["4", "0"]),
               redirect_stdout(io.StringIO()) as output):
-            simple_ui._usage_report()
+            simple_ui._usage_report(custom=True)
         rendered = output.getvalue()
         self.assertIn("WHOLE SERVER NETWORK (eth0)", rendered)
         self.assertIn("↓ DOWNLOAD  2.0000 GB", rendered)
@@ -239,7 +281,7 @@ class NewThemeTest(unittest.TestCase):
                                 return_value=result) as called,
               mock.patch.object(simple_ui, "_choose", return_value="0") as chooser,
               redirect_stdout(io.StringIO()) as out):
-            simple_ui._usage_report()
+            simple_ui._usage_report(custom=True)
         called.assert_called_once_with(
             "2026-10-10 00:00", "2026-10-12 00:00",
             "Asia/Tehran", port=8080)
@@ -272,7 +314,7 @@ class NewThemeTest(unittest.TestCase):
                                 return_value=result),
               mock.patch.object(simple_ui, "_choose", side_effect=["4", "0"]),
               redirect_stdout(io.StringIO())):
-            simple_ui._usage_report()
+            simple_ui._usage_report(custom=True)
         self.assertEqual(titles.call_args_list[-2].args[0], "DAILY PORT USAGE")
         self.assertEqual(titles.call_args_list[-1].args[0], "PORT USAGE TOTALS")
 
@@ -294,7 +336,7 @@ class NewThemeTest(unittest.TestCase):
                                 return_value=report) as called,
               mock.patch.object(simple_ui, "_choose", return_value="0"),
               redirect_stdout(io.StringIO()) as out):
-            simple_ui._usage_report()
+            simple_ui._usage_report(custom=True)
         called.assert_called_once_with(
             "2026-10-10 08:00", "2026-10-10 10:00",
             "Asia/Tehran", port=8080)
