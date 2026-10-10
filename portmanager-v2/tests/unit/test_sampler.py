@@ -27,6 +27,26 @@ class SamplerTests(unittest.TestCase):
         self.assertEqual(report["coverage_seconds"], 0)
         self.assertIsNone(report["upload_mbps"])
 
+    def test_old_tunnel_traffic_samples_expire_after_fourteen_days(self):
+        ident = "77cafed5-c41d-4107-a18e-ef9cda90cb5e"
+        old = 1_000_000
+        now = old + 14 * 86400 + 120
+        with mock.patch.object(sampler.os, "geteuid", return_value=0):
+            sampler.sample(old, {(ident, "tcp", "up"): 100})
+            sampler.sample(now, {(ident, "tcp", "up"): 1000})
+        db = sampler.connect()
+        try:
+            rows = db.execute(
+                "SELECT timestamp_utc FROM samples ORDER BY timestamp_utc"
+            ).fetchall()
+            self.assertEqual(rows, [(now,)])
+            baseline = db.execute(
+                "SELECT last_time FROM samples_latest WHERE tunnel_id=?",
+                (ident,)).fetchone()
+            self.assertEqual(baseline[0], now)
+        finally:
+            db.close()
+
     def test_accumulate_and_epoch_reset_without_negative_spike(self):
         id = "77cafed5-c41d-4107-a18e-ef9cda90cb5e"
         with mock.patch.object(sampler.os, "geteuid", return_value=0):
