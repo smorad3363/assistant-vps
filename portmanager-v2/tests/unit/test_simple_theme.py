@@ -161,6 +161,63 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(selected["name"], "Port-8")
         self.assertEqual(picked.call_count, 2)
 
+    def test_daily_usage_is_default_and_directional_columns_are_distinct(self):
+        port = {"protocol": "tcp", "port": 8080,
+                "download_bytes_lower": 3_000_000_000,
+                "download_bytes_upper": 3_100_000_000,
+                "upload_bytes_lower": 1_000_000_000,
+                "upload_bytes_upper": 1_100_000_000,
+                "missing_seconds": 60, "boundary_uncertain_bytes": 200,
+                "overlapping_sources": False}
+        result = {"ports": [port], "daily": [
+            {"date": "2026-10-10", "ports": [port]},
+            {"date": "2026-10-11", "ports": [], "period_seconds": 86400}
+        ]}
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ask", side_effect=[
+                  "Asia/Tehran", "2026-10-10 00:00",
+                  "2026-10-12 00:00", "8080"]),
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=result) as called,
+              mock.patch.object(simple_ui, "_choose", return_value="0") as chooser,
+              redirect_stdout(io.StringIO()) as out):
+            simple_ui._usage_report()
+        called.assert_called_once_with(
+            "2026-10-10 00:00", "2026-10-12 00:00",
+            "Asia/Tehran", port=8080)
+        rendered = out.getvalue()
+        self.assertIn("DAILY", rendered)
+        self.assertIn("DOWNLOAD", rendered)
+        self.assertIn("UPLOAD", rendered)
+        self.assertIn("3.0000", rendered)
+        self.assertIn("1.0000", rendered)
+        self.assertIn("2026-10-11", rendered)
+        self.assertIn("No stored measurements", rendered)
+        self.assertTrue(any("Show full period totals" in str(choice)
+                            for call in chooser.call_args_list
+                            for choice in call.args))
+
+    def test_can_switch_from_daily_to_period_totals(self):
+        port = {"protocol": "tcp", "port": 1001,
+                "download_bytes_lower": 2_000_000_000,
+                "download_bytes_upper": 2_000_000_000,
+                "upload_bytes_lower": 1_000_000_000,
+                "upload_bytes_upper": 1_000_000_000,
+                "missing_seconds": 0, "boundary_uncertain_bytes": 0,
+                "overlapping_sources": False}
+        result = {"ports": [port], "daily": [
+            {"date": "2026-10-10", "ports": [port]}]}
+        with (mock.patch.object(simple_ui, "_title") as titles,
+              mock.patch.object(simple_ui, "_ask", side_effect=[
+                  "UTC", "2026-10-10 00:00", "2026-10-11 00:00", "ALL"]),
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=result),
+              mock.patch.object(simple_ui, "_choose", side_effect=["4", "0"]),
+              redirect_stdout(io.StringIO())):
+            simple_ui._usage_report()
+        self.assertEqual(titles.call_args_list[-2].args[0], "DAILY PORT USAGE")
+        self.assertEqual(titles.call_args_list[-1].args[0], "PORT USAGE TOTALS")
+
     def test_usage_menu_queries_exact_user_time_range(self):
         report = {"ports": [{
             "protocol": "tcp", "port": 8080,
