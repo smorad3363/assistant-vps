@@ -261,11 +261,13 @@ class LiveScreen:
         """Recorded integer bytes; never infer GB by multiplying Mbps."""
         if not item or not item.get("coverage_seconds"):
             return "   -- GB"
-        volume = item.get("bytes", 0) / 1e9
+        raw_bytes = item.get("bytes", 0)
         partial = (item.get("coverage_seconds", 0) <
                    item.get("requested_seconds", float("inf")) or
-                   item.get("possible_bytes", 0) > item.get("bytes", 0))
-        return f"{volume:6.2f} GB{'*' if partial else ' '}"
+                   item.get("possible_bytes", 0) > raw_bytes)
+        # An actual few megabytes must never look like zero billed traffic.
+        value = "<0.01" if 0 < raw_bytes < 10_000_000 else f"{raw_bytes/1e9:.2f}"
+        return f"{value:>6} GB{'*' if partial else ' '}"
 
     def _page_move(self, direction):
         rows = self._candidate_rows()
