@@ -6,7 +6,7 @@ not known: precise intra-interval timestamps do not exist. No invented
 backfill and no cross-port provider billing claim.
 """
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, time as day_time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import re
 import sqlite3
@@ -181,6 +181,52 @@ def summarize(intervals, start, end):
     return results
 
 
+
+def daily_breakdown(intervals, start, end, tz_name):
+    """Summarize each *local calendar day*, never spread bytes by estimation.
+
+    A minute crossing local midnight can belong to either day. It contributes
+    zero to each day's verified lower bound, and its full bytes to the upper
+    bound for each affected day; the same unknown bytes may appear twice in
+    upper bounds. Therefore never sum daily upper bounds for billing.
+    """
+    if not start < end:
+        return []
+    zone = ZoneInfo(tz_name)
+    first_day = datetime.fromtimestamp(start, zone).date()
+    last_day = datetime.fromtimestamp(end - 0.000001, zone).date()
+    by_date = defaultdict(list)
+    for row in intervals:
+        a, b = row[:2]
+        lo, hi = max(float(a), start), min(float(b), end)
+        if not lo < hi:
+            continue
+        current = datetime.fromtimestamp(lo, zone).date()
+        last = datetime.fromtimestamp(hi - 0.000001, zone).date()
+        while current <= last:
+            by_date[current].append(row)
+            current += timedelta(days=1)
+
+    days = []
+    date = first_day
+    while date <= last_day:
+        midnight = datetime.combine(date, day_time.min, tzinfo=zone).timestamp()
+        following = datetime.combine(
+            date + timedelta(days=1), day_time.min, tzinfo=zone).timestamp()
+        day_start, day_end = max(start, midnight), min(end, following)
+        if day_start < day_end:
+            records = by_date.get(date, [])
+            ports = summarize(records, day_start, day_end)
+            days.append({
+                "date": date.isoformat(),
+                "from_utc": day_start, "to_utc": day_end,
+                "period_seconds": day_end - day_start,
+                "has_samples": bool(records),
+                "ports": ports
+            })
+        date += timedelta(days=1)
+    return days
+
 def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
     start, end = parse_datetime(from_time, tz_name), parse_datetime(to_time, tz_name)
     if end <= start or end - start > 366 * 86400:
@@ -216,10 +262,11 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
             "SELECT name FROM sqlite_master WHERE type='table' AND name='pm2_history_health'"
         ).fetchone() else None
         grouped = summarize(rows, start, end)
+        days = daily_breakdown(rows, start, end, tz_name)
         note = [
             "IPv4 monitored ports only; IPv6, unmatched ports and traffic of other networks may be absent.",
             "Counters are per original TCP/UDP port (or legacy combined-protocol counter). NAT/bridges can overlap; no combined billable total is asserted.",
-            "Intervals crossing requested endpoints have unknown intra-minute distribution; lower/upper bounds are shown.",
+            "Intervals crossing requested endpoints or local midnights have unknown intra-minute distribution; lower/upper bounds are shown. Daily UPPER bounds can overlap and must not be summed.",
             "A missing interval is NOT zero traffic. This is not a provider billing reconciliation.",
             "Only data sampled after this byte ledger was enabled are available; older Mbps graphs are not billing data.",
             "Raw per-port byte records older than 14 days are deleted automatically on the next successful sample.",
@@ -240,6 +287,7 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
             "from": from_time, "to": to_time, "timezone": tz_name,
             "interval_seconds": end - start, "ports": grouped,
             "intervals_read": len(rows),
+            "daily": days,
             "retention_days": RETENTION_DAYS,
             "first_recorded_utc": ledger_first,
             "latest_recorded_utc": ledger_last,
@@ -278,6 +326,61 @@ def to_csv(result):
             row["overlapping_sources"], True
         ])
     return out.getvalue()
+
+
+def to_daily_csv(result):
+    """One day/port per row. Download and upload stay separate."""
+    import csv
+    from io import StringIO
+    out = StringIO(newline="")
+    writer = csv.writer(out)
+    writer.writerow(["date", "timezone", "protocol", "port",
+                     "download_bytes_lower", "download_bytes_upper",
+                     "upload_bytes_lower", "upload_bytes_upper",
+                     "missing_seconds", "boundary_uncertain_bytes",
+                     "overlapping_sources", "has_samples",
+                     "not_provider_billable"])
+    for day in result.get("daily", []):
+        if not day["ports"]:
+            writer.writerow([day["date"], result["timezone"], "", "", "", "",
+                             "", "", day["period_seconds"], "", "",
+                             False, True])
+        for item in day["ports"]:
+            writer.writerow([
+                day["date"], result["timezone"],
+                item["protocol"], item["port"],
+                item["download_bytes_lower"], item["download_bytes_upper"],
+                item["upload_bytes_lower"], item["upload_bytes_upper"],
+                item["missing_seconds"], item["boundary_uncertain_bytes"],
+                item["overlapping_sources"], True, True
+            ])
+    return out.getvalue()
+
+
+def pretty_daily(result):
+    """Compact text report with separate directional byte volume per day."""
+    lines = [
+        f'DAILY PORT USAGE  {result["from"]} → {result["to"]} ({result["timezone"]})',
+        "DATE        PORT       ↓ DOWNLOAD GB (lower..upper)    ↑ UPLOAD GB (lower..upper)    MISSING",
+    ]
+    for day in result.get("daily", []):
+        if not day["ports"]:
+            lines.append(f'{day["date"]}  NO SAMPLES (unknown usage for this date)')
+        for item in day["ports"]:
+            lines.append(
+                f'{day["date"]}  {item["protocol"].upper()}:{item["port"]:<6} '
+                f'{item["download_bytes_lower"]/1e9:9.4f}..{item["download_bytes_upper"]/1e9:.4f}   '
+                f'{item["upload_bytes_lower"]/1e9:9.4f}..{item["upload_bytes_upper"]/1e9:.4f}   '
+                f'{item["missing_seconds"]/60:.1f} min'
+                f'{" *" if item["boundary_uncertain_bytes"] else ""}'
+            )
+    lines.extend([
+        "",
+        "* A sample crossing local midnight may contribute to the UPPER bound of both dates.",
+        "Do NOT add upper bounds between days. LOWER is verified complete intervals only.",
+        "Missing data is not zero consumption. This is not a provider bill."
+    ])
+    return "\n".join(lines)
 
 
 def pretty(result):
