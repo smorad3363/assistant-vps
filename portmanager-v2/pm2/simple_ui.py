@@ -932,11 +932,23 @@ def _usage_report():
         _ui_line("  " + _ui_cut(f"{start} → {end} ({zone_name})", _ui_width()-8))
         _ui_line(_paint("96;1", "  DOWNLOAD / UPLOAD  =  recorded bytes, NOT an estimated Mbps average"))
         _ui_line(_paint("93", "  LOWER: full samples only | UPPER: includes uncertain boundary samples"))
-        _ui_line(_paint("93", "  Missing minutes mean data unavailable, NOT zero usage."))
+        _ui_line(_paint("93", "  Missing minutes = unavailable data, NOT zero usage. Records kept 14 days."))
+        first, last = result.get("first_recorded_utc"), result.get("latest_recorded_utc")
+        if first is not None and last is not None:
+            since = datetime.fromtimestamp(first, zone).strftime("%Y-%m-%d %H:%M")
+            until = datetime.fromtimestamp(last, zone).strftime("%Y-%m-%d %H:%M")
+            _ui_line("  Recorded data available: " + _ui_cut(
+                f"{since} → {until} ({zone_name})", _ui_width() - 35))
         _ui_edge("rule")
         if not rows:
-            _ui_line("  No stored byte measurements for that time.")
-            _ui_line("  Records only begin after the updated sampler starts collecting.")
+            _ui_line("  No stored byte measurements for the selected hours.")
+            if first is not None:
+                _ui_line("  Choose a time within the recorded period shown above.")
+            elif result.get("last_sampler_baseline_utc") is not None:
+                _ui_line("  First counter baseline exists; wait for another successful minute sample.")
+            else:
+                _ui_line("  Background logging has not established its first baseline yet.")
+                _ui_line("  Check: systemctl status portmanager2-sample.timer")
         else:
             for item in rows[page*page_size:(page+1)*page_size]:
                 label = f'{item["protocol"].upper()}:{item["port"]}'
