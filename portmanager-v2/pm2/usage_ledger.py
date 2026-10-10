@@ -317,6 +317,71 @@ def daily_breakdown(intervals, start, end, tz_name):
         date += timedelta(days=1)
     return days
 
+def live_window_volumes(db, now, periods=None):
+    """Read *recorded byte intervals* for Live's four windows, never rates.
+
+    The viewer is read-only. Duplicated counters may include forwarded
+    traffic on multiple chains: choose one monotonic non-overlapping sample
+    timeline per original port, and mark partial windows. Missing samples are
+    unknown rather than zero. Caller should cache these results between
+    minute samples for responsive Live refresh.
+    """
+    windows = periods or {"10m": 600, "1h": 3600,
+                          "8h": 28800, "24h": 86400}
+    init(db)
+    horizon = max(windows.values())
+    records = db.execute("""
+        SELECT start_utc,end_utc,tunnel_id,protocol,listen_port,
+               upload_bytes,download_bytes
+        FROM pm2_port_byte_intervals
+        WHERE end_utc>? AND start_utc<? AND listen_port>0
+        ORDER BY protocol,listen_port,start_utc,end_utc
+    """, (now-horizon, now)).fetchall()
+    by_port = defaultdict(list)
+    for a,b,source,proto,port,up,down in records:
+        if proto not in ("tcp","udp","all") or not a < b:
+            continue
+        by_port[(proto,port)].append((a,b,source,up,down))
+    result = {}
+    for (proto,port), intervals in by_port.items():
+        # Sorted by interval start; for coincident samples prefer owned V2
+        # and do not sum alternatives that overlap by even a fraction.
+        intervals.sort(key=lambda row:(row[0],_rank(row[2]),row[1]))
+        accepted = []
+        for item in intervals:
+            if accepted and item[0] < accepted[-1][1]:
+                last = accepted[-1]
+                if (item[0] == last[0] and item[1] == last[1]
+                    and _rank(item[2]) < _rank(last[2])):
+                    accepted[-1] = item
+                continue
+            accepted.append(item)
+        volumes = {}
+        for label,secs in windows.items():
+            boundary = now-secs
+            lower = upper = 0
+            coverage = 0.0
+            for a,b,_,up,down in accepted:
+                if b <= boundary or a >= now:
+                    continue
+                elapsed = min(b,now)-max(a,boundary)
+                if elapsed <= 0:
+                    continue
+                coverage += elapsed
+                bytes_used = up+down
+                upper += bytes_used
+                if a >= boundary and b <= now:
+                    lower += bytes_used
+            volumes[label] = {
+                "bytes": lower,
+                "possible_bytes": upper,
+                "coverage_seconds": min(secs,coverage),
+                "requested_seconds": secs
+            }
+        result[(proto,port)] = volumes
+    return result
+
+
 def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
     start, end = parse_datetime(from_time, tz_name), parse_datetime(to_time, tz_name)
     if end <= start or end - start > 366 * 86400:
