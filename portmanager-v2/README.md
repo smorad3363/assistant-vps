@@ -50,10 +50,14 @@ or deeply nested firewall details. The header is compact on these two screens
 so important numbers occupy most of the terminal. The font itself is terminal
 controlled, hence the enlarged figures use portable block characters.
 
-Select **[S] Settings: date / port** from the day picker only when a
-different time range, zone or specific port is wanted. **[T] Totals for
-selected range** is an optional secondary view. Numbered day shortcuts stay
-unique (1–7 per page); S and T also work directly on the keyboard. The report stores integer iptables byte deltas in the same
+Each date line now shows the physical NIC's **download, upload and their
+combined total** side-by-side, and the period-wide total is displayed above
+the dates. GB readings have two decimals (tiny nonzero readings show
+`<0.01`); a dash range means the minute-boundary portion is uncertain.
+Actions do not occupy extra numbered menu rows: press **S** to change the
+range/port, or **T** for an optional period port table. The shortcuts are
+shown inline above the dates; the numbered date rows remain entirely
+available for fast Enter selection. The report stores integer iptables byte deltas in the same
 owned SQLite database `/var/lib/portmanager2/traffic.sqlite3`. Unlike
 Live's *rate* history, these records are not erased after 24 hours and are
 collected once per minute by the systemd sampler without opening Live.
@@ -148,6 +152,23 @@ when space allows. Selection is marked by a cyan arrow and bold text,
 **without colored text backgrounds**, including in ordinary menus.
 Only Live presentation and read-only policy lookup are changed here;
 saving or removing a limit still requires the separate, confirmed wizard.
+
+## Live: 15 ports per page with measured volume under averages
+
+The Live table shows four windows (10m, 1h, 8h and 24h) with a rolling
+**average in Mb/s** on the first line and independently logged
+**consumption in GB** on the second. Values are taken from the persistent
+integer-byte ledger, *not* by assuming a rate lasts for the entire window.
+An asterisk flags partial coverage or an uncertain edge. Missing history is
+`-- GB`, never zero. Each row's trend has separate upload and download
+lines plus optional blank spacing on tall terminals.
+
+The viewer shows up to **15 ports per page** on a sufficiently tall screen;
+it chooses fewer when the terminal is short rather than hiding controls.
+Use **PgDn/PgUp** or **n/p** to switch pages, **↑/↓** to choose a port,
+and Enter for the limit wizard. Footer shows the current page and port count.
+The list continues to auto-discover supported ports, while Live remains
+read-only except when a limit operation is explicitly confirmed.
 
 ## Persistent per-port history (10m / 1h / 8h / 24h)
 
