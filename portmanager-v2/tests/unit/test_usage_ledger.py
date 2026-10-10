@@ -9,6 +9,92 @@ from pm2 import history_collector, sampler, usage_ledger
 
 
 class PortUsageTests(unittest.TestCase):
+    def test_real_nic_rx_tx_totals_are_independent_from_ports(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
+                db = sampler.connect()
+                start = usage_ledger.parse_datetime("2026-10-10 00:00", "UTC")
+                with db:
+                    usage_ledger.record(db, [
+                        (start, start + 60, "auto", "tcp", 8080, 7_000, 9_000),
+                        (start, start + 60, "auto", "tcp", 1001, 7_000, 9_000)
+                    ])
+                    self.assertEqual(usage_ledger.record_interfaces(
+                        db, {"eth0": (1_000, 2_000), "docker0": (100, 200)},
+                        start, False), 0)
+                    self.assertEqual(usage_ledger.record_interfaces(
+                        db, {"eth0": (9_000, 14_000), "docker0": (2_100, 4_200)},
+                        start+60, True), 2)
+                db.close()
+                result = usage_ledger.report(
+                    "2026-10-10 00:00", "2026-10-10 00:01", "UTC")
+                self.assertEqual(result["server"]["interface"], "eth0")
+                self.assertEqual(result["server"]["download_bytes_lower"], 8_000)
+                self.assertEqual(result["server"]["upload_bytes_lower"], 12_000)
+                # Port counters deliberately overlap, so never mistake their
+                # addition for independent physical NIC consumption.
+                self.assertEqual(result["monitored_port_sum"]["download_bytes_lower"], 18_000)
+                self.assertEqual(result["monitored_port_sum"]["upload_bytes_lower"], 14_000)
+                self.assertEqual(result["daily"][0]["server"]["download_bytes_lower"], 8_000)
+
+    def test_nic_reboot_and_counter_reset_never_create_false_usage(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
+                db = sampler.connect()
+                with db:
+                    self.assertEqual(usage_ledger.record_interfaces(
+                        db, {"eth0": (1_000, 1_000)}, 1_000, False), 0)
+                    self.assertEqual(usage_ledger.record_interfaces(
+                        db, {"eth0": (2_000, 3_000)}, 1_060, True), 1)
+                    self.assertEqual(usage_ledger.record_interfaces(
+                        db, {"eth0": (100, 100)}, 1_120, True), 0)
+                    self.assertEqual(usage_ledger.record_interfaces(
+                        db, {"eth0": (10_000, 10_000)}, 1_180, False), 0)
+                    self.assertEqual(usage_ledger.record_interfaces(
+                        db, {"eth0": (11_000, 13_000)}, 1_240, True), 1)
+                rows = db.execute(
+                    "SELECT download_bytes, upload_bytes "
+                    "FROM pm2_nic_byte_intervals ORDER BY end_utc").fetchall()
+                self.assertEqual(rows, [(1_000, 2_000), (1_000, 3_000)])
+                db.close()
+
+    def test_no_combined_nic_sum_and_missing_history_remains_unknown(self):
+        self.assertEqual(usage_ledger.choose_server_interface(
+            ["eth0", "docker0"]), "eth0")
+        self.assertEqual(usage_ledger.choose_server_interface(
+            ["eth0", "ens18", "docker0"]), "eth0")
+        self.assertEqual(usage_ledger.choose_server_interface(
+            ["docker0", "vethabc"]), None)
+        empty = usage_ledger.network_totals([], 0, 86400)
+        self.assertFalse(empty["has_samples"])
+        self.assertEqual(empty["missing_seconds"], 86400)
+        partial = usage_ledger.network_totals(
+            [(0, 60, 1000, 3000)], 30, 120)
+        self.assertEqual(partial["download_bytes_lower"], 0)
+        self.assertEqual(partial["download_bytes_upper"], 3000)
+        self.assertEqual(partial["upload_bytes_upper"], 1000)
+        self.assertEqual(partial["missing_seconds"], 60)
+
+    def test_nic_history_expires_with_port_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
+                db = sampler.connect()
+                start = 2_000_000_000.0
+                with db:
+                    usage_ledger.record_interfaces(
+                        db, {"eth0": (100, 200)}, start-15*86400-60, False)
+                    usage_ledger.record_interfaces(
+                        db, {"eth0": (200, 300)}, start-15*86400, True)
+                    usage_ledger.record_interfaces(
+                        db, {"eth0": (300, 400)}, start-60, True)
+                    usage_ledger.record_interfaces(
+                        db, {"eth0": (400, 500)}, start, True)
+                    usage_ledger.prune(db, start)
+                rows = db.execute(
+                    "SELECT end_utc FROM pm2_nic_byte_intervals").fetchall()
+                self.assertEqual(rows, [(start,)])
+                db.close()
+
     def test_daily_download_and_upload_are_separate_in_local_timezone(self):
         tz = "Asia/Tehran"
         start = usage_ledger.parse_datetime("2026-10-10 00:00", tz)
