@@ -327,6 +327,13 @@ def _menu_key(choices, selected):
                 return "r"
             if char in (b"q", b"Q") and not typed:
                 return "0"
+            # Letter shortcuts are used for actions that share a screen
+            # with numeric day/port choices; they must never shadow a day.
+            if char.isalpha() and not typed:
+                letter = char.decode("ascii").lower()
+                if letter in {key.lower() for key, _ in choices}:
+                    return letter
+                continue
             if char.isdigit():
                 typed = (typed + char.decode("ascii"))[-5:]
                 _draw_menu_prompt(choices, selected, typed)
@@ -362,14 +369,14 @@ def _choose(*choices, selected=0):
     if not (os.isatty(0) and os.isatty(1) and sys.stdin.isatty() and
             sys.stdout.isatty() and
             os.getenv("TERM", "").lower() not in ("", "dumb")):
-        return _ask("Choose number", "0")
+        return _ask("Choose option", "0")
     try:
         _draw_menu_prompt(choices, selected, "")
         return _menu_key(choices, selected)
     except (OSError, ValueError, ImportError):
         # Nonstandard terminal: provide an ordinary numeric choice.
         print()
-        return _ask("Choose number", "0")
+        return _ask("Choose option", "0")
 
 
 def _pick_row(title, rows, describe):
@@ -1126,8 +1133,8 @@ def _usage_report(custom=False):
             choices.append(("8", "← Newer days"))
         if page < max_page:
             choices.append(("9", "Older days →"))
-        choices.extend([("3", "Change dates / select port"),
-                        ("4", "Totals for selected date range"),
+        choices.extend([("s", "Settings: date / port"),
+                        ("t", "Totals for selected range"),
                         ("0", "Back to home")])
         action = _choose(*choices)
         if action and action.isdecimal() and 1 <= int(action) <= len(chunk):
@@ -1136,9 +1143,9 @@ def _usage_report(custom=False):
             page -= 1
         elif action == "9" and page < max_page:
             page += 1
-        elif action == "3":
+        elif action == "s":
             return _usage_report(custom=True)
-        elif action == "4":
+        elif action == "t":
             _usage_detail(result)
         elif action == "r":
             result = usage_ledger.report(start, end, zone_name, port=port)
