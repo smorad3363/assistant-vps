@@ -38,12 +38,14 @@ See [version router guide](docs/RELEASE-ROUTER.fa.md).
 
 ## Per-port traffic volume by arbitrary date and time
 
-Open Port Manager and select **See port usage by date and time** (option 4).
-By default the report starts with the last 14 local calendar days, grouped
-**by day and port** with **separate Download (↓) and Upload (↑) GB columns**.
-You can change the start, end, timezone (e.g. `Asia/Tehran`) and port
-number or use `ALL`; option 4 inside the report switches between daily rows
-and totals for the selected interval. The report stores integer iptables byte deltas in the same
+Open Port Manager and press **[4] Daily port traffic (download / upload)**.
+The daily report opens **immediately without asking any questions**,
+automatically showing all tracked ports for the past 14 calendar days
+in `Asia/Tehran`, newest day first, with separate Download (↓) and Upload (↑)
+columns plus measured NIC totals when available. Inside the report,
+choose **[3] Change date or time** to optionally enter another timezone,
+start/end dates and a port; choose **[4] Show full period totals** to
+switch from daily rows to an interval summary. The report stores integer iptables byte deltas in the same
 owned SQLite database `/var/lib/portmanager2/traffic.sqlite3`. Unlike
 Live's *rate* history, these records are not erased after 24 hours and are
 collected once per minute by the systemd sampler without opening Live.
