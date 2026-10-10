@@ -141,6 +141,66 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIsNone(row)
         self.assertEqual(interface, "ens18")
 
+    def test_four_periods_show_real_volume_beneath_average(self):
+        screen = self.make_view()
+        screen.window.getmaxyx = lambda: (65, 162)
+        data = sample()
+        data["rows"][0]["volumes"] = {
+            period: {"bytes": 2_000_000_000, "possible_bytes": 2_100_000_000,
+                     "coverage_seconds": 600, "requested_seconds": seconds}
+            for period, seconds in [("10m",600), ("1h",3600),
+                                    ("8h",28800), ("24h",86400)]}
+        screen.draw(data)
+        displayed = screen.window.writes
+        self.assertEqual(screen.row_height, 2)
+        self.assertIn("avg / GB", [v for y,x,v in displayed if y == 10])
+        for position in (29,40,51,62):
+            self.assertTrue(any(y == 13 and x == position and "2.00 GB" in value
+                                for y,x,value in displayed))
+        self.assertTrue(any(y == 12 and x == 105 for y,x,v in displayed))
+        self.assertTrue(any(y == 13 and x == 105 for y,x,v in displayed))
+        self.assertEqual(screen._volume_metric(None), "   -- GB")
+        exact = {"bytes": 1_000_000_000, "possible_bytes": 1_000_000_000,
+                 "coverage_seconds": 600, "requested_seconds": 600}
+        self.assertNotIn("*", screen._volume_metric(exact))
+
+    def test_fifteen_port_pages_and_next_previous_controls(self):
+        screen = self.make_view([ord("n"), ord("p")])
+        screen.window.getmaxyx = lambda: (78, 162)
+        data = sample()
+        data["rows"] = [dict(data["rows"][0], listen_port=3000+i)
+                        for i in range(40)]
+        screen.draw(data)
+        self.assertEqual(screen.page_size, 15)
+        self.assertEqual(screen.row_height, 3)
+        self.assertTrue(any("PAGE 1/3" in v for _,_,v in screen.window.writes))
+        self.assertIn("TCP:3000", [v for _,_,v in screen.window.writes])
+        self.assertNotIn("TCP:3015", [v for _,_,v in screen.window.writes])
+        # Trigger page movement using the same key dispatch as the real UI.
+        screen._page_move(1)
+        self.assertEqual(screen.selected_index, 15)
+        self.assertTrue(any("PAGE 2/3" in v for _,_,v in screen.window.writes))
+        self.assertIn("TCP:3015", [v for _,_,v in screen.window.writes])
+        screen._page_move(1)
+        self.assertEqual(screen.selected_index, 30)
+        self.assertIn("TCP:3039", [v for _,_,v in screen.window.writes])
+        screen._page_move(-1)
+        self.assertEqual(screen.selected_index, 15)
+
+    def test_short_terminal_adapts_page_length_without_cutting_footer(self):
+        screen = self.make_view()
+        screen.window.getmaxyx = lambda: (29, 118)
+        data = sample()
+        data["rows"] = [dict(data["rows"][0], listen_port=4000+i)
+                        for i in range(35)]
+        screen.draw(data)
+        self.assertLess(screen.page_size, 15)
+        self.assertGreaterEqual(screen.page_size, 1)
+        self.assertTrue(any(y == 27 and "PgDn" in v
+                            for y,x,v in screen.window.writes))
+        self.assertTrue(any(y == 28 and "Page " in v
+                            for y,x,v in screen.window.writes))
+
     def test_limit_column_and_large_detail_graph(self):
         view = self.make_view()
         view.window.getmaxyx = lambda: (42, 160)
