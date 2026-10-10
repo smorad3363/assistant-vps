@@ -258,8 +258,8 @@ class NewThemeTest(unittest.TestCase):
         self.assertIn("↓ DOWNLOAD", output)
         self.assertIn("↑ UPLOAD", output)
         self.assertIn("TCP:8080", output)
-        self.assertIn("2.0000..2.1000", output)
-        self.assertIn("1.0000..1.1000", output)
+        self.assertIn("2.00–2.10", output)
+        self.assertIn("1.00–1.10", output)
 
     def test_short_terminal_suppresses_multiline_numbers(self):
         data = self.usage_fixture()
@@ -300,6 +300,26 @@ class NewThemeTest(unittest.TestCase):
         self.assertEqual(detail.call_args.args[1]["date"], "2026-10-07")
         self.assertEqual(chose.call_count, 3)
 
+    def test_inline_totals_and_compact_gb_are_visible_before_selecting_day(self):
+        day = self.usage_fixture()["daily"][1]
+        desc = simple_ui._usage_day_label(day, 160)
+        self.assertIn("↓", desc)
+        self.assertIn("↑", desc)
+        self.assertIn("TOTAL", desc)
+        self.assertIn("3.00–3.20", desc)
+        self.assertEqual(simple_ui._usage_amount(500_000, 500_000), "<0.01")
+        self.assertEqual(simple_ui._usage_amount(2_000_000_000,
+                                                2_000_000_001), "2.00~")
+        data = self.usage_fixture()
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui.usage_ledger, "report",
+                                return_value=data),
+              mock.patch.object(simple_ui, "_choose", return_value="0"),
+              redirect_stdout(io.StringIO()) as shown):
+            simple_ui._usage_report()
+        self.assertIn("PERIOD TOTAL", shown.getvalue())
+        self.assertIn("TOTAL", shown.getvalue())
+
     def test_day_list_seven_dates_has_unique_hotkeys_even_at_slots_three_four(self):
         from datetime import date, timedelta
         data = self.usage_fixture()
@@ -316,15 +336,16 @@ class NewThemeTest(unittest.TestCase):
                                 return_value=data),
               mock.patch.object(simple_ui, "_usage_detail") as show_day,
               redirect_stdout(io.StringIO())):
-            def check_choose(*options):
+            def check_choose(*options, **kwargs):
                 keys = [key for key, _ in options]
                 self.assertEqual(len(keys), len(set(keys)))
                 self.assertIn("3", keys)
                 self.assertIn("4", keys)
-                self.assertIn("s", keys)
-                self.assertIn("t", keys)
+                self.assertNotIn("s", keys)
+                self.assertNotIn("t", keys)
                 choice_calls.append(keys)
-                real_choose(*options)  # actual validation, not just mocked
+                self.assertEqual(kwargs.get("shortcuts"), ("s", "t"))
+                real_choose(*options, **kwargs)  # verify the real menu contract
                 return "4" if len(choice_calls) == 1 else "0"
             with mock.patch.object(simple_ui, "_choose", side_effect=check_choose):
                 simple_ui._usage_report()
@@ -400,8 +421,8 @@ class NewThemeTest(unittest.TestCase):
             simple_ui._usage_detail(self.usage_fixture(),
                                     self.usage_fixture()["daily"][1])
         self.assertIn("TCP:8080", out.getvalue())
-        self.assertIn("2.0000..2.1000", out.getvalue())
-        self.assertIn("1.0000..1.1000", out.getvalue())
+        self.assertIn("2.00–2.10", out.getvalue())
+        self.assertIn("1.00–1.10", out.getvalue())
         self.assertNotIn("███", out.getvalue())
         self.assertEqual(len(simple_ui._usage_big_digits("2.23")), 5)
 
