@@ -916,16 +916,18 @@ def _usage_row(label, item, wide=True, date=None):
             f"    {coverage}")
 
 
-def _usage_report():
-    """Human-readable daily/period usage without summing overlapping ports."""
-    _title("PORT USAGE")
-    _ui_edge("top")
-    _ui_line("  See download and upload by day, port, or date range.")
-    _ui_line(_paint("93", "  Records cover up to 14 days; gaps are unknown, not zero."))
-    _ui_edge("bottom")
-    zone_name = _ask("Time zone (for example Asia/Tehran)", "Asia/Tehran")
-    if not zone_name:
-        return
+def _usage_report(custom=False):
+    """Open daily history instantly; ask for settings only on explicit request."""
+    zone_name = "Asia/Tehran"
+    port = None
+    if custom:
+        _title("CHANGE REPORT RANGE")
+        _ui_edge("top")
+        _ui_line("  Adjust dates or select one port; press Enter for defaults.")
+        _ui_edge("bottom")
+        zone_name = _ask("Time zone (for example Asia/Tehran)", zone_name)
+        if not zone_name:
+            return
     try:
         zone = ZoneInfo(zone_name)
     except (ZoneInfoNotFoundError, KeyError, ValueError):
@@ -933,22 +935,23 @@ def _usage_report():
         _ask("Enter to return")
         return
     now = datetime.now(zone).replace(second=0, microsecond=0)
-    start_default = (now - timedelta(days=13)).replace(hour=0, minute=0)
-    start = _ask("From date/time (YYYY-MM-DD HH:MM)",
-                 start_default.strftime("%Y-%m-%d %H:%M"))
-    end = _ask("Until date/time (YYYY-MM-DD HH:MM)",
-               now.strftime("%Y-%m-%d %H:%M"))
-    port_text = _ask("Port number (ALL for all ports)", "ALL")
-    if start is None or end is None or port_text is None:
-        return
-    if port_text.upper() == "ALL":
-        port = None
-    elif port_text.isdecimal() and 1 <= int(port_text) <= 65535:
-        port = int(port_text)
-    else:
-        print("  Enter ALL or a port from 1 to 65535.")
-        _ask("Enter to return")
-        return
+    start = (now - timedelta(days=13)).replace(hour=0, minute=0).strftime(
+        "%Y-%m-%d %H:%M")
+    end = now.strftime("%Y-%m-%d %H:%M")
+    if custom:
+        start = _ask("From date/time (YYYY-MM-DD HH:MM)", start)
+        end = _ask("Until date/time (YYYY-MM-DD HH:MM)", end)
+        port_text = _ask("Port number (ALL for all ports)", "ALL")
+        if start is None or end is None or port_text is None:
+            return
+        if port_text.upper() == "ALL":
+            port = None
+        elif port_text.isdecimal() and 1 <= int(port_text) <= 65535:
+            port = int(port_text)
+        else:
+            print("  Enter ALL or a port from 1 to 65535.")
+            _ask("Enter to return")
+            return
     result = usage_ledger.report(start, end, zone_name, port=port)
     rows = result["ports"]
     daily = result.get("daily")
@@ -1075,7 +1078,7 @@ def _usage_report():
             view = "total" if view == "daily" else "daily"
             page = 0
         elif selected == "3":
-            return _usage_report()
+            return _usage_report(custom=True)
         else:
             return
 
@@ -1089,7 +1092,7 @@ def menu():
         choice = _choose(("1", "See live traffic and control speed"),
                          ("2", "View and forward ports"),
                          ("3", "Change or remove port connections"),
-                         ("4", "See port usage by date and time"),
+                         ("4", "Daily port traffic (download / upload)"),
                          ("0", "Exit Port Manager"))
         if choice in ("0", None):
             _clear_screen()
