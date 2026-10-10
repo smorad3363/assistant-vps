@@ -62,8 +62,13 @@ consumption can be recovered before the background byte logger began.
 
 Each date line now shows the physical NIC's **download, upload and their
 combined total** side-by-side, and the period-wide total is displayed above
-the dates. GB readings have two decimals (tiny nonzero readings show
-`<0.01`); a dash range means the minute-boundary portion is uncertain.
+the dates. GB readings show the **confirmed recorded amount** to two decimals (tiny
+nonzero readings show `<0.01`). An `*` suffix means the sample crosses a
+requested day/range boundary and some **extra bytes may be possible**; this
+is not a subtraction or a negative value. The server detail screen shows
+those possible additional Download and Upload volumes separately, clearly
+marked **not counted above**. Neither the asterisk nor an unknown day may
+be silently interpreted as zero uncertainty or zero consumption.
 Actions do not occupy extra numbered menu rows: press **S** to change the
 range/port, or **T** for an optional period port table. The shortcuts are
 shown inline above the dates; the numbered date rows remain entirely
@@ -71,6 +76,12 @@ available for fast Enter selection. The report stores integer iptables byte delt
 owned SQLite database `/var/lib/portmanager2/traffic.sqlite3`. Unlike
 Live's *rate* history, these records are not erased after 24 hours and are
 collected once per minute by the systemd sampler without opening Live.
+
+For an example: `37.35 GB*` means **37.35 GB confirmed** with some
+additional boundary bytes unresolved; the detail page might say
+`↓ up to +0.52 GB` separately. The program never adds this uncertain
+portion to the confirmed total. Exact byte lower and upper bounds remain
+available from the `portmanager2 usage --json` and CSV report commands.
 
 For exact export suitable for checking a purchasing discrepancy:
 
