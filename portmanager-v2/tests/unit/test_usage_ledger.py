@@ -69,6 +69,46 @@ class PortUsageTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["port"], 22)
 
+    def test_fourteen_day_retention_prunes_only_expired_byte_intervals(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
+                db = sampler.connect()
+                now = 2_000_000_000.0
+                cutoff = now - usage_ledger.RETENTION_SECONDS
+                with db:
+                    usage_ledger.record(db, [
+                        (cutoff - 120, cutoff - 60, "auto", "tcp", 1001, 11, 12),
+                        (cutoff - 60, cutoff, "auto", "tcp", 1001, 21, 22),
+                        (cutoff, cutoff + 60, "auto", "tcp", 1001, 31, 32),
+                        (now - 60, now, "auto", "tcp", 1001, 41, 42),
+                    ])
+                    self.assertEqual(usage_ledger.prune(db, now), 2)
+                    self.assertEqual(usage_ledger.prune(db, now), 0)
+                rows = db.execute(
+                    "SELECT upload_bytes FROM pm2_port_byte_intervals "
+                    "ORDER BY end_utc").fetchall()
+                self.assertEqual(rows, [(31,), (41,)])
+                self.assertEqual(usage_ledger.RETENTION_DAYS, 14)
+                db.close()
+
+    def test_report_exposes_available_history_when_requested_time_is_empty(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(sampler, "DB", Path(folder) / "traffic.sqlite3"):
+                db = sampler.connect()
+                stamp = usage_ledger.parse_datetime("2026-10-10 02:00", "UTC")
+                with db:
+                    usage_ledger.record(db, [
+                        (stamp, stamp + 60, "auto", "tcp", 4343, 1024, 1024)
+                    ])
+                db.close()
+                empty = usage_ledger.report(
+                    "2026-10-10 00:00", "2026-10-10 00:30", "UTC")
+                self.assertEqual(empty["ports"], [])
+                self.assertEqual(empty["first_recorded_utc"], stamp)
+                self.assertEqual(empty["latest_recorded_utc"], stamp + 60)
+                self.assertEqual(empty["retention_days"], 14)
+                self.assertIn("Recorded data exists outside", empty["warnings"][1])
+
     def test_persistent_db_report_from_arbitrary_date_and_csv(self):
         with tempfile.TemporaryDirectory() as folder:
             with mock.patch.object(sampler, "DB", Path(folder) / "bytes.sqlite"):
