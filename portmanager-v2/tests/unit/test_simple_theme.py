@@ -173,7 +173,7 @@ class NewThemeTest(unittest.TestCase):
             {"date": "2026-10-10", "ports": [port]},
             {"date": "2026-10-11", "ports": [], "period_seconds": 86400}
         ]}
-        with (mock.patch.object(simple_ui, "_title"),
+        with (mock.patch.object(simple_ui, "_title") as titles,
               mock.patch.object(simple_ui, "_ask", side_effect=[
                   "Asia/Tehran", "2026-10-10 00:00",
                   "2026-10-12 00:00", "8080"]),
@@ -186,7 +186,7 @@ class NewThemeTest(unittest.TestCase):
             "2026-10-10 00:00", "2026-10-12 00:00",
             "Asia/Tehran", port=8080)
         rendered = out.getvalue()
-        self.assertIn("DAILY", rendered)
+        self.assertEqual(titles.call_args_list[-1].args[0], "DAILY PORT USAGE")
         self.assertIn("DOWNLOAD", rendered)
         self.assertIn("UPLOAD", rendered)
         self.assertIn("3.0000", rendered)
