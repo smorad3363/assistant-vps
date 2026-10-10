@@ -13,6 +13,10 @@ import sqlite3
 from .errors import PM2Error
 from . import sampler
 
+# Keep only the latest two weeks of measured consumption records.
+RETENTION_DAYS = 14
+RETENTION_SECONDS = RETENTION_DAYS * 86400
+
 
 def init(db):
     db.execute("""CREATE TABLE IF NOT EXISTS pm2_port_byte_intervals (
@@ -64,6 +68,21 @@ def record(db, intervals):
         db.execute("""INSERT OR IGNORE INTO pm2_port_byte_intervals
           (start_utc,end_utc,tunnel_id,protocol,listen_port,upload_bytes,download_bytes)
           VALUES (?,?,?,?,?,?,?)""", (start, end, tid, proto, port, up, down))
+
+
+def prune(db, now):
+    """Remove expired consumption intervals; called on each minute tick.
+
+    Use the END of the interval as the retention key so an interval never
+    becomes partially represented by accidental truncation of its bytes.
+    Deleted SQLite pages are reused; db size stabilizes instead of growing
+    without a time limit. Database snapshots/backups are separate.
+    """
+    init(db)
+    cutoff = float(now) - RETENTION_SECONDS
+    cursor = db.execute(
+        "DELETE FROM pm2_port_byte_intervals WHERE end_utc <= ?", (cutoff,))
+    return cursor.rowcount
 
 
 def parse_datetime(value, tz_name):
@@ -185,6 +204,17 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
             sql += " AND protocol=?"
             values.append(protocol)
         rows = db.execute(sql, values).fetchall()
+        bounds = db.execute(
+            "SELECT MIN(start_utc), MAX(end_utc) FROM pm2_port_byte_intervals"
+        ).fetchone()
+        ledger_first, ledger_last = bounds if bounds else (None, None)
+        # The previous counter baseline is retained independently. It is
+        # diagnostic only: first baseline does not imply measured bytes.
+        baseline = db.execute(
+            "SELECT MAX(sampled_at) FROM pm2_history_health"
+        ).fetchone() if db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='pm2_history_health'"
+        ).fetchone() else None
         grouped = summarize(rows, start, end)
         note = [
             "IPv4 monitored ports only; IPv6, unmatched ports and traffic of other networks may be absent.",
@@ -192,6 +222,7 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
             "Intervals crossing requested endpoints have unknown intra-minute distribution; lower/upper bounds are shown.",
             "A missing interval is NOT zero traffic. This is not a provider billing reconciliation.",
             "Only data sampled after this byte ledger was enabled are available; older Mbps graphs are not billing data.",
+            "Raw per-port byte records older than 14 days are deleted automatically on the next successful sample.",
             "Up to 64 autodetected or forwarded ports are tracked, plus managed ports; other ports may be absent."
         ]
         if any(x["missing_seconds"] > 1 or x["boundary_uncertain_bytes"] > 0
@@ -199,10 +230,21 @@ def report(from_time, to_time, tz_name="UTC", port=None, protocol=None):
             note.insert(0, "CAUTION: incomplete coverage, boundary uncertainty, or overlapping counters")
         if not rows:
             note.insert(0, "No recorded byte intervals for this period. Never interpret as zero usage.")
+            if ledger_first is not None:
+                note.insert(1, "Recorded data exists outside the requested range; choose a time within the available history.")
+            elif baseline and baseline[0] is not None:
+                note.insert(1, "Sampler has a baseline but no complete interval stored. Wait for another successful timer run.")
+            else:
+                note.insert(1, "No background sampler baseline is recorded; check portmanager2-sample.timer/service.")
         return {
             "from": from_time, "to": to_time, "timezone": tz_name,
             "interval_seconds": end - start, "ports": grouped,
-            "intervals_read": len(rows), "warnings": note,
+            "intervals_read": len(rows),
+            "retention_days": RETENTION_DAYS,
+            "first_recorded_utc": ledger_first,
+            "latest_recorded_utc": ledger_last,
+            "last_sampler_baseline_utc": baseline[0] if baseline else None,
+            "warnings": note,
             "not_provider_billable": True,
         }
     except sqlite3.DatabaseError as exc:
