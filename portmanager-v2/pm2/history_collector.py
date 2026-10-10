@@ -296,6 +296,7 @@ def collect(timestamp=None):
             current = _history_counters()
         with db:
             usage_ledger.record(db, byte_intervals)
+            expired = usage_ledger.prune(db, now)
             usage_ledger.remember_boot(db, boot)
             db.execute("DELETE FROM pm2_history_last")
             for (tid, proto, port, direction), count in current.items():
@@ -305,6 +306,8 @@ def collect(timestamp=None):
                        (now,))
         return {"monitored_ports": len(wanted), "samples_written": len(rates),
                 "byte_intervals_written": len(byte_intervals),
+                "expired_byte_intervals_removed": expired,
+                "retention_days": usage_ledger.RETENTION_DAYS,
                 "history_active": True, "sampled_at": now}
     finally:
         db.close()
