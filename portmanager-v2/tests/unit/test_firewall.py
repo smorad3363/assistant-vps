@@ -30,6 +30,27 @@ class FirewallTests(unittest.TestCase):
             self.assertIn("--ctorigdstport", row)
             self.assertIn("-d", row)
 
+    def test_tcp_udp_5555_same_numeric_port_and_local_ipv4(self):
+        """Service aliases in iptables -L are not different port numbers."""
+        connection = validation.make_tunnel(
+            name="port-5555-to-2-29-39-22",
+            listen_ip="77.90.10.180", interface="eth0",
+            mode="ports", protocol="tcp,udp", mapping="5555",
+            target_ip="2.29.39.22")
+        compiled = firewall.compile_rules({"tunnels": [connection]})
+        dnat = compiled["PM2_NAT_PRE"]
+        self.assertEqual(len(dnat), 2)
+        self.assertEqual({row[row.index("-p") + 1] for row in dnat},
+                         {"tcp", "udp"})
+        for row in dnat:
+            self.assertEqual(row[row.index("-i") + 1], "eth0")
+            self.assertEqual(row[row.index("-d") + 1], "77.90.10.180")
+            self.assertEqual(row[row.index("--dport") + 1], "5555")
+            self.assertEqual(row[row.index("--to-destination") + 1],
+                             "2.29.39.22:5555")
+        self.assertEqual(len(compiled["PM2_NAT_POST"]), 2)
+        self.assertEqual(len(compiled["PM2_FORWARD"]), 4)
+
     def test_disable_outputs_no_kernel_rules(self):
         self.t["enabled"] = False
         self.assertFalse(any(firewall.compile_rules(self.cfg).values()))

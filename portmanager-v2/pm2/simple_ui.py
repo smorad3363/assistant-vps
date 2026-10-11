@@ -103,14 +103,16 @@ def _protected_ssh_ports():
 def _mutate(operation, argv):
     from .cli import mutation_lock
     preview = tunnels.handle(operation, [*argv, "--dry-run"], mutation_lock)
-    # The user already requested creation by entering the destination and
-    # ports. Do not ask a second question for an ordinary new port rule.
-    # Keep explicit confirmation for deleting/updating and all-except mode.
-    is_normal_create = (
-        operation == "create" and "--mode" in argv and
-        argv[argv.index("--mode") + 1] == "ports")
-    if not is_normal_create and not _confirm("Apply changes?"):
+    # An Add/Edit choice followed by validated fields already constitutes
+    # the request to save. Avoid a second default-No Apply prompt. Only broad
+    # all-except forwarding and destructive deletion need a specific warning.
+    is_all_except = ("--mode" in argv and
+                     argv[argv.index("--mode") + 1] == "all-except")
+    if operation == "delete" and not _confirm("Delete this connection permanently?"):
         return
+    if operation in ("create", "update") and is_all_except:
+        if not _confirm("Forward nearly ALL ports, including new services?"):
+            return
     if operation == "delete":
         argv = [*argv, "--yes"]
     result = tunnels.handle(operation, argv, mutation_lock)
@@ -151,6 +153,8 @@ def _compact_mapping(pairs):
 
 
 def _tunnel_wizard(old=None, all_ports=False):
+    if old:
+        _title("EDIT PORT")
     try:
         # The listening IPv4 is always one of this host's assigned addresses.
         # Never ask users to type arbitrary source IPs or interfaces.
@@ -177,16 +181,24 @@ def _tunnel_wizard(old=None, all_ports=False):
         exclude = _ask("Ports NOT to forward (SSH/admin)", default)
         if exclude is None:
             return
+        excludes = validation.csv_ports(exclude)
         argv += ["--exclude", exclude, "--ack-all-ports"]
         mapping = None
+        if old and target == old["target_ip"] and excludes == old["exclude"]:
+            print(_paint("90", "  Nothing changed."))
+            return
         print(_paint("91", "  Caution: all-except forwarding can disrupt remote access."))
     else:
         default = _compact_mapping(old["mapping"]) if old else None
         mapping = _ask("Ports (5555,5555:6666,80:8080)", default)
         if not mapping:
             return
-        # Check shorthand and collisions before asking for confirmation.
-        validation.mappings(mapping)
+        # Compare canonical mappings, so 5555 and 5555:5555 are equivalent.
+        # Unchanged edits must not ask about protocols or reapply iptables.
+        parsed = validation.mappings(mapping)
+        if old and target == old["target_ip"] and parsed == old["mapping"]:
+            print(_paint("90", "  Nothing changed."))
+            return
         argv += ["--mapping", mapping]
 
     name = old["name"] if old else _auto_tunnel_name(
@@ -577,8 +589,8 @@ def _mutate_single_protocol(old, argv, protocol):
     from . import tunnels as tunnel_commands
 
     args = tunnel_commands._arguments("update", argv)
-    if not _confirm(f"Save only {protocol.upper()} and keep the other protocol unchanged?"):
-        return
+    # The protocol was explicitly chosen in the previous prompt; no extra
+    # "Save only..." confirmation that defaults to silently cancelling.
     with mutation_lock():
         cfg = config.load(transaction.CONFIG)
         existing = config.get(cfg["tunnels"], old["id"])
