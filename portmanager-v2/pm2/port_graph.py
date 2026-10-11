@@ -241,24 +241,36 @@ def saved_auto_labels(db, timestamp):
             for proto, port in db.execute(query, ("auto", cutoff, "auto", cutoff))}
 
 
-def frame(labels, rates, histories, timestamp, top=20, active_only=True, recent_histories=None):
-    """Structured graph data, source of truth for terminal or JSON output."""
+def frame(labels, rates, histories, timestamp, top=20, active_only=True,
+          recent_histories=None, long_sparklines=True):
+    """Structured graph data.
+
+    Interactive curses already has a high-resolution 60-second trace, so it
+    can skip the legacy rolling-10m sparkline. That avoids dozens of full
+    24-hour history scans per port on every redraw while JSON/once callers
+    retain the old fields.
+    """
     result = []
     for key, name in labels.items():
         data = histories.get(key, [])
         avg = weighted(data, timestamp)
-        avgs = {period: weighted(data, timestamp, seconds)
-                for period, seconds in PERIODS.items()}
+        # Reuse the 10m result instead of scanning the same history twice.
+        avgs = {"10m": avg}
+        avgs.update({
+            period: weighted(data, timestamp, seconds)
+            for period, seconds in PERIODS.items() if period != "10m"
+        })
         recent = rates.get(key, {"up": 0.0, "down": 0.0})
         minute = graph_style.summarize(
             recent_histories.get(key, []) if recent_histories is not None else data,
             timestamp)
-        # Active means transferred bytes during the last rolling 10m, not
-        # merely an open TCP listener/advertised port.
-        moving = any((up > 0 or down > 0) and end > timestamp - WINDOW
-                     for end, _, up, down in data)
-        if active_only and not moving:
-            continue
+        # Interactive Live asks for idle rows too, so do not scan historical
+        # samples merely to compute an activity predicate it will ignore.
+        if active_only:
+            moving = any((up > 0 or down > 0) and end > timestamp - WINDOW
+                         for end, _, up, down in data)
+            if not moving:
+                continue
         tid, proto, port = key
         result.append({
             "tunnel_id": tid, "name": name, "protocol": proto,
@@ -274,8 +286,10 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True, recent_
                          "requested_seconds": PERIODS[period]}
                 for period, stat in avgs.items()
             },
-            "graph_up": sparkline(data, timestamp, "up"),
-            "graph_down": sparkline(data, timestamp, "down"),
+            "graph_up": (sparkline(data, timestamp, "up")
+                         if long_sparklines else ""),
+            "graph_down": (sparkline(data, timestamp, "down")
+                           if long_sparklines else ""),
             "graph_60s_up": minute["graph_up"],
             "graph_60s_down": minute["graph_down"],
             "avg1m_up_mbps": minute["up_mbps"],
@@ -489,9 +503,14 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                             record(db, now, elapsed, rates)
                         if use_auto:
                             labels.update(saved_auto_labels(db, now))
-                        result = frame(labels, rates, history(db, now, labels),
-                                       now, top=top, active_only=active_only,
-                                       recent_histories=short_ports)
+                        result = frame(
+                            labels, rates, history(db, now, labels),
+                            now, top=top, active_only=active_only,
+                            recent_histories=short_ports,
+                            # Full-screen Live renders the 60s traces below.
+                            # Avoid rebuilding the old 10m sparklines for every
+                            # port from 24h history on each refresh.
+                            long_sparklines=not interactive)
                         if now >= next_volume_reload:
                             try:
                                 volume_windows = usage_ledger.live_window_volumes(db, now)

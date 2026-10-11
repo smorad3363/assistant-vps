@@ -116,6 +116,30 @@ COMMIT
         both = port_graph.frame(labels, {}, histories, 100, active_only=False)
         self.assertEqual(len(both["rows"]), 2)
 
+    def test_interactive_frame_skips_legacy_long_sparklines(self):
+        labels = {(TID, "tcp", 443): "live"}
+        histories = {(TID, "tcp", 443): [(100, 2, 5.0, 7.0)]}
+        with mock.patch.object(
+                port_graph, "sparkline",
+                side_effect=AssertionError("legacy sparkline should be skipped")):
+            result = port_graph.frame(
+                labels, {(TID, "tcp", 443): {"up": 5.0, "down": 7.0}},
+                histories, 100, active_only=False,
+                recent_histories=histories, long_sparklines=False)
+        row = result["rows"][0]
+        self.assertEqual(row["graph_up"], "")
+        self.assertEqual(row["graph_down"], "")
+        self.assertEqual(len(row["graph_60s_up"]), 60)
+        self.assertEqual(row["averages"]["10m"]["up_mbps"], 5.0)
+
+    def test_default_frame_keeps_json_legacy_sparklines(self):
+        labels = {(TID, "tcp", 443): "json"}
+        histories = {(TID, "tcp", 443): [(100, 2, 5.0, 7.0)]}
+        result = port_graph.frame(labels, {}, histories, 100)
+        row = result["rows"][0]
+        self.assertTrue(row["graph_up"])
+        self.assertTrue(row["graph_down"])
+
     def test_all_except_has_explicit_aggregate_scope(self):
         labels = {(TID, "tcp", 0): "all"}
         frames = port_graph.frame(
