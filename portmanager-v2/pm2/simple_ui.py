@@ -584,18 +584,9 @@ def _edit_external(group):
         _ui_line(_paint("93", "  This rule is read-only (Docker/UFW/PM2 or unsupported NAT)."))
         _ask("Enter to return")
         return
-    current = group["destination"]
-    if ":" in current:
-        old_ip, old_port = current.rsplit(":", 1)
-    else:
-        old_ip, old_port = current, None
-    ip = _ask("Destination IPv4", old_ip)
-    if ip is None:
+    target = _ask("Destination IPv4[:port]", group["destination"])
+    if target is None:
         return
-    port = (_ask("Destination port", old_port) if old_port is not None else None)
-    if old_port is not None and port is None:
-        return
-    target = ip + (":" + port if port else "")
     target = nat_editor.parse_destination(target)
     source_port = None
     if str(group["port"]).isdecimal():
