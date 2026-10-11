@@ -73,7 +73,7 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIn("TCP:8080", text)
         self.assertIn("TCP:8085", text)  # idle ports visible by default
         self.assertIn("550.0", text)
-        self.assertIn("10 min", text)
+        self.assertIn("10m AVG", text)
 
     def test_all_detected_ports_are_visible_until_user_hides_idle(self):
         screen = self.make_view([ord("a"), ord("q")])
@@ -148,8 +148,9 @@ class LiveScreenTests(unittest.TestCase):
         ports = [v for _,_,v in screen.window.writes if v.startswith("TCP:")]
         self.assertEqual(ports, ["TCP:8080", "TCP:22",
                                  "TCP:8085", "TCP:8086"])
-        self.assertEqual(screen.page_size, 4)
-        self.assertTrue(any("Page 1/1" in v for _,_,v in screen.window.writes))
+        self.assertGreaterEqual(screen.page_size, 4)
+        self.assertTrue(any("page 1/1" in v.lower()
+                            for _,_,v in screen.window.writes))
 
     def test_four_periods_show_real_volume_beneath_average(self):
         screen = self.make_view()
@@ -163,12 +164,13 @@ class LiveScreenTests(unittest.TestCase):
         screen.draw(data)
         displayed = screen.window.writes
         self.assertEqual(screen.row_height, 2)
-        self.assertIn("avg / GB", [v for y,x,v in displayed if y == 10])
-        for position in (29,40,51,62):
-            self.assertTrue(any(y == 13 and x == position and "2.00 GB" in value
-                                for y,x,value in displayed))
-        self.assertTrue(any(y == 12 and x == 105 for y,x,v in displayed))
-        self.assertTrue(any(y == 13 and x == 105 for y,x,v in displayed))
+        text = "\n".join(v for _, _, v in displayed)
+        self.assertIn("10m AVG", text)
+        self.assertIn("10m 175.0*", text)
+        self.assertIn("1h 175.0*", text)
+        self.assertIn("8h 175.0*", text)
+        self.assertIn("24h 175.0*", text)
+        self.assertIn("24h recorded 2.00 GB*", text)
         self.assertEqual(screen._volume_metric(None), "   -- GB")
         exact = {"bytes": 1_000_000_000, "possible_bytes": 1_000_000_000,
                  "coverage_seconds": 600, "requested_seconds": 600}
@@ -184,14 +186,16 @@ class LiveScreenTests(unittest.TestCase):
                         for i in range(40)]
         screen.draw(data)
         self.assertEqual(screen.page_size, 15)
-        self.assertEqual(screen.row_height, 3)
-        self.assertTrue(any("PAGE 1/3" in v for _,_,v in screen.window.writes))
+        self.assertEqual(screen.row_height, 2)
+        self.assertTrue(any("page 1/3" in v.lower()
+                            for _,_,v in screen.window.writes))
         self.assertIn("TCP:3000", [v for _,_,v in screen.window.writes])
         self.assertNotIn("TCP:3015", [v for _,_,v in screen.window.writes])
         # Trigger page movement using the same key dispatch as the real UI.
         screen._page_move(1)
         self.assertEqual(screen.selected_index, 15)
-        self.assertTrue(any("PAGE 2/3" in v for _,_,v in screen.window.writes))
+        self.assertTrue(any("page 2/3" in v.lower()
+                            for _,_,v in screen.window.writes))
         self.assertIn("TCP:3015", [v for _,_,v in screen.window.writes])
         screen._page_move(1)
         self.assertEqual(screen.selected_index, 30)
@@ -208,9 +212,9 @@ class LiveScreenTests(unittest.TestCase):
         screen.draw(data)
         self.assertLess(screen.page_size, 15)
         self.assertGreaterEqual(screen.page_size, 1)
-        self.assertTrue(any(y == 27 and "PgDn" in v
+        self.assertTrue(any(y == 27 and "↑↓ port" in v
                             for y,x,v in screen.window.writes))
-        self.assertTrue(any(y == 28 and "Page " in v
+        self.assertTrue(any(y == 28 and "ports" in v
                             for y,x,v in screen.window.writes))
 
     def test_limit_column_and_large_detail_graph(self):
@@ -225,16 +229,16 @@ class LiveScreenTests(unittest.TestCase):
             "days": list(range(7)), "timezone": "Asia/Tehran"}]
         view.draw(data)
         cells = view.window.writes
-        col = [v for y, x, v in cells if y == 9]
-        self.assertIn("LIMIT / HOURS", col)
-        self.assertIn("TREND", col)
-        self.assertTrue(any("↓20 ↑30 18:00" in v for _, _, v in cells))
-        self.assertTrue(any("SELECTED PORT: TCP:8080" in v for _, _, v in cells))
-        self.assertTrue(any("Asia/Tehran" in v for _, _, v in cells))
-        large = [v for _, _, v in cells if v.startswith("▲ UP    ")]
+        text = "\n".join(v for _, _, v in cells)
+        self.assertIn("LIMIT", text)
+        self.assertIn("LAST 60s", text)
+        self.assertIn("↓20 ↑30 18:00", text)
+        self.assertIn("TCP:8080", text)
+        self.assertIn("Asia/Tehran", text)
+        large = [v for _, _, v in cells if v.startswith("▲ UP   ")]
         self.assertEqual(len(large), 1)
         self.assertGreater(len(large[0]), 90)
-        self.assertTrue(any(v.startswith("▼ DOWN  ") for _, _, v in cells))
+        self.assertTrue(any(v.startswith("▼ DOWN ") for _, _, v in cells))
 
     def test_highlight_is_cyan_bold_without_background(self):
         view = self.make_view([FakeCurses.KEY_DOWN, ord("q")])
@@ -297,11 +301,31 @@ class LiveScreenTests(unittest.TestCase):
         screen.draw(data)
         cells = screen.window.writes
         text = "\n".join(value for _, _, value in cells)
-        self.assertIn("avg1m:110.00*", text)
-        self.assertIn("avg1m:90.00*", text)
-        self.assertIn("60s", text)
-        self.assertTrue(any(value.startswith("▲ UP    ") for _, _, value in cells))
-        self.assertTrue(any(value.startswith("▼ DOWN  ") for _, _, value in cells))
+        self.assertIn("1m avg  110.00* Mbit/s", text)
+        self.assertIn("1m avg  90.00* Mbit/s", text)
+        self.assertIn("LAST 60s", text)
+        self.assertTrue(any(value.startswith("▲ UP   ") for _, _, value in cells))
+        self.assertTrue(any(value.startswith("▼ DOWN ") for _, _, value in cells))
+
+    def test_hero_graph_is_multirow_and_preserves_missing_left_edge(self):
+        graph = live_screen.LiveScreen._area_graph("   ▁▃█", 24, rows=3)
+        self.assertEqual(len(graph), 3)
+        self.assertTrue(all(len(line) == 24 for line in graph))
+        self.assertTrue(all(line.startswith("      ") for line in graph))
+        self.assertIn("█", graph[-1])
+        self.assertIn("█", graph[0])
+
+    def test_compact_port_table_does_not_repeat_four_history_periods(self):
+        view = self.make_view()
+        view.window.getmaxyx = lambda: (24, 118)
+        view.draw(sample())
+        header = "\n".join(v for y, _, v in view.window.writes if y == 11)
+        self.assertIn("DOWN Mb/s", header)
+        self.assertIn("UP Mb/s", header)
+        self.assertIn("10m AVG", header)
+        self.assertIn("1h AVG", header)
+        self.assertNotIn("8 hours", header)
+        self.assertNotIn("24 hours", header)
 
     def test_graph_scaling_preserves_missing_history(self):
         trend = live_screen.LiveScreen._large_trend("  ▁▃█", 50)
@@ -317,7 +341,7 @@ class LiveScreenTests(unittest.TestCase):
         view.draw(data)
         content = "\n".join(v for _, _, v in view.window.writes)
         self.assertIn("TCP:8080", content)
-        self.assertIn("LIMIT / HOURS", content)
+        self.assertIn("LIMIT", content)
 
     def test_escape_exits_without_setting_limit(self):
         screen = self.make_view([27])

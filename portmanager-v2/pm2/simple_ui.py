@@ -534,7 +534,6 @@ def _list_tunnels():
     _ui_line(f"  {len(items)} saved connections  |  {len(rules)} existing network rules")
     if enabled_saved and not owned_rules and not error:
         _ui_line(_paint("91", "  NOT APPLIED: saved connections exist but PM2 firewall rules are missing."))
-        _ui_line(_paint("93", "  Repair: sudo portmanager2 tunnel apply"))
     for entry in items[:3]:
         port = ("ALL except " + ",".join(map(str, entry["exclude"]))
                 if entry["mode"] == "all-except" else
