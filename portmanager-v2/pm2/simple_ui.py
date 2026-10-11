@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .errors import PM2Error
-from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules, usage_ledger, iptables_ui
+from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules, usage_ledger, iptables_ui, nat_editor
 
 
 def _paint(code, text):
@@ -127,7 +127,7 @@ def _tunnel_wizard(old=None, all_ports=False):
         print(f"  Interface autodetection failed: {err.message}")
         return
     name_default = old["name"] if old else f"port-link-{len(config.load(transaction.CONFIG)['tunnels'])+1}"
-    name = _ask("Name for this port connection", name_default)
+    name = old["name"] if old else _ask("Name for this port connection", name_default)
     if name is None:
         return
     target = _ask("Send traffic to this IP address", old["target_ip"] if old else None)
@@ -166,6 +166,18 @@ def _tunnel_wizard(old=None, all_ports=False):
         if not mapping:
             return
         argv += ["--mapping", mapping]
+    if old and set(old["protocols"]) == {"tcp", "udp"}:
+        both = _ask("Update BOTH TCP and UDP? (Y/n)", "y")
+        if both is None:
+            return
+        if both.lower() in ("n", "no"):
+            only = _ask("Update which one (tcp/udp)", "tcp")
+            if only is None:
+                return
+            if only.lower() not in ("tcp", "udp"):
+                raise PM2Error("E_VALIDATION", "Protocol must be tcp or udp")
+            _mutate_single_protocol(old, argv, only.lower())
+            return
     _mutate("update" if old else "create", argv)
 
 
@@ -431,82 +443,50 @@ def _ui_record(index, chain, proto, action, destination, external=True, interfac
                  "OUTPUT": "Local out"}.get(chain, chain)
     operation = {"DNAT": "Forward", "REDIRECT": "Local", "SNAT": "Change IP",
                  "MASQUERADE": "Share IP"}.get(action, action)
-    proto = _ui_clean(proto)
-    destination = _ui_clean(destination)
-    iface = _ui_clean(interface)
-    owner = "Other app" if external else "This app"
+    creator = "Other app" if external else "Port Manager"
     if width >= 105:
-        row = (f" {index:>2}  " + _paint("93", "●") + " " +
-               f"{_ui_cut(direction, 12):<12}  " +
-               _paint("96;1", f"{_ui_cut(proto, 13):<13}") + "  " +
-               f"{_ui_cut(operation, 10):<10}  " +
-               _paint("95;1", f"{_ui_cut(destination, 28):<28}") + "  " +
-               f"{_ui_cut(iface, 11):<11}  " +
-               _paint("90", _ui_cut(owner, 11)))
-    elif width >= 79:
-        row = (f" {index:>2}  " + _paint("93", "●") + " " +
-               f"{_ui_cut(direction, 13):<13}  " +
-               _paint("96;1", f"{_ui_cut(proto, 15):<15}") + "  " +
-               f"{_ui_cut(operation, 9):<9}  " +
-               _paint("95;1", _ui_cut(destination, max(12, width - 57))))
+        text = (f" {index:>2}  {direction:<12} "
+                f"{_ui_cut(proto, 16):<16}  {_ui_cut(operation, 10):<10} "
+                f"{_ui_cut(destination, 27):<27} "
+                f"{_ui_cut(interface, 10):<10} {_ui_cut(creator, 12)}")
     else:
-        row = (f" {index:>2}  " + _paint("93", "●") + "  " +
-               _paint("96;1", _ui_cut(proto, 14)) + " → " +
-               _paint("95;1", _ui_cut(destination, max(10, width - 23))))
-    _ui_line(row)
+        text = (f" {index:>2}  {direction:<10} {_ui_cut(proto, 15):<15} "
+                f"{_ui_cut(destination, max(14, width-46))}")
+    _ui_line(text)
 
 
 def _list_tunnels():
-    width = _ui_width()
+    """Concise preview; grouped rules are directly accessible via menu [3]."""
     cfg = config.load(transaction.CONFIG)
     items = cfg["tunnels"]
-    rules, error = system_rules.detect_nat(limit=200)
-    # Keep the action menu on-screen even with hundreds of port rules.
-    height = shutil.get_terminal_size((100, 28)).lines
-    budget = max(4, min(10, height - 18))
-    saved_preview = min(len(items), max(2, budget // 2))
-    rules_preview = max(2, budget - saved_preview)
+    rules, error = system_rules.detect_nat(limit=2000, grouped=True)
+    width = _ui_width()
     _ui_edge("top", width)
-    _ui_line(_paint("96;1", " ▤  PORTS AND CONNECTIONS ON THIS SERVER"))
-    _ui_line(_paint("90", "    See where your ports send traffic. Nothing changes on this page."))
+    _ui_line(_paint("96;1", " ▤  PORT CONNECTIONS / CURRENT IPTABLES"))
+    _ui_line("  Preview is read-only; select [3] to view or edit entries.")
     _ui_edge("rule", width)
-    if items:
-        _ui_line(_paint("96;1", " ── PORT CONNECTIONS SAVED HERE ──"))
-        for i, t in enumerate(items[:saved_preview], 1):
-            ports = ("ALL except " + ",".join(map(str, t["exclude"]))
-                     if t["mode"] == "all-except" else
-                     ",".join(f'{p["listen_port"]}→{p["target_port"]}'
-                              for p in t["mapping"]))
-            name = _ui_cut(t.get("name", "tunnel"), 20)
-            dest = _ui_cut(t.get("target_ip", "?"), 32)
-            state = _paint("92;1", "● ACTIVE") if t["enabled"] else _paint("90", "○ DISABLED")
-            _ui_line(f"  {i:>2}. " + _paint("96;1", name) + "  " +
-                     _paint("97", _ui_cut(ports, max(10, width - 65))) +
-                     "  → " + _paint("95;1", dest) + "  " + state)
-        if len(items) > saved_preview:
-            _ui_line(_paint("90", f"  + {len(items) - saved_preview} more saved connections; choose Change / Remove to browse"))
+    _ui_line(f"  {len(items)} saved connections  |  {len(rules)} existing network rules")
+    for entry in items[:3]:
+        port = ("ALL except " + ",".join(map(str, entry["exclude"]))
+                if entry["mode"] == "all-except" else
+                ",".join(f'{m["listen_port"]}→{m["target_port"]}' for m in entry["mapping"]))
+        _ui_line(f"  OWNED  {_ui_cut(entry['name'], 17)} "
+                 f"{_ui_cut(port, 22)} → {entry['target_ip']} "
+                 f"({'+'.join(entry['protocols'])})")
+    if len(items) > 3:
+        _ui_line(f"  + {len(items)-3} more managed connections")
+    if error:
+        _ui_line(_paint("93", "  " + _ui_cut(error, width - 7)))
     else:
-        _ui_line(_paint("97", f"  {len(items)} saved connections  |  {len(rules)} existing network rules"))
-    _ui_line("")
-    _ui_line(_paint("96;1", " ── OTHER EXISTING PORT RULES ──"))
-    _ui_line(_paint("90", _ui_cut(_ui_header_row(width), width - 5)))
-    _ui_edge("rule", width)
-    if rules:
-        for i, rule in enumerate(rules[:rules_preview], 1):
-            _ui_record(i, rule["chain"],
+        _ui_line(f"  {len(rules)} existing NAT entries (paired TCP+UDP shown once)")
+        for index, rule in enumerate(rules[:5], 1):
+            _ui_record(index, rule["chain"],
                        f'{rule["protocol"]}:{rule["port"]}',
                        rule["target"], rule["destination"],
+                       external=not rule.get("owned", False),
                        interface=rule.get("interface", "-"))
-        if len(rules) > rules_preview:
-            _ui_line(_paint("90", f"  + {len(rules) - rules_preview} more rules; choose See existing port rules to browse"))
-    elif error:
-        _ui_line(_paint("93", "  " + _ui_cut(error, width - 8)))
-    else:
-        _ui_line(_paint("90", "  No existing NAT forwarding rules found."))
-    _ui_line("")
-    _ui_line(_paint("90", _ui_cut(
-        "  Other apps may own these rules (read-only). View them safely here.",
-        width - 6)))
+        if len(rules) > 5:
+            _ui_line(f"  + {len(rules)-5} more rules; select [3] to browse")
     _ui_edge("bottom", width)
     return items
 
@@ -550,112 +530,171 @@ def _delete_all():
     print(_paint("92", "  ✓ Saved connection removal requested"))
 
 
-def _inspect_existing_rule():
-    """Existing rules are browseable, never silently adopted or changed."""
-    while True:
-        rules, error = system_rules.detect_nat(limit=200)
-        if error:
-            _title("EXISTING PORTS")
-            _ui_edge("top")
-            _ui_line(_paint("93", "  Cannot read existing port rules right now."))
-            _ui_line(_ui_cut(error, _ui_width() - 8))
-            _ui_edge("bottom")
-            _ask("Press Enter to return")
-            return
-        if not rules:
-            _title("EXISTING PORTS")
-            _ui_edge("top")
-            _ui_line("  No existing port rules found.")
-            _ui_edge("bottom")
-            _ask("Press Enter to return")
-            return
-        rule = _pick_row(
-            "EXISTING PORTS", rules,
-            lambda item: (f'{item["protocol"]}:{item["port"]} '
-                          f'→ {item["destination"]}  ({item["target"]})'))
-        if rule is None:
-            return
-        _title("PORT DETAILS")
-        _ui_edge("top")
-        columns = (("Port", f'{rule["protocol"]}:{rule["port"]}'),
-                   ("Direction", "Incoming" if rule["chain"] == "PREROUTING"
-                    else "Outgoing" if rule["chain"] == "POSTROUTING"
-                    else rule["chain"]),
-                   ("Action", {"DNAT": "Forward to destination",
-                               "REDIRECT": "Handle on this server",
-                               "SNAT": "Change outgoing IP",
-                               "MASQUERADE": "Use this server's IP"}.get(
-                                   rule["target"], rule["target"])),
-                   ("Destination", rule["destination"]),
-                   ("Network", rule.get("interface", "-")))
-        for label, value in columns:
-            _ui_line(f"  {label:<14} {_ui_cut(value, _ui_width() - 24)}")
-        _ui_line("")
-        _ui_line(_paint("93", "  Rule from another app: view only for safety."))
-        _ui_edge("bottom")
-        _choose(("0", "Back to port list"))
+def _mutate_single_protocol(old, argv, protocol):
+    """Split an owned dual-protocol connection without losing the other half."""
+    from .cli import mutation_lock
+    from .validation import make_tunnel
+    from . import shaping
+    from . import tunnels as tunnel_commands
 
+    args = tunnel_commands._arguments("update", argv)
+    if not _confirm(f"Save only {protocol.upper()} and keep the other protocol unchanged?"):
+        return
+    with mutation_lock():
+        cfg = config.load(transaction.CONFIG)
+        existing = config.get(cfg["tunnels"], old["id"])
+        if existing != old or set(existing["protocols"]) != {"tcp", "udp"}:
+            raise PM2Error("E_CONFLICT", "Connection changed while editing; reopen its entry")
+        if any(p["enabled"] for p in shaping.schedule_load()["policies"]):
+            raise PM2Error("E_CONFLICT", "Remove active V2 speed schedules before editing")
+        untouched = "udp" if protocol == "tcp" else "tcp"
+        previous = dict(existing, protocols=[untouched])
+        updated = make_tunnel(
+            name=existing["name"] + "-" + protocol,
+            listen_ip=args.listen_ip, interface=args.interface,
+            protocol=protocol, mode=args.mode, target_ip=args.target_ip,
+            mapping=args.mapping, exclude=args.exclude,
+            ack_all_ports=args.ack_all_ports, enabled=existing["enabled"])
+        candidate = config.replace(cfg, [
+            previous if t["id"] == existing["id"] else t for t in cfg["tunnels"]
+        ] + [updated])
+        # A split of any all-except mode must have a systemd rollback timer.
+        result = (guard.apply(candidate) if guard.risky(cfg, candidate)
+                  else transaction.apply(candidate))
+    _complete_pending_guard(result)
+    print(_paint("92", f"  Updated {protocol.upper()}; {untouched.upper()} unchanged."))
+
+
+def _complete_pending_guard(result):
+    token = result.get("pending_confirmation")
+    if not token:
+        return
+    if _confirm("SSH still works; keep this change?"):
+        from .cli import mutation_lock
+        with mutation_lock():
+            guard.confirm(token)
+    else:
+        print(_paint("93", "  Change will automatically roll back within 120 seconds."))
+
+
+def _edit_external(group):
+    """Edit user-style DNAT only; never rewrite Docker/UFW or arbitrary tables."""
+    members = group.get("members", [group])
+    if not all(nat_editor.editable(member) for member in members):
+        _ui_line(_paint("93", "  This rule is read-only (Docker/UFW/PM2 or unsupported NAT)."))
+        _ask("Enter to return")
+        return
+    target = _ask("Destination IPv4[:port]", group["destination"])
+    if target is None:
+        return
+    target = nat_editor.parse_destination(target)
+    source_port = None
+    if str(group["port"]).isdecimal():
+        source_port = _ask("Port on THIS server", group["port"])
+        if source_port is None:
+            return
+    selected = list(members)
+    if group["protocol"] == "tcp+udp":
+        both = _ask("Apply to BOTH TCP and UDP? (Y/n)", "y")
+        if both is None:
+            return
+        if both.lower() in ("n", "no"):
+            protocol = _ask("Only which protocol (tcp/udp)", "tcp")
+            if protocol is None:
+                return
+            if protocol.lower() not in ("tcp", "udp"):
+                raise PM2Error("E_VALIDATION", "Choose tcp or udp")
+            selected = [m for m in members if m["protocol"] == protocol.lower()]
+    if not _confirm("Apply with automatic 120s rollback?"):
+        return
+    from .cli import mutation_lock
+    with mutation_lock():
+        result = nat_editor.apply(selected, target, source_port)
+    token = result.get("pending_confirmation")
+    if token:
+        print(_paint("93", "  Rollback armed. Check SSH/network before confirming."))
+        if _confirm("SSH still works; keep this change?"):
+            with mutation_lock():
+                nat_editor.confirm(token)
+            print(_paint("92", "  Changes saved."))
+        else:
+            with mutation_lock():
+                nat_editor.rollback(token)
+            print(_paint("93", "  Original rule restored."))
+    else:
+        print(_paint("90", "  Destination was unchanged."))
 
 
 def _manage():
+    """One list for saved connections and existing forwarding; selection edits."""
     while True:
-        _title("MY PORTS")
-        items = _list_tunnels()
-        choice = _choose(("1", "Change or remove a saved port"),
-                         ("2", "Remove all saved port connections"),
-                         ("3", "See other existing port rules"),
-                         ("0", "Back to previous menu"))
-        if choice in ("0", None):
+        cfg = config.load(transaction.CONFIG)
+        nat, error = system_rules.detect_nat(limit=2000, grouped=True)
+        if error:
+            _title("PORTS / EDIT")
+            _ui_line(_paint("91", "  " + _ui_cut(error, _ui_width()-7)))
+            _ask("Enter to go back")
             return
-        if choice and choice.lower() == "r":
-            continue
-        if choice == "3":
-            _inspect_existing_rule()
-            continue
-        if choice == "2":
-            _delete_all()
-            continue
-        if choice != "1":
-            continue
-        if not items:
-            _title("MY PORTS")
-            _ui_edge("top")
-            _ui_line("  No port connections saved in this app yet.")
-            _ui_line("  You can still see existing ports with option [3].")
-            _ui_edge("bottom")
-            _ask("Enter to continue")
-            continue
-        selected = _pick_row(
-            "SAVED PORT CONNECTIONS", items,
-            lambda item: (f'{item.get("name", "Connection")}  → '
-                          f'{item.get("target_ip", "?")}'))
+        # PM2-installed rules are managed via their saved config instead.
+        options = ([("managed", item) for item in cfg["tunnels"]] +
+                   [("external", rule) for rule in nat if not rule.get("owned")] +
+                   [("all", None)])
+        selected = _pick_row("PORTS / VIEW & EDIT", options,
+                             lambda obj: (
+                                 f'OWNED {obj[1]["name"]} → {obj[1]["target_ip"]}'
+                                 if obj[0] == "managed" else
+                                 f'{obj[1]["protocol"]}:{obj[1]["port"]} → '
+                                 f'{obj[1]["destination"]}  ({obj[1]["target"]})'
+                                 if obj[0] == "external" else
+                                 "View ALL iptables tables / chains / manual rules"))
         if selected is None:
+            return
+        kind, value = selected
+        if kind == "all":
+            iptables_ui.browse()
             continue
-        _title("EDIT PORT")
-        action = _choose(("1", "Change this port connection"),
-                         ("2", "Remove this port connection"),
-                         ("0", "Go back"))
-        if action == "1":
-            _tunnel_wizard(selected)
-        elif action == "2":
-            _mutate("delete", [selected["id"]])
+        _title("PORT DETAILS / EDIT")
+        _ui_edge("top")
+        if kind == "managed":
+            _ui_line(f"  OWNED  {value['name']}  →  {value['target_ip']}")
+            _ui_line(f"  Protocols: {','.join(value['protocols'])}")
+            _ui_line(f"  Network: {value['interface']}  |  {value['mode']}")
+        else:
+            _ui_line(f"  {value['protocol']}:{value['port']} → {value['destination']}")
+            _ui_line(f"  {value['target']}  |  {value['chain']}  |  {value.get('interface','-')}")
+            _ui_line("  Source: " + ("Port Manager" if value.get("owned") else "Existing rule"))
+        _ui_edge("bottom")
+        if kind == "managed":
+            action = _choose(("1", "Edit connection (existing values prefilled)"),
+                             ("2", "Delete this saved connection"),
+                             ("0", "Back to all ports"))
+            if action == "1":
+                _tunnel_wizard(value)
+            elif action == "2":
+                _mutate("delete", [value["id"]])
+        else:
+            action = _choose(("1", "Edit destination with rollback"),
+                             ("0", "Back to all ports"))
+            if action == "1":
+                _edit_external(value)
+
+
+def _inspect_existing_rule():
+    """Compatibility alias: the same grouped list supports in-place editing."""
+    return _manage()
 
 
 def _tunnel_page():
     while True:
         _title("PORTS")
         _list_tunnels()
-        choice = _choose(("1", "Forward a port to another server"),
-                         ("2", "Forward almost all ports (advanced)"),
-                         ("3", "Change or remove a saved port"),
-                         ("4", "Browse ALL iptables tables and rules"),
-                         ("5", "Browse existing NAT forwarding rules"),
-                         ("6", "Full reset safety info (not enabled)"),
+        choice = _choose(("1", "New TCP + UDP port forward"),
+                         ("2", "Forward all ports except selected (advanced)"),
+                         ("3", "View / edit all existing port rules"),
+                         ("4", "Full iptables reset safety info"),
                          ("0", "Back to home"))
         if choice in ("0", None):
             return
-        if choice and choice.lower() == "r":
-            continue
         if choice == "1":
             _title("NEW PORT")
             _tunnel_wizard()
@@ -665,10 +704,6 @@ def _tunnel_page():
         elif choice == "3":
             _manage()
         elif choice == "4":
-            iptables_ui.browse()
-        elif choice == "5":
-            _inspect_existing_rule()
-        elif choice == "6":
             iptables_ui.full_reset_information()
 
 
@@ -1373,7 +1408,7 @@ def menu():
                                           break_long_words=True,
                                           break_on_hyphens=False):
                     print("  " + part)
-                print(_paint("96", "  Inspect: Ports > [4] Browse ALL iptables rules"))
+                print(_paint("96", "  Inspect: Ports > [3] View / edit all existing ports"))
             _ask("Enter to continue")
         except (OSError, ValueError) as exc:
             print(_paint("91", f"  Invalid input: {str(exc)[:140]}"))
