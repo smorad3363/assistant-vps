@@ -13,6 +13,17 @@ LAUNCHER_TARGET="$ROOT/current/bin/portmanager2"
 
 fatal() { printf '[portmanager2] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[portmanager2] %s\n' "$*"; }
+progress() { printf '[%3d%%] %s\n' "$(( $1 * 100 / 7 ))" "$2"; }
+# Successful helpers are quiet. Errors still show the captured command output.
+quiet_step() {
+  local detail="$tmp/step.log"
+  if "$@" >"$detail" 2>&1; then
+    : > "$detail"
+  else
+    cat "$detail" >&2
+    return 1
+  fi
+}
 
 # Curl's --tlsv1.2 specifies a minimum version, so some networks still fail
 # when TLS 1.3 is offered. Retry *only* SSL handshake failures (exit 35) with
@@ -35,6 +46,7 @@ done
 python3 -c 'import sys; assert sys.version_info >= (3, 10)' \
   || fatal "Python 3.10+ required"
 [[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || fatal "Invalid Git ref"
+progress 1 "Checking server"
 [[ ! -L /run/lock/portmanager2.lock ]] || fatal "V2 lock path is an unsafe symlink"
 exec 9>/run/lock/portmanager2.lock
 flock -n 9 || fatal "Another Port Manager V2 operation holds the lock"
@@ -122,11 +134,12 @@ trap cleanup EXIT
 # Resolve mutable refs to a full SHA, but skip the unauthenticated GitHub
 # REST API if caller already supplied an immutable 40-hex commit. This avoids
 # API 403 rate-limit errors in high-volume CI and preserves source pinning.
+progress 2 "Resolving release"
 if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
   SHA="$REF"
-  log "Using explicitly pinned source commit: $SHA"
+  : # Explicit commit supplied; no API request needed
 else
-  log "Resolving Git ref: $REF"
+  : # GitHub API resolves the mutable ref to an immutable commit
   download_https "https://api.github.com/repos/$REPO/commits/$REF" "$tmp/ref.json" 3 \
     || fatal "Cannot resolve Git ref (GitHub API unavailable); retry with a full commit SHA"
   SHA="$(python3 - "$tmp/ref.json" <<'PY'
@@ -138,24 +151,26 @@ print(value)
 PY
 )" || fatal "Invalid GitHub response"
 fi
-log "Pinned source commit: $SHA"
+progress 3 "Downloading release"
 download_https "https://codeload.github.com/$REPO/tar.gz/$SHA" "$tmp/source.tar.gz" 2 \
   || fatal "Cannot download pinned source archive"
+progress 4 "Verifying download"
 mkdir "$tmp/source"
 tar -xzf "$tmp/source.tar.gz" --no-same-owner --strip-components=1 -C "$tmp/source"
 [[ -f "$tmp/source/portmanager-v2/manifest.sha256" ]] \
   || fatal "Source has no V2 checksum manifest"
-(cd "$tmp/source/portmanager-v2" && sha256sum --check --strict manifest.sha256) \
+(cd "$tmp/source/portmanager-v2" && sha256sum --check --strict manifest.sha256 >/dev/null) \
   || fatal "V2 source integrity check failed"
 # Fail closed BEFORE touching installed release or root crontab if the
 # public 'portmanager' command is foreign or V1 cron cannot be safely paused.
-PYTHONPATH="$tmp/source/portmanager-v2" python3 -m pm2.migration preflight \
+quiet_step env PYTHONPATH="$tmp/source/portmanager-v2" python3 -m pm2.migration preflight \
   || fatal "Cannot safely archive V1 or select V2 as the primary command"
 VERSION="$(cat "$tmp/source/portmanager-v2/VERSION")"
 [[ "$VERSION" =~ ^2\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] \
   || fatal "Unexpected version string"
 release_id="$VERSION-${SHA:0:12}"
 new_release="$ROOT/releases/$release_id"
+progress 5 "Installing files"
 
 mkdir -p -- "$ROOT/releases" "$ETC" "$DATA" "$LOG"
 chmod 0755 "$ROOT" "$ROOT/releases"
@@ -169,7 +184,7 @@ fi
 
 # Stage on same filesystem for atomic directory rename.
 if [[ -e "$new_release" ]]; then
-  (cd "$new_release" && sha256sum --check --strict manifest.sha256) \
+  (cd "$new_release" && sha256sum --check --strict manifest.sha256 >/dev/null) \
     || fatal "Existing release directory integrity mismatch"
   new_release="" # do not remove an existing release during rollback
 else
@@ -223,24 +238,25 @@ if [[ ! -L "$BIN" ]]; then
   created_launcher=1
 fi
 "$BIN" --version | grep -Fxq "$VERSION" || fatal "Activation smoke test failed"
-"$BIN" doctor --json >/dev/null || fatal "Read-only doctor smoke test failed"
+quiet_step "$BIN" doctor --json || fatal "Read-only doctor smoke test failed"
 
+progress 6 "Configuring services"
 # Verified V2-owned systemd timer logs per-port bytes in the background.
 # Normal installs enable it automatically. Operators can explicitly set
 # PORTMANAGER2_ENABLE_SERVICES=0 to opt out on an unsupported test machine.
 # Service module handles strict unit ownership/rollback.
-PYTHONPATH="$ROOT/current" python3 -m pm2.services install \
+quiet_step env PYTHONPATH="$ROOT/current" python3 -m pm2.services install \
   || fatal "Could not safely install V2 systemd units"
 # Continuous history and 14-day byte accounting run without Live.
 # Enabled by default on installation; explicit 0 opts out safely.
 if [[ "${PORTMANAGER2_ENABLE_SERVICES:-1}" == "1" ]]; then
-  PYTHONPATH="$ROOT/current" python3 -c 'from pm2.services import activate; print(activate())' \
+  quiet_step env PYTHONPATH="$ROOT/current" python3 -c 'from pm2.services import activate; activate()' \
     || fatal "Could not safely activate V2-only systemd units"
 fi
 # LAST mutating operation: freeze V1 binary and its exact cron entries, then
 # atomically direct /usr/local/bin/portmanager to the verified V2 release.
 # This does NOT reset any V1 firewall or tc rules (migration is non-disruptive).
-PYTHONPATH="$ROOT/current" python3 -m pm2.migration activate \
+quiet_step env PYTHONPATH="$ROOT/current" python3 -m pm2.migration activate \
   || fatal "Legacy V1 archival / primary launcher cut-over failed"
 "$BIN" --version | grep -Fxq "$VERSION" || fatal "V2 alias post-cutover verification failed"
 "/usr/local/bin/portmanager" --version | grep -Fxq "$VERSION" \
@@ -249,10 +265,8 @@ new_release=""
 swapped=0
 trap - EXIT
 rm -rf -- "$tmp"
+progress 7 "Ready"
 # The enabled timer starts sampling after installation. Do not start the
 # oneshot concurrently while installer holds the global V2 mutation lock:
 # that races service preflight and can cause a false "activating" failure.
-log "Installed $VERSION (commit $SHA); primary command: portmanager"
-log "Continuous port-byte logging: ${PORTMANAGER2_ENABLE_SERVICES:-1} (1=on, 0=off); retention: 14 days"
-log "Original V1 executable/cron archived under /var/lib/portmanager2/legacy-v1 when present."
-log "Run: portmanager (or portmanager2); use original installer with bash -s -- v1 to restore V1."
+printf '[portmanager2] Ready: %s — run: portmanager\n' "$VERSION"

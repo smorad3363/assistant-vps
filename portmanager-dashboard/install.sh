@@ -30,6 +30,9 @@ download_https() {
     return "$status"
   fi
 }
+if [[ "$TARGET" == "portmanager-v2/install.sh" ]]; then
+  printf '[  0%%] Downloading installer\n'
+fi
 download_https "$url" "$tmp"
 [[ -s "$tmp" ]] || { echo "Empty installer payload" >&2; exit 1; }
 bash -n "$tmp"

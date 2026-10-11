@@ -260,8 +260,9 @@ class AutoMonitorTests(unittest.TestCase):
             self.assertEqual(simple_ui.menu(), 0)
         displayed = "\n".join(str(x.args) for x in out.call_args_list)
         self.assertIn("live traffic", displayed.lower())
-        self.assertIn("forward ports", displayed.lower())
-        self.assertIn("change or remove", displayed.lower())
+        self.assertIn("ports & tunnels", displayed.lower())
+        self.assertIn("daily traffic reports", displayed.lower())
+        self.assertNotIn("change or remove", displayed.lower())
 
 
 if __name__ == "__main__":

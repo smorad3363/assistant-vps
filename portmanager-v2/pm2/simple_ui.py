@@ -103,8 +103,13 @@ def _protected_ssh_ports():
 def _mutate(operation, argv):
     from .cli import mutation_lock
     preview = tunnels.handle(operation, [*argv, "--dry-run"], mutation_lock)
-    print(_paint("93", "  Check the changes before saving this port connection."))
-    if not _confirm("Apply?"):
+    # The user already requested creation by entering the destination and
+    # ports. Do not ask a second question for an ordinary new port rule.
+    # Keep explicit confirmation for deleting/updating and all-except mode.
+    is_normal_create = (
+        operation == "create" and "--mode" in argv and
+        argv[argv.index("--mode") + 1] == "ports")
+    if not is_normal_create and not _confirm("Apply changes?"):
         return
     if operation == "delete":
         argv = [*argv, "--yes"]
@@ -117,7 +122,7 @@ def _mutate(operation, argv):
                 guard.confirm(pending)
         else:
             print("  Change will roll back automatically; do not close SSH.")
-    print(_paint("92", "  ✓ Done"))
+    print(_paint("92", "  ✓ Applied"))
 
 
 def _auto_tunnel_name(target, mapping, saved):
@@ -305,14 +310,15 @@ def _ui_actions(*choices, selected=0):
             content = _paint("97", content)
         _ui_line(content, width)
     _ui_edge("bottom", width)
-    print(_paint("90", "  ↑↓ Move   │   Enter Choose   │   0 / Esc Back   │   Number + Enter"))
+
 
 
 def _menu_key(choices, selected, shortcuts=()):
     """Read one action directly from an interactive SSH terminal.
 
     The tty is always restored, including on Ctrl+C, EOF and exceptions.
-    Digits require Enter (so a typed newline never leaks to the next screen).
+    Number shortcuts activate immediately when unambiguous; Enter selects
+    the highlighted row. Multi-digit keys still wait until unambiguous or Enter.
     """
     import select
     import termios
@@ -374,6 +380,16 @@ def _menu_key(choices, selected, shortcuts=()):
                 continue
             if char.isdigit():
                 typed = (typed + char.decode("ascii"))[-5:]
+                available = {key for key, _ in choices}
+                # A number acts as a direct shortcut. Hold prefixes of
+                # multi-digit keys until unambiguous (or Enter) to avoid
+                # accidentally selecting 1 instead of 10.
+                if typed in available and not any(
+                        key.startswith(typed) and key != typed
+                        for key in available):
+                    return typed
+                if not any(key.startswith(typed) for key in available):
+                    typed = ""
                 _draw_menu_prompt(choices, selected, typed)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, previous)
@@ -388,8 +404,8 @@ def _draw_menu_prompt(choices, selected, typed):
 
 
 def _repaint_actions(choices, selected, typed):
-    # Cursor is on the prompt line just below the (n + 3)-line menu.
-    sys.stdout.write("\r\x1b[2K" + f"\x1b[{len(choices) + 3}A\x1b[J")
+    # Cursor is on the prompt line just below the (n + 2)-line menu.
+    sys.stdout.write("\r\x1b[2K" + f"\x1b[{len(choices) + 2}A\x1b[J")
     sys.stdout.flush()
     _ui_actions(*choices, selected=selected)
     _draw_menu_prompt(choices, selected, typed)
@@ -429,7 +445,7 @@ def _pick_row(title, rows, describe):
         _title(title)
         _ui_edge("top")
         _ui_line(f"  {len(rows)} results  |  Page {page + 1} of {(len(rows) + size - 1) // size}")
-        _ui_line("  Use ↑↓ and Enter, or type a number and Enter.")
+
         _ui_edge("bottom")
         choices = [(str(i + 1), _ui_cut(describe(item),
                                        _ui_width() - 20))
@@ -1404,10 +1420,9 @@ def menu():
         raise PM2Error("E_VALIDATION", "Interactive Port Manager requires a terminal")
     while True:
         _title("HOME")
-        choice = _choose(("1", "See live traffic and control speed"),
-                         ("2", "View and forward ports"),
-                         ("3", "Change or remove port connections"),
-                         ("4", "Daily port traffic (download / upload)"),
+        choice = _choose(("1", "Live traffic & speed control"),
+                         ("2", "Ports & tunnels"),
+                         ("3", "Daily traffic reports"),
                          ("0", "Exit Port Manager"))
         if choice in ("0", None):
             _clear_screen()
@@ -1418,8 +1433,6 @@ def menu():
             elif choice == "2":
                 _tunnel_page()
             elif choice == "3":
-                _manage()
-            elif choice == "4":
                 _usage_report()
         except PM2Error as exc:
             print(_paint("91", f"  {exc.code}: {exc.message}"))
