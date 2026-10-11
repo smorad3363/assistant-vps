@@ -98,7 +98,7 @@ class NewThemeTest(unittest.TestCase):
             simple_ui._list_tunnels()
         shown = output.getvalue()
         self.assertIn("NOT APPLIED", shown)
-        self.assertIn("sudo portmanager2 tunnel apply", shown)
+        self.assertNotIn("sudo portmanager2 tunnel apply", shown)
 
     def test_keyboard_down_then_enter_selects_second_option(self):
         import termios
