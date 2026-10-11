@@ -27,18 +27,34 @@ class StreamlinedPortsTests(unittest.TestCase):
               as confirm, redirect_stdout(io.StringIO())):
             simple_ui._mutate("create", ["--mode", "all-except"])
         do.assert_called_once()
-        confirm.assert_called_once_with("Apply changes?")
+        confirm.assert_called_once_with("Forward nearly ALL ports, including new services?")
 
-    def test_update_and_delete_still_confirm(self):
-        for operation in ("update", "delete"):
-            with self.subTest(operation=operation):
-                with (mock.patch.object(simple_ui.tunnels, "handle",
-                                        return_value={"dry_run": True}) as do,
-                      mock.patch.object(simple_ui, "_confirm", return_value=False)
-                      as confirm, redirect_stdout(io.StringIO())):
-                    simple_ui._mutate(operation, ["--mode", "ports"])
-                do.assert_called_once()
-                confirm.assert_called_once_with("Apply changes?")
+    def test_specific_port_edit_applies_without_silent_default_no(self):
+        with (mock.patch.object(simple_ui.tunnels, "handle",
+                                side_effect=[{"dry_run": True}, {"saved": True}]) as do,
+              mock.patch.object(simple_ui, "_confirm") as confirm,
+              redirect_stdout(io.StringIO())):
+            simple_ui._mutate("update", ["--mode", "ports"])
+        self.assertEqual(do.call_count, 2)
+        confirm.assert_not_called()
+
+    def test_delete_still_confirms(self):
+        with (mock.patch.object(simple_ui.tunnels, "handle",
+                                return_value={"dry_run": True}) as do,
+              mock.patch.object(simple_ui, "_confirm", return_value=False)
+              as confirm, redirect_stdout(io.StringIO())):
+            simple_ui._mutate("delete", ["--mode", "ports"])
+        do.assert_called_once()
+        confirm.assert_called_once_with("Delete this connection permanently?")
+
+    def test_all_except_update_still_confirms(self):
+        with (mock.patch.object(simple_ui.tunnels, "handle",
+                                return_value={"dry_run": True}) as do,
+              mock.patch.object(simple_ui, "_confirm", return_value=False)
+              as confirm, redirect_stdout(io.StringIO())):
+            simple_ui._mutate("update", ["--mode", "all-except"])
+        do.assert_called_once()
+        confirm.assert_called_once_with("Forward nearly ALL ports, including new services?")
 
     def test_home_option_2_goes_to_unified_ports(self):
         with (mock.patch.object(simple_ui.os, "isatty", return_value=True),

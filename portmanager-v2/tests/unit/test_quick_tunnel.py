@@ -76,12 +76,14 @@ class QuickTunnelTests(unittest.TestCase):
         seen = []
         def answer(label, default=None):
             seen.append((label, default))
-            return default
+            return "2.29.39.23" if label == "Destination IPv4" else default
         with (mock.patch.object(simple_ui, "_network_defaults") as discover,
+              mock.patch.object(simple_ui, "_title") as title,
               mock.patch.object(simple_ui, "_ask", side_effect=answer),
               mock.patch.object(simple_ui, "_mutate") as mutate,
               redirect_stdout(io.StringIO())):
             simple_ui._tunnel_wizard(old)
+        title.assert_called_once_with("EDIT PORT")
         discover.assert_not_called()
         self.assertEqual(seen, [
             ("Destination IPv4", "2.29.39.22"),
@@ -90,6 +92,95 @@ class QuickTunnelTests(unittest.TestCase):
         self.assertEqual(operation, "update")
         self.assertEqual(args[args.index("--name") + 1], "legacy-safe-name")
         self.assertEqual(args[args.index("--interface") + 1], "ens18")
+
+    def test_unmodified_dual_protocol_edit_returns_without_prompts(self):
+        old = {"id": "edited-id", "name": "port-5555-to-2-29-39-22",
+               "target_ip": "2.29.39.22", "interface": "eth0",
+               "listen_ip": "77.90.10.180", "mode": "ports",
+               "protocols": ["tcp", "udp"], "mapping": [
+                   {"listen_port": 5555, "target_port": 5555}]}
+        asks = []
+        def answer(label, default=None):
+            asks.append(label)
+            return default
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ask", side_effect=answer),
+              mock.patch.object(simple_ui, "_mutate") as mutate,
+              mock.patch.object(simple_ui, "_mutate_single_protocol") as split,
+              redirect_stdout(io.StringIO()) as out):
+            simple_ui._tunnel_wizard(old)
+        self.assertEqual(asks, ["Destination IPv4",
+                                "Ports (5555,5555:6666,80:8080)"])
+        self.assertIn("Nothing changed", out.getvalue())
+        mutate.assert_not_called()
+        split.assert_not_called()
+
+    def test_equivalent_mapping_shorthand_does_not_modify_rules(self):
+        old = {"id": "edited-id", "name": "port-5555-to-2-29-39-22",
+               "target_ip": "2.29.39.22", "interface": "eth0",
+               "listen_ip": "77.90.10.180", "mode": "ports",
+               "protocols": ["tcp", "udp"], "mapping": [
+                   {"listen_port": 5555, "target_port": 5555}]}
+        def answer(label, default=None):
+            return "5555:5555" if label.startswith("Ports (") else default
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ask", side_effect=answer),
+              mock.patch.object(simple_ui, "_mutate") as mutate,
+              redirect_stdout(io.StringIO())):
+            simple_ui._tunnel_wizard(old)
+        mutate.assert_not_called()
+
+    def test_modified_dual_protocol_asks_once_then_updates_both(self):
+        old = {"id": "edited-id", "name": "port-5555-to-2-29-39-22",
+               "target_ip": "2.29.39.22", "interface": "eth0",
+               "listen_ip": "77.90.10.180", "mode": "ports",
+               "protocols": ["tcp", "udp"], "mapping": [
+                   {"listen_port": 5555, "target_port": 5555}]}
+        answers = []
+        def answer(label, default=None):
+            answers.append(label)
+            if label == "Destination IPv4":
+                return "2.29.39.23"
+            return default
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ask", side_effect=answer),
+              mock.patch.object(simple_ui, "_mutate") as mutate,
+              redirect_stdout(io.StringIO())):
+            simple_ui._tunnel_wizard(old)
+        self.assertEqual(answers, ["Destination IPv4",
+                                  "Ports (5555,5555:6666,80:8080)",
+                                  "Update BOTH TCP and UDP? (Y/n)"])
+        self.assertEqual(mutate.call_args.args[0], "update")
+        self.assertEqual(mutate.call_args.args[1][-2:],
+                         ["--name", "port-5555-to-2-29-39-22"])
+
+    def test_modified_dual_protocol_can_edit_just_tcp(self):
+        old = {"id": "edited-id", "name": "port-5555-to-2-29-39-22",
+               "target_ip": "2.29.39.22", "interface": "eth0",
+               "listen_ip": "77.90.10.180", "mode": "ports",
+               "protocols": ["tcp", "udp"], "mapping": [
+                   {"listen_port": 5555, "target_port": 5555}]}
+        answers = []
+        def answer(label, default=None):
+            answers.append(label)
+            return {
+                "Destination IPv4": "2.29.39.23",
+                "Update BOTH TCP and UDP? (Y/n)": "n",
+                "Update which one (tcp/udp)": "tcp",
+            }.get(label, default)
+        with (mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ask", side_effect=answer),
+              mock.patch.object(simple_ui, "_mutate_single_protocol") as split,
+              mock.patch.object(simple_ui, "_mutate") as mutate,
+              redirect_stdout(io.StringIO())):
+            simple_ui._tunnel_wizard(old)
+        self.assertEqual(answers, ["Destination IPv4",
+                                  "Ports (5555,5555:6666,80:8080)",
+                                  "Update BOTH TCP and UDP? (Y/n)",
+                                  "Update which one (tcp/udp)"])
+        split.assert_called_once()
+        self.assertEqual(split.call_args.args[2], "tcp")
+        mutate.assert_not_called()
 
     def test_all_except_keeps_ssh_guard_with_two_user_fields(self):
         seen = []
