@@ -134,10 +134,51 @@ def _hook(chain):
             "-j", chain]
 
 
-def check_inventory(snapshot_rules, inventory):
-    """Reject any unknown owner/collision/modified PM2 rule before mutation."""
+def _saved_inventory_exists(inventory):
+    return any(chain in inventory.get(table, {}) for table, chain in ORDER)
+
+
+def owned_footprint_present(snapshot_rules):
+    """Whether any PM2-owned chain/hook/comment is still present in kernel."""
+    owned = set(HOOKS)
+    for table in CHAINS:
+        for row in snapshot_rules.get(table, []):
+            if len(row) >= 2 and row[0] == "-N" and row[1] in owned:
+                return True
+            if len(row) >= 2 and row[0] == "-A" and row[1] in owned:
+                return True
+            if "-j" in row:
+                pos = row.index("-j")
+                if pos + 1 < len(row) and row[pos + 1] in owned:
+                    return True
+            if "--comment" in row:
+                pos = row.index("--comment")
+                if pos + 1 < len(row):
+                    value = row[pos + 1]
+                    if value == COMMENT or value.startswith("pm2:"):
+                        return True
+    return False
+
+
+def inventory_completely_missing(snapshot_rules, inventory):
+    """True only when state expects PM2 and the kernel has zero PM2 footprint."""
+    return _saved_inventory_exists(inventory) and not owned_footprint_present(snapshot_rules)
+
+
+def repairable_inventory(snapshot_rules, inventory):
+    """Validate what remains and return the exact safe kernel baseline.
+
+    An expected chain may be completely absent. Any chain/hook that remains
+    must exactly match the persisted inventory. Partial chains, duplicate
+    hooks, changed rules, or stray PM2 comments outside owned locations fail
+    closed and are never auto-repaired.
+    """
+    actual_inventory = {table: {} for table in CHAINS}
+    missing = []
+    owned = set(HOOKS)
+
     for table, chain in ORDER:
-        lines = snapshot_rules[table]
+        lines = snapshot_rules.get(table, [])
         exists = ["-N", chain] in lines
         saved = inventory.get(table, {}).get(chain)
         links = [row for row in lines if "-j" in row and
@@ -147,6 +188,9 @@ def check_inventory(snapshot_rules, inventory):
                 raise PM2Error("E_CONFLICT", "Unowned V2-like chain or hook exists",
                                {"table": table, "chain": chain})
             continue
+        if not exists and not links:
+            missing.append((table, chain))
+            continue
         if not exists or links != [_hook(chain)]:
             raise PM2Error("E_CONFLICT", "V2 chain or hook modified externally",
                            {"table": table, "chain": chain})
@@ -154,6 +198,44 @@ def check_inventory(snapshot_rules, inventory):
         if actual != saved:
             raise PM2Error("E_CONFLICT", "Owned rule inventory drift",
                            {"table": table, "chain": chain})
+        actual_inventory[table][chain] = actual
+
+    # Reject orphaned PM2-looking comments in foreign chains. Valid PM2 rule
+    # comments live in a PM2_* chain; the one valid foreign comment is the
+    # exact owned hook that jumps to that chain.
+    for table in CHAINS:
+        for row in snapshot_rules.get(table, []):
+            if "--comment" not in row:
+                continue
+            pos = row.index("--comment")
+            if pos + 1 >= len(row):
+                continue
+            value = row[pos + 1]
+            if value != COMMENT and not value.startswith("pm2:"):
+                continue
+            chain_name = row[1] if len(row) > 1 and row[0] == "-A" else None
+            jump = None
+            if "-j" in row:
+                jump_pos = row.index("-j")
+                if jump_pos + 1 < len(row):
+                    jump = row[jump_pos + 1]
+            if chain_name in owned:
+                continue
+            if value == COMMENT and jump in owned and row == _hook(jump):
+                continue
+            raise PM2Error("E_CONFLICT", "Orphaned V2-like firewall rule exists",
+                           {"table": table, "rule": " ".join(row)[:500]})
+
+    return actual_inventory, missing
+
+
+def check_inventory(snapshot_rules, inventory):
+    """Reject any unknown owner/collision/modified/missing PM2 rule."""
+    _, missing = repairable_inventory(snapshot_rules, inventory)
+    if missing:
+        table, chain = missing[0]
+        raise PM2Error("E_CONFLICT", "V2 chain or hook missing externally",
+                       {"table": table, "chain": chain})
 
 
 def _remove(inventory):
