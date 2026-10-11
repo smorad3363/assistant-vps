@@ -93,6 +93,38 @@ class ForeignEditTests(unittest.TestCase):
                 self.assertEqual(events, ["timer", "replace"])
                 self.assertTrue(result["pending_confirmation"])
 
+    def test_partial_pair_failure_restores_first_rule_immediately(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "edit.json"
+            initial = system_rules.parse_nat(TCP + "\n" + UDP + "\n")
+            rows = [dict(item, argv=list(item["argv"])) for item in initial]
+            events = []
+
+            def snapshot():
+                return rows
+
+            def replace(entry, args):
+                if (entry["line_number"] == 2 and
+                        "185.226.94.239" in args):
+                    raise PM2Error("E_APPLY", "mock second rule failure")
+                item = next(row for row in rows
+                            if row["line_number"] == entry["line_number"])
+                item["argv"] = ["-A", entry["chain"], *args]
+                events.append(("replace", entry["line_number"]))
+
+            with (mock.patch.object(nat_editor, "JOURNAL", path),
+                  mock.patch.object(nat_editor, "_snapshot", side_effect=snapshot),
+                  mock.patch.object(nat_editor.os, "geteuid", return_value=0),
+                  mock.patch.object(nat_editor, "_schedule",
+                                    side_effect=lambda _: events.append(("timer", 0))),
+                  mock.patch.object(nat_editor, "_replace", side_effect=replace)):
+                with self.assertRaises(PM2Error):
+                    nat_editor.apply(initial, "185.226.94.239")
+                self.assertEqual(events, [("timer", 0), ("replace", 1),
+                                          ("replace", 1)])
+                self.assertEqual(rows[0]["argv"], initial[0]["argv"])
+                self.assertFalse(path.exists())
+
     def test_schedule_error_never_replaces_foreign_rules(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "edit.json"

@@ -173,10 +173,19 @@ def apply(members, destination, source_port=None):
         raise
     # Journal + running systemd rollback timer exist BEFORE any -R.
     # On partial failures leave the journal and watchdog to repair.
-    for change in changes:
-        if not _matching(_snapshot(), change, change["old"]):
-            raise PM2Error("E_CONFLICT", "NAT rules drifted while editing; watchdog armed")
-        _replace(change, change["new"])
+    try:
+        for change in changes:
+            if not _matching(_snapshot(), change, change["old"]):
+                raise PM2Error("E_CONFLICT", "NAT rules drifted while editing; watchdog armed")
+            _replace(change, change["new"])
+    except Exception:
+        # Restore any already-changed half of a TCP/UDP pair immediately.
+        # If restore fails, retain the journal and armed timer for recovery.
+        try:
+            rollback(ident)
+        except Exception:
+            pass
+        raise
     return {"changed": True, "pending_confirmation": ident,
             "rollback_after_seconds": TIMEOUT}
 
