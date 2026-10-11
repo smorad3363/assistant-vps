@@ -9,6 +9,7 @@ import sys
 import time
 
 from .errors import PM2Error
+from .graph_style import avg_text, rate_text
 
 
 class LiveScreen:
@@ -134,8 +135,10 @@ class LiveScreen:
         if self.interface_name == "ALL":
             # Useful overview, not physical host bandwidth: bridges, veth
             # and tunnels may count the same packet multiple times.
-            return {"interface": "ALL", "rx_mbps": sum(x["rx_mbps"] for x in links),
-                    "tx_mbps": sum(x["tx_mbps"] for x in links)}
+            return (self.last.get("interface_overview") if self.last and
+                    self.last.get("interface_overview") else
+                    {"interface": "ALL", "rx_mbps": sum(x["rx_mbps"] for x in links),
+                     "tx_mbps": sum(x["tx_mbps"] for x in links)})
         return next(x for x in links if x["interface"] == self.interface_name)
 
     def _cycle_interface(self, delta=1):
@@ -187,21 +190,30 @@ class LiveScreen:
     def _panel(self, x, y, width, title, direction, item, interface):
         if width < 27:
             return
+        color = 2 if direction == "rx" else 3  # RX green / TX yellow
         border = "─" * (width - 2)
-        self._write(y, x, "╭" + border + "╮", 1 if direction == "rx" else 2)
+        self._write(y, x, "╭" + border + "╮", 1)
         self._write(y + 1, x, "│" + " " * (width - 2) + "│", 1)
         self._write(y + 2, x, "│" + " " * (width - 2) + "│", 1)
         self._write(y + 3, x, "│" + " " * (width - 2) + "│", 1)
-        self._write(y + 4, x, "╰" + border + "╯", 1 if direction == "rx" else 2)
-        color = 1 if direction == "rx" else 2
+        self._write(y + 4, x, "╰" + border + "╯", 1)
         rate = interface.get("rx_mbps", 0) if direction == "rx" else interface.get("tx_mbps", 0)
         self._write(y + 1, x + 2, f"{title}  ({interface.get('interface', '')})", color, True)
-        self._write(y + 2, x + 2, f"{rate:,.1f} Mbps", color, True)
-        if item:
-            avg = item[direction + "_sum"] / max(1, item["count"])
-            total_gb = item[direction + "_bytes"] / 1e9
-            self._write(y + 3, x + 2,
-                        f"Peak {item[direction + '_peak']:.0f}  Avg {avg:.0f}  Session {total_gb:.2f} GB~", 3)
+        graph = interface.get("graph_60s_" + ("rx" if direction == "rx" else "tx"))
+        if graph:
+            average = interface.get("avg1m_" + direction + "_mbps")
+            coverage = interface.get("coverage_1m_seconds", 0)
+            self._write(y + 2, x + 2,
+                        f"NOW {rate_text(rate)} avg1m:{avg_text(average, coverage)}", color, True)
+            self._write(y + 3, x + 2, self._large_trend(graph, width - 4), color)
+        else:
+            # Older callers without a trace still display their session data.
+            self._write(y + 2, x + 2, f"{rate:,.1f} Mbps", color, True)
+            if item:
+                avg = item[direction + "_sum"] / max(1, item["count"])
+                total_gb = item[direction + "_bytes"] / 1e9
+                self._write(y + 3, x + 2,
+                            f"Peak {item[direction + '_peak']:.0f}  Avg {avg:.0f}  Session {total_gb:.2f} GB~", 3)
 
     @staticmethod
     def _large_trend(value, columns):
@@ -342,7 +354,7 @@ class LiveScreen:
         self._write(9, limit_x, "LIMIT / HOURS", 1, True)
         if trend_x and width - trend_x > 6:
             self._write(9, trend_x, "TREND", 1, True)
-            self._write(10, trend_x, "▲ upload  ▼ download", 3)
+            self._write(10, trend_x, "TX yellow / RX green · 60s", 3)
         self._write(11, 2, "─" * (width - 5), 1)
 
         rows = self._candidate_rows()
@@ -396,9 +408,9 @@ class LiveScreen:
             if trend_x and width - trend_x > 6:
                 length = width - trend_x - 2
                 self._write(y, trend_x, self._large_trend(
-                    row.get("graph_up", ""), length), 2, selected)
+                    row.get("graph_60s_up") or row.get("graph_up", ""), length), 3, selected)
                 self._write(y + 1, trend_x, self._large_trend(
-                    row.get("graph_down", ""), length), 1, selected)
+                    row.get("graph_60s_down") or row.get("graph_down", ""), length), 2, selected)
         if not rows:
             self._write(12, 3, "Waiting for recorded port samples.", 3)
 
@@ -418,17 +430,19 @@ class LiveScreen:
                 self._write(panel_y + 1, 4, "Limit: " + detail[:width - 14],
                             2 if lim and lim["scheduled_now"] else 3 if lim else 0)
                 self._write(panel_y + 2, 4, "▲ UP    " + self._large_trend(
-                    selected_row.get("graph_up"), width - 16), 2)
+                    selected_row.get("graph_60s_up") or selected_row.get("graph_up"), width - 16), 3)
                 self._write(panel_y + 3, 4, "▼ DOWN  " + self._large_trend(
-                    selected_row.get("graph_down"), width - 16), 1)
+                    selected_row.get("graph_60s_down") or selected_row.get("graph_down"), width - 16), 2)
                 self._write(panel_y + 4, 2,
-                            "╰─ Past 10m trend (gaps = missing samples) " +
+                            ("╰─ Last 60s (gaps = missing samples) " if
+                              selected_row.get("graph_60s_up") else
+                              "╰─ Past 10m trend (gaps = missing samples) ") +
                             "─" * max(0, width - 55), 1)
             else:
                 self._write(panel_y + 1, 4, "▲ " + self._large_trend(
-                    selected_row.get("graph_up"), width - 9), 2)
+                    selected_row.get("graph_60s_up") or selected_row.get("graph_up"), width - 9), 3)
                 self._write(panel_y + 2, 4, "▼ " + self._large_trend(
-                    selected_row.get("graph_down"), width - 9), 1)
+                    selected_row.get("graph_60s_down") or selected_row.get("graph_down"), width - 9), 2)
         summary_y = panel_y + detail_height + 1
         if links and nic_slots and summary_y + nic_slots < footer_start:
             self._write(summary_y, 2,

@@ -109,6 +109,9 @@ COMMIT
         histories = {(TID, "tcp", 443): [(100, 2, 1.0, 0.0)]}
         only = port_graph.frame(labels, {}, histories, 100)
         self.assertEqual(len(only["rows"]), 1)
+        self.assertEqual(len(only["rows"][0]["graph_60s_up"]), 60)
+        self.assertEqual(only["rows"][0]["avg1m_up_mbps"], 1.0)
+        self.assertEqual(only["rows"][0]["coverage_1m_seconds"], 2.0)
         self.assertEqual(only["rows"][0]["listen_port"], 443)
         both = port_graph.frame(labels, {}, histories, 100, active_only=False)
         self.assertEqual(len(both["rows"]), 2)
@@ -215,6 +218,10 @@ COMMIT
             parsed = json.loads(output.getvalue())
             self.assertEqual(parsed["window_seconds"], 600)
             self.assertGreater(parsed["rows"][0]["now_up_mbps"], 0)
+            self.assertEqual(len(parsed["rows"][0]["graph_60s_up"]), 60)
+            if parsed["interfaces"]:
+                self.assertIn("interface_overview", parsed)
+                self.assertEqual(len(parsed["interface_overview"]["graph_60s_rx"]), 60)
             self.assertTrue(parsed["refresh_is_read_only"])
 
 

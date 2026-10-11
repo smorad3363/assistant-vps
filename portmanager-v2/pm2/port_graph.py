@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import time
 
-from . import accounting, auto_monitor, config, sampler, transaction, shaping, limit_windows, usage_ledger
+from . import accounting, auto_monitor, config, sampler, transaction, shaping, limit_windows, usage_ledger, graph_style
 from .errors import PM2Error
 from .live_screen import LiveScreen
 
@@ -241,7 +241,7 @@ def saved_auto_labels(db, timestamp):
             for proto, port in db.execute(query, ("auto", cutoff, "auto", cutoff))}
 
 
-def frame(labels, rates, histories, timestamp, top=20, active_only=True):
+def frame(labels, rates, histories, timestamp, top=20, active_only=True, recent_histories=None):
     """Structured graph data, source of truth for terminal or JSON output."""
     result = []
     for key, name in labels.items():
@@ -250,6 +250,9 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
         avgs = {period: weighted(data, timestamp, seconds)
                 for period, seconds in PERIODS.items()}
         recent = rates.get(key, {"up": 0.0, "down": 0.0})
+        minute = graph_style.summarize(
+            recent_histories.get(key, []) if recent_histories is not None else data,
+            timestamp)
         # Active means transferred bytes during the last rolling 10m, not
         # merely an open TCP listener/advertised port.
         moving = any((up > 0 or down > 0) and end > timestamp - WINDOW
@@ -273,6 +276,11 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True):
             },
             "graph_up": sparkline(data, timestamp, "up"),
             "graph_down": sparkline(data, timestamp, "down"),
+            "graph_60s_up": minute["graph_up"],
+            "graph_60s_down": minute["graph_down"],
+            "avg1m_up_mbps": minute["up_mbps"],
+            "avg1m_down_mbps": minute["down_mbps"],
+            "coverage_1m_seconds": minute["coverage_seconds"],
         })
     result.sort(key=lambda x: (-((x["avg10m_up_mbps"] or 0) +
                                       (x["avg10m_down_mbps"] or 0)),
@@ -318,13 +326,19 @@ def render(data, requested, effective, rules):
           + f"  │  {rules} counter rules")
     links = data.get("interfaces", [])
     if links:
-        for row in links[:2]:
-            print(f"  {c('96', row['interface'][:14]):14}  "
-                  f"{c('92', '↑')} {row['tx_mbps']:8.1f} Mb/s   "
-                  f"{c('94', '↓')} {row['rx_mbps']:8.1f} Mb/s  "
-                  + c("90", "(whole interface)"))
+        print(c("96", "  NETWORK · last 60 seconds · RX green / TX yellow"))
+        for link in links[:2]:
+            name = link["interface"][:14]
+            coverage = link.get("coverage_1m_seconds", 0)
+            print(f"  {c('96;1', name)}  RX {c('92;1', graph_style.rate_text(link['rx_mbps']))}"
+                  f"  avg1m:{graph_style.avg_text(link.get('avg1m_rx_mbps'), coverage)} Mbit/s")
+            print("    " + c("92", link.get("graph_60s_rx", "")))
+            print(f"  {' ' * len(name)}  TX {c('93;1', graph_style.rate_text(link['tx_mbps']))}"
+                  f"  avg1m:{graph_style.avg_text(link.get('avg1m_tx_mbps'), coverage)} Mbit/s"
+                  f"  [{coverage:g}s/60s]")
+            print("    " + c("93", link.get("graph_60s_tx", "")))
     print(c("90", "  " + "─" * (width - 4)))
-    print(c("90", "  Ranked by measured 10m usage | avg10m / 1h / 8h / 24h"))
+    print(c("90", "  PORTS · now + 1m average + last 60s | longer averages retained"))
     if not data["rows"]:
         count = data.get("auto_discovered_ports", 0)
         if count:
@@ -332,35 +346,29 @@ def render(data, requested, effective, rules):
                          "waiting for attributed IPv4 traffic..."))
         else:
             print(c("93", "  No per-port counters. Interface traffic above is still real."))
-            print("  Monitor discovers listening TCP/UDP ports automatically.")
         print(c("90", "  Whole-interface traffic cannot honestly be attributed to a port."))
     else:
         for row in data["rows"]:
             port = str(row["listen_port"]) if row["listen_port"] is not None else "ALL"
-            up = row["now_up_mbps"]
-            down = row["now_down_mbps"]
-            avg_u = row["avg10m_up_mbps"]
-            avg_d = row["avg10m_down_mbps"]
-            name = (str(row["name"])[:16] + " ") if row["name"] else ""
-            print(f"  {c('97;1', row['protocol'].upper() + ':' + port)} "
-                  f"{c('90', name)} "
-                  f"↑ {c('92;1', f'{up:.1f}')}  ↓ {c('94;1', f'{down:.1f}')} Mb/s"
-                  f"  [10m avg ↑ {avg_u:.1f} ↓ {avg_d:.1f}]"
-                  if avg_u is not None and avg_d is not None else
-                  f"  {c('97;1', row['protocol'].upper() + ':' + port)}  "
-                  f"↑ {up:.1f} ↓ {down:.1f} Mb/s (warming up)")
-            stats = row.get("averages", {})
+            name = str(row.get("name") or "")[:16]
+            coverage = row.get("coverage_1m_seconds", 0)
+            print(f"  {c('97;1', row['protocol'].upper() + ':' + port)} {c('90', name)}")
+            print("    RX " + c("92;1", graph_style.rate_text(row["now_down_mbps"])) +
+                  "  avg1m:" + graph_style.avg_text(row.get("avg1m_down_mbps"), coverage) + " Mbit/s")
+            print("    " + c("92", row.get("graph_60s_down", "")))
+            print("    TX " + c("93;1", graph_style.rate_text(row["now_up_mbps"])) +
+                  "  avg1m:" + graph_style.avg_text(row.get("avg1m_up_mbps"), coverage) +
+                  f" Mbit/s  [{coverage:g}s/60s]")
+            print("    " + c("93", row.get("graph_60s_up", "")))
             parts = []
             for period in ("10m", "1h", "8h", "24h"):
-                item = stats.get(period, {})
-                mean = (item.get("up_mbps") or 0) + (item.get("down_mbps") or 0)
-                coverage = item.get("coverage_seconds", 0)
-                parts.append(f"{period}: {mean:.1f}" if coverage else f"{period}: --")
-            print("    " + "  ".join(parts) + " Mb/s")
-            print(f"    {c('92', '↑')} {c('92', row['graph_up'])}")
-            print(f"    {c('94', '↓')} {c('94', row['graph_down'])}")
+                stat = row.get("averages", {}).get(period, {})
+                both = (stat.get("up_mbps") or 0) + (stat.get("down_mbps") or 0)
+                parts.append(f"{period}:{both:.1f}" if stat.get("coverage_seconds") else
+                             f"{period}:--")
+            print("    " + "  ".join(parts) + " Mbit/s (historic)")
     print(c("90", "  " + "─" * (width - 4)))
-    print(c("90", "  Graph = 10-minute rolling average  •  Ctrl+C returns to menu"))
+    print(c("90", "  NOW = sampled rate · avg1m* = partial minute · spaces = missing data"))
     sys.stdout.flush()
 
 
@@ -428,6 +436,8 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                                                      include_probe=not history_active,
                                                      include_history=history_active)
                 net_before = auto_monitor.interface_counters()
+                short_ports = {}
+                short_nics = {}
                 sample_cost = time.monotonic() - t0
                 interval = refresh_interval(refresh, len(before), sample_cost)
                 next_reload = time.time() + 30
@@ -463,6 +473,16 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         effective = refresh_interval(refresh, len(after), t2 - t1)
                         now = time.time()
                         rates = deltas(before, after, elapsed, labels)
+                        # Session-local high-resolution history; no additional
+                        # iptables reads or fabricated 1-second measurements.
+                        for key, speed in rates.items():
+                            short_ports.setdefault(key, []).append(
+                                (now, elapsed, speed["up"], speed["down"]))
+                        for key in tuple(short_ports):
+                            short_ports[key] = [point for point in short_ports[key]
+                                                if point[0] > now - 70]
+                            if not short_ports[key]:
+                                del short_ports[key]
                         # If the background timer started after this Live
                         # screen opened, avoid duplicate auto-port samples.
                         if not history_active and not history_collector.healthy(db):
@@ -470,7 +490,8 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                         if use_auto:
                             labels.update(saved_auto_labels(db, now))
                         result = frame(labels, rates, history(db, now, labels),
-                                       now, top=top, active_only=active_only)
+                                       now, top=top, active_only=active_only,
+                                       recent_histories=short_ports)
                         if now >= next_volume_reload:
                             try:
                                 volume_windows = usage_ledger.live_window_volumes(db, now)
@@ -484,6 +505,31 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                             row["volumes"] = volume_windows.get((proto, port), {})
                         result["interfaces"] = auto_monitor.interface_rates(
                             net_before, net_after, elapsed)
+                        # ALL is a sum of interface counters, not unique host traffic.
+                        nic_rows = list(result["interfaces"])
+                        if nic_rows:
+                            nic_rows.append({
+                                "interface": "ALL",
+                                "rx_mbps": sum(n["rx_mbps"] for n in nic_rows),
+                                "tx_mbps": sum(n["tx_mbps"] for n in nic_rows)})
+                        for nic in nic_rows:
+                            name = nic["interface"]
+                            short_nics.setdefault(name, []).append(
+                                (now, elapsed, nic["tx_mbps"], nic["rx_mbps"]))
+                            short_nics[name] = [point for point in short_nics[name]
+                                                if point[0] > now - 70]
+                            minute = graph_style.summarize(short_nics[name], now)
+                            nic.update({
+                                "graph_60s_rx": minute["graph_down"],
+                                "graph_60s_tx": minute["graph_up"],
+                                "avg1m_rx_mbps": minute["down_mbps"],
+                                "avg1m_tx_mbps": minute["up_mbps"],
+                                "coverage_1m_seconds": minute["coverage_seconds"]})
+                            if name == "ALL":
+                                result["interface_overview"] = nic
+                        for name in tuple(short_nics):
+                            if name not in {n["interface"] for n in nic_rows}:
+                                del short_nics[name]
                         # Loaded read-only; refresh policies at most twice per
                         # minute and re-evaluate clock windows on every frame.
                         if now >= next_limit_reload:
