@@ -22,59 +22,105 @@ def ipt(table, *arguments):
                timeout=12)
 
 
-def compile_rules(config):
-    """Return pure argv list for each exclusively owned chain."""
+def compile_rules(config, interface_ips=None):
+    """Pure V2-owned rules. Optionally expand a NIC to its assigned IPv4s.
+
+    Production apply supplies verified interface addresses from discovery.audit.
+    When omitted (e.g. offline unit previews), keep the per-anchor projection.
+    Every expanded DNAT has its own conntrack original-destination match in
+    FORWARD and POSTROUTING, so no broad MASQUERADE rewrites foreign traffic.
+    """
     rules = {chain: [] for _, chain in ORDER}
     active = sorted((t for t in config["tunnels"] if t["enabled"]),
                     key=lambda t: (t["mode"] != "ports", t["id"]))
     for t in active:
-        tid, listen, target, iface = (t[k] for k in (
+        tid, anchor, target, iface = (t[k] for k in (
             "id", "listen_ip", "target_ip", "interface"))
-        for proto in t["protocols"]:
-            prefix = ["-i", iface, "-d", listen, "-p", proto]
-            if t["mode"] == "ports":
-                targets = [(m["listen_port"], m["target_port"]) for m in t["mapping"]]
-            else:
-                for exclude in t["exclude"]:
+        if interface_ips is None:
+            bound_addresses = [anchor]
+        else:
+            bound_addresses = interface_ips.get(iface, [])
+            if anchor not in bound_addresses or not bound_addresses:
+                raise PM2Error("E_CONFLICT", "Assigned ingress IPv4s changed during apply",
+                               {"interface": iface, "ip": anchor})
+        for listen in bound_addresses:
+            for proto in t["protocols"]:
+                prefix = ["-i", iface, "-d", listen, "-p", proto]
+                if t["mode"] == "ports":
+                    targets = [(m["listen_port"], m["target_port"])
+                               for m in t["mapping"]]
+                else:
+                    for exclude in t["exclude"]:
+                        rules["PM2_NAT_PRE"].append([
+                            *prefix, "--dport", str(exclude), "-m", "comment",
+                            "--comment", f"pm2:{tid}:exclude", "-j", "RETURN"
+                        ])
+                    targets = [(None, None)]
+                for listenport, targetport in targets:
+                    to = target if targetport is None else f"{target}:{targetport}"
+                    orig = ["-m", "conntrack", "--ctorigdst", listen]
+                    if listenport is not None:
+                        orig.extend(["--ctorigdstport", str(listenport)])
+                    dnat = list(prefix)
+                    if listenport is not None:
+                        dnat += ["--dport", str(listenport)]
                     rules["PM2_NAT_PRE"].append([
-                        *prefix, "--dport", str(exclude), "-m", "comment",
-                        "--comment", f"pm2:{tid}:exclude", "-j", "RETURN"
+                        *dnat, "-m", "comment", "--comment",
+                        f"pm2:{tid}:dnat", "-j", "DNAT", "--to-destination", to
                     ])
-                targets = [(None, None)]
-            for listenport, targetport in targets:
-                to = target if targetport is None else f"{target}:{targetport}"
-                orig = ["-m", "conntrack", "--ctorigdst", listen]
-                if listenport is not None:
-                    orig.extend(["--ctorigdstport", str(listenport)])
-                dnat = list(prefix)
-                if listenport is not None:
-                    dnat += ["--dport", str(listenport)]
-                rules["PM2_NAT_PRE"].append([
-                    *dnat, "-m", "comment", "--comment",
-                    f"pm2:{tid}:dnat", "-j", "DNAT", "--to-destination", to
-                ])
-                # ORIGINAL conntrack flow only, NAT to actual route-selected IP.
-                rules["PM2_NAT_POST"].append([
-                    "-d", target, "-p", proto, *orig, "--ctdir", "ORIGINAL",
-                    "-m", "comment", "--comment", f"pm2:{tid}:snat",
-                    "-j", "MASQUERADE"
-                ])
-                rules["PM2_FORWARD"].append([
-                    "-d", target, "-p", proto, *orig, "--ctdir", "ORIGINAL",
-                    "-m", "comment", "--comment", f"pm2:{tid}:forward",
-                    "-j", "ACCEPT"
-                ])
-                rules["PM2_FORWARD"].append([
-                    "-s", target, "-p", proto, *orig, "--ctdir", "REPLY",
-                    "-m", "comment", "--comment", f"pm2:{tid}:reply",
-                    "-j", "ACCEPT"
-                ])
-                for direction in ("ORIGINAL", "REPLY"):
-                    rules["PM2_ACCOUNT"].append([
-                        "-p", proto, *orig, "--ctdir", direction, "-m", "comment",
-                        "--comment", f"pm2:{tid}:{'up' if direction == 'ORIGINAL' else 'down'}"
-                    ])  # no jump: counter-only rule
+                    rules["PM2_NAT_POST"].append([
+                        "-d", target, "-p", proto, *orig, "--ctdir", "ORIGINAL",
+                        "-m", "comment", "--comment", f"pm2:{tid}:snat",
+                        "-j", "MASQUERADE"
+                    ])
+                    rules["PM2_FORWARD"].append([
+                        "-d", target, "-p", proto, *orig, "--ctdir", "ORIGINAL",
+                        "-m", "comment", "--comment", f"pm2:{tid}:forward",
+                        "-j", "ACCEPT"
+                    ])
+                    rules["PM2_FORWARD"].append([
+                        "-s", target, "-p", proto, *orig, "--ctdir", "REPLY",
+                        "-m", "comment", "--comment", f"pm2:{tid}:reply",
+                        "-j", "ACCEPT"
+                    ])
+                    for direction in ("ORIGINAL", "REPLY"):
+                        rules["PM2_ACCOUNT"].append([
+                            "-p", proto, *orig, "--ctdir", direction,
+                            "-m", "comment", "--comment",
+                            f"pm2:{tid}:{'up' if direction == 'ORIGINAL' else 'down'}"
+                        ])
     return rules
+
+def _kernel_signature(args):
+    """Compare V2 intent despite iptables -S normalizing /32 and -m tcp."""
+    flags = ("-i", "-o", "-d", "-s", "-p", "--dport", "--ctorigdst",
+             "--ctorigdstport", "--ctdir", "--to-destination",
+             "--comment", "-j")
+    result = []
+    for key in flags:
+        if key not in args:
+            continue
+        position = args.index(key)
+        if position + 1 >= len(args):
+            return None
+        value = args[position + 1]
+        if key in ("-d", "-s", "--ctorigdst") and value.endswith("/32"):
+            value = value[:-3]
+        result.append((key, value))
+    return tuple(result)
+
+
+def matches_compiled_inventory(compiled, inventory):
+    """No-op when every owned chain already has the expected actual rules."""
+    for table, chain in ORDER:
+        rows = inventory.get(table, {}).get(chain, [])
+        prepared = compiled[chain]
+        if len(rows) != len(prepared):
+            return False
+        if [_kernel_signature(row) for row in rows] != [
+                _kernel_signature(row) for row in prepared]:
+            return False
+    return True
 
 
 def snapshot():

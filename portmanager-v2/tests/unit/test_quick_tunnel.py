@@ -59,7 +59,7 @@ class QuickTunnelTests(unittest.TestCase):
               redirect_stdout(io.StringIO()) as output):
             simple_ui._tunnel_wizard()
         self.assertEqual(len(recorded), 2)
-        self.assertIn("Source: eth0 / 77.90.10.180", output.getvalue())
+        self.assertIn("Network: eth0 (all assigned IPv4s", output.getvalue())
         op, args = mutate.call_args.args
         self.assertEqual(op, "create")
         self.assertEqual(args[args.index("--name") + 1],

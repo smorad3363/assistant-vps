@@ -12,12 +12,18 @@ Port syntax: `5555` means source 5555 → destination 5555, while
 commas, e.g. `5555,443:8443,80:8080`. Whitespace around commas is
 accepted. Duplicate source ports and invalid ports are rejected.
 
-TCP + UDP forwarding is the default. Port Manager chooses an actually
-assigned IPv4/interface using host discovery and preflight checks; it does
-not ask for an arbitrary source address. This remains **one interface and
-one source IPv4 per tunnel**, not simultaneous bindings to every server
-address. Multiple-IP bindings would require a separate schema/firewall
-change.
+TCP + UDP forwarding is the default. Port Manager chooses an
+external interface and a verified IPv4 anchor. **Each tunnel forwards on
+every eligible local IPv4 assigned to that interface**, including secondary
+addresses on eth0. It does not capture unrelated interfaces or nonlocal
+routed destinations.
+
+Production preflight verifies all interface IPs and checks listeners/NAT
+collisions before installing per-IP DNAT, FORWARD and MASQUERADE rules with
+their own conntrack original-destination selectors. Foreign firewall rules
+are not rewritten. Existing V2 configs remain unchanged; after updating,
+run `sudo portmanager2 tunnel apply` to reconcile older single-IP owned
+kernel rules into multi-IP coverage.
 
 The rule is automatically named `port-<first-source-port>-to-<target-ip>`;
 when the name already exists, an increasing numeric suffix is used.
@@ -27,7 +33,7 @@ non-ASCII characters in unrelated context.
 For existing connections, the name and validated source are preserved.
 The destination and compact port mapping are prefilled. Explicit protocol
 selection is only offered when editing a managed TCP+UDP pair, and the
-normal apply confirmation and high-risk 120s rollback remain in place.
+120-second rollback for high-risk changes is still enforced.
 
 For **all-except**, the destination IPv4 and excluded ports are requested;
 detected SSH/admin exclusions and timed rollback remain mandatory.

@@ -59,10 +59,13 @@ def apply(candidate, allow_protected=False):
     # A confirmed all-except configuration must be re-checkable/idempotent.
     # The verified owned inventory still enforces actual kernel safety.
     report = preflight(candidate, runtime, allow_protected=allow_protected or already_committed)
-    if already_committed:
-        return {"changed": False, "generation": original["generation"], **report}
+    # Reconcile legacy single-address rules to the complete set of verified
+    # addresses even when the saved tunnel configuration itself is unchanged.
+    # Keep the preflight and inventory checks before changing any rules.
     previous = runtime.get("firewall", {})
-    compiled = firewall.compile_rules(candidate)
+    compiled = firewall.compile_rules(candidate, report.get("interface_ips"))
+    if already_committed and firewall.matches_compiled_inventory(compiled, previous):
+        return {"changed": False, "generation": original["generation"], **report}
     journal = {"product": "portmanager2", "original_generation": original["generation"],
                "desired_generation": candidate["generation"], "previous_firewall": previous}
     config.atomic_json(PENDING, journal)

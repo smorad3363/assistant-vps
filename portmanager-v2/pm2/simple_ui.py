@@ -212,7 +212,7 @@ def _tunnel_wizard(old=None, all_ports=False):
     name = old["name"] if old else _auto_tunnel_name(
         target, mapping, config.load(transaction.CONFIG)["tunnels"])
     argv += ["--name", name]
-    print(_paint("90", f"  Source: {device} / {listen_ip} (detected on this server)"))
+    print(_paint("90", f"  Network: {device} (all assigned IPv4s; anchor {listen_ip})"))
     print(_paint("90", f"  Saved as: {name}  |  TCP + UDP by default"))
 
     if old and set(old["protocols"]) == {"tcp", "udp"}:
