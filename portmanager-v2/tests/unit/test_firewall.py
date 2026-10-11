@@ -51,6 +51,68 @@ class FirewallTests(unittest.TestCase):
         self.assertEqual(len(compiled["PM2_NAT_POST"]), 2)
         self.assertEqual(len(compiled["PM2_FORWARD"]), 4)
 
+    def test_host_secondary_ipv4s_are_forwarded_with_original_dst_snat(self):
+        tunnel = validation.make_tunnel(
+            name="port-8086-to-2-29-39-22", listen_ip="77.90.10.180",
+            interface="eth0", mode="ports", protocol="tcp,udp",
+            mapping="8086", target_ip="2.29.39.22")
+        cfg = {"tunnels": [tunnel]}
+        ips = {"eth0": ["77.90.10.179", "77.90.10.180", "77.90.11.100"]}
+        compiled = firewall.compile_rules(cfg, ips)
+        self.assertEqual(len(compiled["PM2_NAT_PRE"]), 6)
+        self.assertEqual(len(compiled["PM2_NAT_POST"]), 6)
+        self.assertEqual(len(compiled["PM2_FORWARD"]), 12)
+        self.assertEqual(len(compiled["PM2_ACCOUNT"]), 12)
+        for address in ips["eth0"]:
+            for proto in ("tcp", "udp"):
+                dnat = [row for row in compiled["PM2_NAT_PRE"]
+                        if row[row.index("-d") + 1] == address
+                        and row[row.index("-p") + 1] == proto]
+                self.assertEqual(len(dnat), 1)
+                self.assertEqual(dnat[0][dnat[0].index("--dport") + 1], "8086")
+                self.assertEqual(dnat[0][dnat[0].index("--to-destination") + 1],
+                                 "2.29.39.22:8086")
+                # Never SNAT every connection to 2.29.39.22, only V2's
+                # original destination on the same assigned source IP.
+                post = [row for row in compiled["PM2_NAT_POST"]
+                        if "--ctorigdst" in row
+                        and row[row.index("--ctorigdst") + 1] == address
+                        and row[row.index("-p") + 1] == proto]
+                self.assertEqual(len(post), 1)
+                self.assertIn("--ctorigdstport", post[0])
+
+    def test_drifted_interface_ip_is_rejected_before_compile(self):
+        with self.assertRaises(PM2Error):
+            firewall.compile_rules(self.cfg, {"eth0": ["192.0.2.12"]})
+
+    def test_runtime_matches_kernel_normalized_iptables_save(self):
+        cfg = {"tunnels": [validation.make_tunnel(
+            name="port-8086", listen_ip="77.90.10.180", interface="eth0",
+            mode="ports", protocol="tcp,udp", mapping="8086",
+            target_ip="2.29.39.22")]}
+        compiled = firewall.compile_rules(cfg, {
+            "eth0": ["77.90.10.179", "77.90.10.180"]})
+        inventory = {}
+        for table, chains in firewall.CHAINS.items():
+            inventory[table] = {}
+            for chain in chains:
+                rows = []
+                for original in compiled[chain]:
+                    row = list(original)
+                    # iptables -S expands IPv4 /32 and inserts protocol matcher.
+                    for option in ("-d", "-s"):
+                        if option in row and "/" not in row[row.index(option) + 1]:
+                            row[row.index(option) + 1] += "/32"
+                    if "--dport" in row:
+                        proto = row[row.index("-p") + 1]
+                        p = row.index("-p")
+                        row[p + 2:p + 2] = ["-m", proto]
+                    rows.append(row)
+                inventory[table][chain] = rows
+        self.assertTrue(firewall.matches_compiled_inventory(compiled, inventory))
+        inventory["nat"]["PM2_NAT_PRE"].pop()
+        self.assertFalse(firewall.matches_compiled_inventory(compiled, inventory))
+
     def test_disable_outputs_no_kernel_rules(self):
         self.t["enabled"] = False
         self.assertFalse(any(firewall.compile_rules(self.cfg).values()))

@@ -84,12 +84,47 @@ def find_conflicts(snapshot, tunnels):
     return conflicts
 
 
-def blocking_conflicts(snapshot, tunnels):
-    """Actual NAT interception ahead of PM2's PREROUTING hook, not mere overlap.
+def _same_destination_forward(args, tunnel):
+    """A later DDS-like DNAT may coexist if its forwarding is identical.
 
-    When V2 has no hook yet, its installer will insert it at PREROUTING #1,
-    before existing NAT rules. Once installed, later broader DNAT rules are
-    legitimate fallback matches for other local destination addresses.
+    Different destinations/port remaps on a different host IPv4 must not be
+    silently stolen when an existing V2 port expands to all assigned IPv4s.
+    """
+    if "!" in args or _argument(args, ("-j", "--jump")) != "DNAT":
+        return False
+    dest = _argument(args, ("--to-destination",))
+    if not dest:
+        return False
+    if ":" in dest:
+        address, port_text = dest.rsplit(":", 1)
+        if not port_text.isdecimal():
+            return False
+        target_port = int(port_text)
+    else:
+        address, target_port = dest, None
+    if address != tunnel["target_ip"]:
+        return False
+    if tunnel["mode"] == "all-except":
+        return target_port is None
+    selected = _argument(args, PORT_FLAGS)
+    intervals = ([_range(x) for x in selected.split(",")]
+                 if selected else [(1, 65535)])
+    if any(r is None for r in intervals):
+        return False
+    matching = [m for m in tunnel["mapping"]
+                if any(lo <= m["listen_port"] <= hi for lo, hi in intervals)]
+    return bool(matching) and all(
+        m["target_port"] == (target_port if target_port is not None
+                              else m["listen_port"]) for m in matching)
+
+
+def blocking_conflicts(snapshot, tunnels):
+    """Respect NAT hook order and prevent shadowing different existing routes.
+
+    The V2 hook is inserted before other PREROUTING rules. Earlier foreign
+    DNAT rules can intercept V2; later ones may be shadowed by multi-IP V2.
+    Later identical DDS-style mappings are allowed, but different targets
+    must be flagged before mutating the kernel.
     """
     entries = []
     by_chain = {}
@@ -107,33 +142,31 @@ def blocking_conflicts(snapshot, tunnels):
             entries.append((line, args))
     hook_at = next((i for i, (_, args) in enumerate(entries)
                     if _argument(args, ("-j", "--jump")) == "PM2_NAT_PRE"),
-                   None)
-    if hook_at is None:
-        # Creating a tunnel prepends PM2's hook to the NAT PREROUTING chain.
-        return []
+                   0)
     risky = []
-    visited = set()
-    def visit(line, args, tunnel, depth=0):
-        if depth > 8:
+
+    def intercepts(args, tunnel, before, seen, depth=0):
+        if depth > 8 or "!" in args:
             return True
         if not _matches(args, tunnel):
             return False
         target = _argument(args, ("-j", "--jump"))
         if target in TARGETS:
-            return True
+            return before or not _same_destination_forward(args, tunnel)
         if target in by_chain and target != "PM2_NAT_PRE":
-            if target in visited:
-                return True  # Unknown loop; don't assume safe ordering.
-            visited.add(target)
-            try:
-                return any(visit(child_line, child, tunnel, depth + 1)
-                           for child_line, child in by_chain[target])
-            finally:
-                visited.remove(target)
+            if target in seen:
+                return True
+            next_seen = seen | {target}
+            return any(intercepts(child, tunnel, before, next_seen, depth+1)
+                       for _, child in by_chain[target])
         return False
-    for line, args in entries[:hook_at]:
+
+    for i, (line, args) in enumerate(entries):
+        if _argument(args, ("-j", "--jump")) == "PM2_NAT_PRE":
+            continue
+        before = i < hook_at
         for tunnel in tunnels:
-            if tunnel.get("enabled") and visit(line, args, tunnel):
+            if tunnel.get("enabled") and intercepts(args, tunnel, before, set()):
                 risky.append({"rule": line[:500], "tunnel": tunnel["name"]})
                 break
     return risky

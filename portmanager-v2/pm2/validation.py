@@ -129,7 +129,9 @@ def make_tunnel(*, name, listen_ip, interface, protocol, mode,
 
 def collides(left, right):
     """Overlap of original listen tuples; all-except accounts for exceptions."""
-    if left["interface"] != right["interface"] or left["listen_ip"] != right["listen_ip"]:
+    # Port forwarding on an interface covers every assigned local IPv4.
+    # Distinct anchor IPv4s on the same NIC no longer isolate two tunnels.
+    if left["interface"] != right["interface"]:
         return False
     if not set(left["protocols"]) & set(right["protocols"]):
         return False

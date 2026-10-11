@@ -1,5 +1,6 @@
 """Conservative read-only Linux IPv4 preflight."""
 import json
+import ipaddress
 import re
 import shutil
 import subprocess
@@ -52,8 +53,37 @@ def audit(tunnels):
                if a.get("family") == "inet"}
         interfaces[item["ifname"]] = (item.get("flags", []), ips)
         all_ips |= ips
+    # A legacy V2 listen_ip is the interface anchor, not the only address
+    # receiving public port traffic. The reference tunnel accepts ingress to
+    # all IPv4 addresses assigned to the selected external interface.
+    # Expand strictly to actual, routable host addresses; never target
+    # arbitrary forwarded traffic or addresses on other NICs.
+    interface_ips = {}
+    for tunnel in (item for item in tunnels if item["enabled"]):
+        flags, assigned = interfaces.get(tunnel["interface"], ([], set()))
+        if "UP" not in flags or tunnel["listen_ip"] not in assigned:
+            raise PM2Error("E_CONFLICT", "Listening interface/IPv4 is not UP",
+                           {"interface": tunnel["interface"], "ip": tunnel["listen_ip"]})
+        accepted = []
+        for value in assigned:
+            address = ipaddress.IPv4Address(value)
+            if (not address.is_loopback and not address.is_link_local and
+                    not address.is_unspecified and not address.is_multicast and
+                    not address.is_reserved):
+                accepted.append(value)
+        addresses = sorted(accepted, key=ipaddress.IPv4Address)
+        if not addresses or len(addresses) > 32:
+            raise PM2Error("E_CONFLICT", "Invalid or too many IPv4s on ingress interface",
+                           {"interface": tunnel["interface"], "count": len(addresses)})
+        interface_ips[tunnel["interface"]] = addresses
+
+    effective_tunnels = [
+        dict(t, listen_ip=address)
+        for t in tunnels if t["enabled"]
+        for address in interface_ips[t["interface"]]
+    ]
     foreign_nat = run(["iptables-save", "-t", "nat"])
-    collisions = nat_conflicts.blocking_conflicts(foreign_nat, tunnels)
+    collisions = nat_conflicts.blocking_conflicts(foreign_nat, effective_tunnels)
     if collisions:
         raise PM2Error(
             "E_CONFLICT",
@@ -75,10 +105,6 @@ def audit(tunnels):
         except ValueError:
             continue
     for tunnel in (t for t in tunnels if t["enabled"]):
-        flags, ips = interfaces.get(tunnel["interface"], ([], set()))
-        if "UP" not in flags or tunnel["listen_ip"] not in ips:
-            raise PM2Error("E_CONFLICT", "Listening interface/IPv4 is not UP",
-                           {"interface": tunnel["interface"], "ip": tunnel["listen_ip"]})
         if tunnel["target_ip"] in all_ips:
             raise PM2Error("E_CONFLICT", "Target IP belongs to local host")
         route = json.loads(run(["ip", "-j", "-4", "route", "get", tunnel["target_ip"]]))
@@ -88,13 +114,14 @@ def audit(tunnels):
                  else None)
         for proto, ip, number in listening:
             if proto not in tunnel["protocols"] or ip not in (
-                    "*", "0.0.0.0", "::", tunnel["listen_ip"]):
+                    "*", "0.0.0.0", "::", *interface_ips[tunnel["interface"]]):
                 continue
             conflict = number in ports if ports is not None else number not in tunnel["exclude"]
             if conflict:
                 raise PM2Error("E_CONFLICT", "Local listening socket would be intercepted",
                                {"protocol": proto, "port": number})
-    return {"backend": backend(), "listeners_checked": len(listening)}
+    return {"backend": backend(), "listeners_checked": len(listening),
+            "interface_ips": interface_ips}
 
 
 def forwarding_enabled():

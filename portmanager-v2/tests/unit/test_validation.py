@@ -50,6 +50,22 @@ class TunnelTests(unittest.TestCase):
             validate_collection([a, b])
         self.assertEqual(error.exception.code, "E_CONFLICT")
 
+    def test_same_nic_secondary_anchor_no_longer_allows_duplicate_ports(self):
+        # Runtime uses every actual IPv4 on eth0, regardless of which one
+        # the legacy V2 configuration stored as its interface anchor.
+        a = self.t()
+        b = self.t(name="otherA", listen_ip="192.0.2.12",
+                   mapping="443:9443")
+        self.assertTrue(collides(a, b))
+        with self.assertRaises(PM2Error):
+            validate_collection([a, b])
+
+    def test_distinct_nics_can_hold_same_port(self):
+        a = self.t()
+        b = self.t(name="otherA", interface="eth1",
+                   listen_ip="192.0.2.12", mapping="443:9443")
+        self.assertFalse(collides(a, b))
+
     def test_case_insensitive_names_unique(self):
         a = self.t()
         b = self.t(name="RELAYA", mapping="2222:2222")

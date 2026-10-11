@@ -49,7 +49,8 @@ class NatConflictTests(unittest.TestCase):
         self.assertTrue(nat_conflicts.find_conflicts(negated, [self.tunnel()]))
 
     def test_existing_broad_fallback_after_pm2_hook_is_legal(self):
-        t = self.tunnel(mapping="8086:8086", listen_ip="77.90.10.180")
+        t = self.tunnel(mapping="8086:8086", listen_ip="77.90.10.180",
+                        target_ip="2.29.39.22")
         snapshot = (
             "*nat\n"
             "-A PREROUTING -m comment --comment pm2:owned-hook -j PM2_NAT_PRE\n"
@@ -62,11 +63,11 @@ class NatConflictTests(unittest.TestCase):
         # rule can still forward the same port on other assigned IPv4s.
         self.assertEqual(nat_conflicts.blocking_conflicts(snapshot, [t]), [])
 
-    def test_first_v2_install_prepends_hook_before_older_rules(self):
+    def test_first_v2_install_allows_identical_older_forward(self):
         t = self.tunnel()
         existing = (
             "*nat\n-A PREROUTING -p tcp --dport 8080 "
-            "-j DNAT --to-destination 198.51.100.42\nCOMMIT\n")
+            "-j DNAT --to-destination 198.51.100.5:8080\nCOMMIT\n")
         self.assertEqual(nat_conflicts.blocking_conflicts(existing, [t]), [])
 
     def test_foreign_rule_ahead_of_existing_hook_blocks(self):
@@ -100,6 +101,39 @@ class NatConflictTests(unittest.TestCase):
             "-A CUSTOM_TUNNEL -p tcp --dport 8080 -j DNAT "
             "--to-destination 198.51.100.42\n"
             "COMMIT\n")
+        self.assertTrue(nat_conflicts.blocking_conflicts(snapshot, [t]))
+
+    def test_different_foreign_destination_after_hook_would_be_shadowed(self):
+        t = self.tunnel(listen_ip="77.90.10.179", mapping="8086:8086",
+                        target_ip="2.29.39.22")
+        snapshot = ("*nat\n-A PREROUTING -j PM2_NAT_PRE\n"
+                    "-A PREROUTING -p tcp --dport 8086 "
+                    "-j DNAT --to-destination 198.51.100.8\nCOMMIT\n")
+        self.assertTrue(nat_conflicts.blocking_conflicts(snapshot, [t]))
+
+    def test_identical_dds_forward_after_hook_is_allowed(self):
+        t = self.tunnel(listen_ip="77.90.10.179", mapping="8086:8086",
+                        target_ip="2.29.39.22")
+        snapshot = ("*nat\n-A PREROUTING -j PM2_NAT_PRE\n"
+                    "-A PREROUTING -p tcp -m multiport --dports 8086 "
+                    "-j DNAT --to-destination 2.29.39.22\n"
+                    "-A PREROUTING -p udp -m multiport --dports 8086 "
+                    "-j DNAT --to-destination 2.29.39.22\nCOMMIT\n")
+        self.assertEqual(nat_conflicts.blocking_conflicts(snapshot, [t]), [])
+
+    def test_different_destination_port_is_not_same_forwarding(self):
+        t = self.tunnel(listen_ip="77.90.10.179", mapping="8086:6666",
+                        target_ip="2.29.39.22")
+        snapshot = ("*nat\n-A PREROUTING -j PM2_NAT_PRE\n"
+                    "-A PREROUTING -p tcp --dport 8086 "
+                    "-j DNAT --to-destination 2.29.39.22\nCOMMIT\n")
+        self.assertTrue(nat_conflicts.blocking_conflicts(snapshot, [t]))
+
+    def test_first_install_checks_existing_different_target(self):
+        t = self.tunnel(listen_ip="77.90.10.179", mapping="8086:8086",
+                        target_ip="2.29.39.22")
+        snapshot = ("*nat\n-A PREROUTING -p tcp --dport 8086 "
+                    "-j DNAT --to-destination 198.51.100.8\nCOMMIT\n")
         self.assertTrue(nat_conflicts.blocking_conflicts(snapshot, [t]))
 
     def test_owned_and_disabled_rules_not_considered(self):
