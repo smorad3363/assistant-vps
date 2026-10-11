@@ -58,10 +58,14 @@ def mappings(value):
     if not isinstance(value, str) or not value:
         error("Mappings are required for ports mode")
     entries = []
-    for entry in value.split(","):
-        if entry.count(":") != 1:
-            error("Use listen_port:target_port", value=entry)
-        a, b = entry.split(":")
+    for raw in value.split(","):
+        entry = raw.strip()
+        if entry.count(":") > 1 or not entry:
+            error("Use 5555 or 5555:6666, comma-separated", value=raw)
+        if ":" in entry:
+            a, b = (part.strip() for part in entry.split(":"))
+        else:
+            a = b = entry
         entries.append({"listen_port": port(a), "target_port": port(b)})
     if len({x["listen_port"] for x in entries}) != len(entries):
         error("Duplicate listen port")
