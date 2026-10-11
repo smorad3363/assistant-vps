@@ -14,6 +14,20 @@ LAUNCHER_TARGET="$ROOT/current/bin/portmanager2"
 fatal() { printf '[portmanager2] ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '[portmanager2] %s\n' "$*"; }
 
+# Curl's --tlsv1.2 specifies a minimum version, so some networks still fail
+# when TLS 1.3 is offered. Retry *only* SSL handshake failures (exit 35) with
+# IPv4, HTTP/1.1 and TLS 1.2. Never bypass certificate verification.
+download_https() {
+  local url="$1" output="$2" retries="$3" status=0
+  curl --proto '=https' --tlsv1.2 -fsSL --retry "$retries" --retry-delay 2 "$url" -o "$output" || status=$?
+  if ((status == 35)); then
+    log "TLS handshake failed; retrying with IPv4, HTTP/1.1 and TLS 1.2"
+    curl -4 --http1.1 --tlsv1.2 --tls-max 1.2 --proto '=https' -fsSL --retry "$retries" --retry-delay 2 "$url" -o "$output"
+  else
+    return "$status"
+  fi
+}
+
 [[ "$(id -u)" == 0 ]] || fatal "Run as root."
 for command in curl python3 sha256sum tar cp mv mkdir readlink mktemp ln chmod bash grep rm cat flock; do
   command -v "$command" >/dev/null 2>&1 || fatal "Missing required tool: $command"
@@ -113,9 +127,8 @@ if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
   log "Using explicitly pinned source commit: $SHA"
 else
   log "Resolving Git ref: $REF"
-  curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 \
-    "https://api.github.com/repos/$REPO/commits/$REF" -o "$tmp/ref.json" \
-    || fatal "Cannot resolve Git ref (GitHub API may be rate-limited); retry with a full commit SHA"
+  download_https "https://api.github.com/repos/$REPO/commits/$REF" "$tmp/ref.json" 3 \
+    || fatal "Cannot resolve Git ref (GitHub API unavailable); retry with a full commit SHA"
   SHA="$(python3 - "$tmp/ref.json" <<'PY'
 import json, re, sys
 value = json.load(open(sys.argv[1], encoding="utf-8")).get("sha", "")
@@ -126,8 +139,7 @@ PY
 )" || fatal "Invalid GitHub response"
 fi
 log "Pinned source commit: $SHA"
-curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
-  "https://codeload.github.com/$REPO/tar.gz/$SHA" -o "$tmp/source.tar.gz" \
+download_https "https://codeload.github.com/$REPO/tar.gz/$SHA" "$tmp/source.tar.gz" 2 \
   || fatal "Cannot download pinned source archive"
 mkdir "$tmp/source"
 tar -xzf "$tmp/source.tar.gz" --no-same-owner --strip-components=1 -C "$tmp/source"
