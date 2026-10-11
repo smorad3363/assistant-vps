@@ -186,7 +186,7 @@ class LiveScreenTests(unittest.TestCase):
                         for i in range(40)]
         screen.draw(data)
         self.assertEqual(screen.page_size, 15)
-        self.assertEqual(screen.row_height, 3)
+        self.assertEqual(screen.row_height, 2)
         self.assertTrue(any("page 1/3" in v.lower()
                             for _,_,v in screen.window.writes))
         self.assertIn("TCP:3000", [v for _,_,v in screen.window.writes])

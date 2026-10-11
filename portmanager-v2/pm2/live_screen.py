@@ -366,7 +366,7 @@ class LiveScreen:
                 unknown_down, unknown_up = self.untracked_rates(
                     interface, self.last.get("rows", []))
                 if unknown_down + unknown_up >= .1:
-                    interface_line += (f"  · untracked ~ ↓{unknown_down:.1f}"
+                    interface_line += (f"  · OTHER / UNKNOWN ~ ↓{unknown_down:.1f}"
                                        f" ↑{unknown_up:.1f} Mb/s")
             self._write(9, 2, interface_line, 1 if nic != "ALL" else 3)
 
