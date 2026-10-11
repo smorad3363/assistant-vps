@@ -650,7 +650,7 @@ def _tunnel_page():
                          ("3", "Change or remove a saved port"),
                          ("4", "Browse ALL iptables tables and rules"),
                          ("5", "Browse existing NAT forwarding rules"),
-                         ("6", "Full iptables reset (console required)"),
+                         ("6", "Full reset safety info (not enabled)"),
                          ("0", "Back to home"))
         if choice in ("0", None):
             return
@@ -1365,6 +1365,15 @@ def menu():
                 _usage_report()
         except PM2Error as exc:
             print(_paint("91", f"  {exc.code}: {exc.message}"))
+            if exc.details and exc.details.get("rule"):
+                print(_paint("93", "  Conflicting existing rule:"))
+                import textwrap
+                for part in textwrap.wrap(_ui_clean(exc.details["rule"]),
+                                          width=max(35, _ui_width() - 6),
+                                          break_long_words=True,
+                                          break_on_hyphens=False):
+                    print("  " + part)
+                print(_paint("96", "  Inspect: Ports > [4] Browse ALL iptables rules"))
             _ask("Enter to continue")
         except (OSError, ValueError) as exc:
             print(_paint("91", f"  Invalid input: {str(exc)[:140]}"))
