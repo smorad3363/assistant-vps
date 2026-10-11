@@ -529,7 +529,12 @@ def _list_tunnels():
     _ui_line(_paint("96;1", " ▤  PORT CONNECTIONS / CURRENT IPTABLES"))
     _ui_line("  Preview is read-only; select [3] to view or edit entries.")
     _ui_edge("rule", width)
+    owned_rules = [rule for rule in rules if rule.get("owned")]
+    enabled_saved = any(item.get("enabled") for item in items)
     _ui_line(f"  {len(items)} saved connections  |  {len(rules)} existing network rules")
+    if enabled_saved and not owned_rules and not error:
+        _ui_line(_paint("91", "  NOT APPLIED: saved connections exist but PM2 firewall rules are missing."))
+        _ui_line(_paint("93", "  Repair: sudo portmanager2 tunnel apply"))
     for entry in items[:3]:
         port = ("ALL except " + ",".join(map(str, entry["exclude"]))
                 if entry["mode"] == "all-except" else

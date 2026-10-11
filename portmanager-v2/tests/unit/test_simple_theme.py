@@ -81,6 +81,25 @@ class NewThemeTest(unittest.TestCase):
         self.assertIn("203.0.113.1:4343", output.getvalue())
         self.assertIn("0 saved connections", output.getvalue())
 
+    def test_saved_connections_without_owned_nat_are_marked_not_applied(self):
+        saved = {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "name": "port-8086", "enabled": True, "mode": "ports",
+            "listen_ip": "77.90.10.180", "interface": "eth0",
+            "protocols": ["tcp", "udp"],
+            "mapping": [{"listen_port": 8086, "target_port": 8086}],
+            "exclude": [], "target_ip": "2.29.39.22",
+        }
+        with (mock.patch.object(simple_ui.config, "load",
+                                return_value={"tunnels": [saved]}),
+              mock.patch.object(simple_ui.system_rules, "detect_nat",
+                                return_value=([], None)),
+              redirect_stdout(io.StringIO()) as output):
+            simple_ui._list_tunnels()
+        shown = output.getvalue()
+        self.assertIn("NOT APPLIED", shown)
+        self.assertIn("sudo portmanager2 tunnel apply", shown)
+
     def test_keyboard_down_then_enter_selects_second_option(self):
         import termios
         import tty

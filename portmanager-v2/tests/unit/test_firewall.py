@@ -124,6 +124,71 @@ class FirewallTests(unittest.TestCase):
             firewall.check_inventory(snapshot, {})
         self.assertEqual(err.exception.code, "E_CONFLICT")
 
+    def test_complete_owned_footprint_loss_is_repairable(self):
+        snapshot = {name: [] for name in firewall.CHAINS}
+        inventory = {
+            "nat": {"PM2_NAT_PRE": [["-p", "tcp"]],
+                    "PM2_NAT_POST": [["-p", "tcp"]]},
+            "filter": {"PM2_FORWARD": [["-j", "ACCEPT"]]},
+            "mangle": {"PM2_ACCOUNT": [["-p", "tcp"]]},
+        }
+        self.assertTrue(firewall.inventory_completely_missing(snapshot, inventory))
+
+    def test_partial_owned_footprint_is_never_auto_repairable(self):
+        inventory = {
+            "nat": {"PM2_NAT_PRE": [["-p", "tcp"]],
+                    "PM2_NAT_POST": [["-p", "tcp"]]},
+            "filter": {"PM2_FORWARD": [["-j", "ACCEPT"]]},
+            "mangle": {"PM2_ACCOUNT": [["-p", "tcp"]]},
+        }
+        cases = []
+        snap = {name: [] for name in firewall.CHAINS}
+        snap["nat"] = [["-N", "PM2_NAT_PRE"]]
+        cases.append(snap)
+        snap = {name: [] for name in firewall.CHAINS}
+        snap["nat"] = [["-A", "PREROUTING", "-m", "comment", "--comment",
+                        "pm2:owned-hook", "-j", "PM2_NAT_PRE"]]
+        cases.append(snap)
+        snap = {name: [] for name in firewall.CHAINS}
+        snap["filter"] = [["-A", "FORWARD", "-m", "comment", "--comment",
+                           "pm2:orphan:forward", "-j", "ACCEPT"]]
+        cases.append(snap)
+        for snapshot in cases:
+            with self.subTest(snapshot=snapshot):
+                self.assertFalse(
+                    firewall.inventory_completely_missing(snapshot, inventory))
+                with self.assertRaises(PM2Error):
+                    firewall.check_inventory(snapshot, inventory)
+
+    def test_missing_nat_with_intact_filter_mangle_is_repairable(self):
+        inventory = {
+            "nat": {"PM2_NAT_PRE": [["-p", "tcp"]],
+                    "PM2_NAT_POST": [["-p", "tcp"]]},
+            "filter": {"PM2_FORWARD": [["-j", "ACCEPT"]]},
+            "mangle": {"PM2_ACCOUNT": [["-p", "tcp"]]},
+        }
+        snapshot = {name: [] for name in firewall.CHAINS}
+        snapshot["filter"] = [
+            ["-N", "PM2_FORWARD"],
+            firewall._hook("PM2_FORWARD"),
+            ["-A", "PM2_FORWARD", "-j", "ACCEPT"],
+        ]
+        snapshot["mangle"] = [
+            ["-N", "PM2_ACCOUNT"],
+            firewall._hook("PM2_ACCOUNT"),
+            ["-A", "PM2_ACCOUNT", "-p", "tcp"],
+        ]
+        actual, missing = firewall.repairable_inventory(snapshot, inventory)
+        self.assertEqual(set(missing),
+                         {("nat", "PM2_NAT_PRE"), ("nat", "PM2_NAT_POST")})
+        self.assertEqual(actual["filter"]["PM2_FORWARD"], [["-j", "ACCEPT"]])
+        self.assertEqual(actual["mangle"]["PM2_ACCOUNT"], [["-p", "tcp"]])
+        self.assertEqual(actual["nat"], {})
+
+    def test_no_saved_inventory_is_not_a_repair_case(self):
+        snapshot = {name: [] for name in firewall.CHAINS}
+        self.assertFalse(firewall.inventory_completely_missing(snapshot, {}))
+
     def test_unmodified_empty_state_no_kernel_mutation(self):
         with mock.patch.object(firewall, "snapshot", return_value={
             t: [] for t in firewall.CHAINS}), mock.patch.object(

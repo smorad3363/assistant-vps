@@ -45,7 +45,17 @@ def preflight(candidate, runtime, allow_protected=False):
         any(t["enabled"] for t in candidate["tunnels"])
     )
     inventory = runtime.get("firewall", {})
-    firewall.check_inventory(firewall.snapshot(), inventory)
+    kernel = firewall.snapshot()
+    actual_inventory, missing = firewall.repairable_inventory(kernel, inventory)
+    if missing:
+        # Internal baseline used by apply(); only intact, exactly-matching PM2
+        # chains are eligible. Missing chains can be rebuilt, partial/drifted
+        # chains already raised above.
+        report["repair_missing_firewall"] = True
+        report["_repair_previous_firewall"] = actual_inventory
+        report["missing_owned_chains"] = [chain for _, chain in missing]
+    else:
+        report["repair_missing_firewall"] = False
     return report
 
 
@@ -62,12 +72,23 @@ def apply(candidate, allow_protected=False):
     # Reconcile legacy single-address rules to the complete set of verified
     # addresses even when the saved tunnel configuration itself is unchanged.
     # Keep the preflight and inventory checks before changing any rules.
-    previous = runtime.get("firewall", {})
+    saved_previous = runtime.get("firewall", {})
+    repairing_missing = bool(report.get("repair_missing_firewall"))
+    repair_previous = report.pop("_repair_previous_firewall", None)
+    # During repair, rollback to the exact intact subset that was really in
+    # the kernel before mutation, not to stale state entries for missing chains.
+    previous = (repair_previous if isinstance(repair_previous, dict) else {}
+                ) if repairing_missing else saved_previous
+    if repairing_missing:
+        rollback_runtime = dict(runtime, firewall=previous)
+    else:
+        rollback_runtime = runtime
     compiled = firewall.compile_rules(candidate, report.get("interface_ips"))
     if already_committed and firewall.matches_compiled_inventory(compiled, previous):
         return {"changed": False, "generation": original["generation"], **report}
     journal = {"product": "portmanager2", "original_generation": original["generation"],
-               "desired_generation": candidate["generation"], "previous_firewall": previous}
+               "desired_generation": candidate["generation"], "previous_firewall": previous,
+               "repair_missing_firewall": repairing_missing}
     config.atomic_json(PENDING, journal)
     applied = None
     completed = False
@@ -96,7 +117,7 @@ def apply(candidate, allow_protected=False):
             if applied is not None:
                 firewall.reconcile({chain: list(previous.get(table, {}).get(chain, []))
                                     for table, chain in firewall.ORDER}, applied)
-            config.atomic_json(STATE, runtime)
+            config.atomic_json(STATE, rollback_runtime)
             config.atomic_json(CONFIG, original)
             rollback_completed = True
         except Exception as rollback_exc:
@@ -110,4 +131,5 @@ def apply(candidate, allow_protected=False):
         if (completed or rollback_completed) and not PENDING.is_symlink():
             PENDING.unlink(missing_ok=True)
     return {"changed": True, "generation": candidate["generation"],
-            "tunnels": len(candidate["tunnels"]), **report}
+            "tunnels": len(candidate["tunnels"]),
+            "repaired_missing_firewall": repairing_missing, **report}

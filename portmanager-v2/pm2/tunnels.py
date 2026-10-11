@@ -78,7 +78,9 @@ def handle(operation, argv, lock):
             if guard._read() is not None:
                 raise PM2Error("E_CONFLICT", "Protected change awaits confirmation")
             report = transaction.preflight(cfg, runtime, allow_protected=True)
-            return {"safe": True, **report}
+            public = {key: value for key, value in report.items()
+                      if not key.startswith("_")}
+            return {"safe": True, **public}
         except PM2Error as exc:
             return {"safe": False, "code": exc.code, "reason": exc.message}
     if operation == "apply":
