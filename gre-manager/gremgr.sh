@@ -587,7 +587,7 @@ main_menu() {
     case "$c" in
       1) test_gre ;;
       2) add_tunnel ;;
-      3) manae_tunnels ;;
+      3) manage_tunnels ;;
       4) port_forward_menu ;;
       5) status_logs ;;
       0) exit 0 ;;
