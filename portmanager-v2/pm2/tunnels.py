@@ -107,8 +107,9 @@ def handle(operation, argv, lock):
         if os.geteuid():
             raise PM2Error("E_PERMISSION", "Tunnel mutations require root")
         if operation == "delete" and not args.yes:
-            if not sys.stdin.isatty() or input("Type DELETE-V2-TUNNEL: ").strip() != "DELETE-V2-TUNNEL":
-                raise PM2Error("E_VALIDATION", "Tunnel deletion not confirmed")
+            # Scripted CLI requires a flag, never an unexpected stdin prompt.
+            # Interactive Ports menu already passes --yes on deliberate Delete.
+            raise PM2Error("E_VALIDATION", "Pass --yes to delete a V2 tunnel")
         if guard.risky(cfg, candidate):
             return guard.apply(candidate)
         if guard._read() is not None:

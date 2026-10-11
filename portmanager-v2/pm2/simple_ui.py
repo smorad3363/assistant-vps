@@ -27,8 +27,31 @@ def _ask(label, default=None):
     return answer or default
 
 
-def _confirm(label):
-    return (_ask(label + " (y/N)", "n") or "").lower() == "y"
+# A menu selection or completed field edit is the action; no extra y/N prompts.
+# Guarded firewall edits stay provisional until a subsequent live menu action.
+_PENDING_MENU_ACK = None
+
+
+def _queue_rollback_ack(result, owner="managed"):
+    global _PENDING_MENU_ACK
+    token = result.get("pending_confirmation")
+    if token:
+        _PENDING_MENU_ACK = (owner, token)
+        print(_paint("93", "  Temporary change: choose another menu option within 120s to keep it."))
+
+
+def _ack_on_next_menu_action():
+    global _PENDING_MENU_ACK
+    if _PENDING_MENU_ACK is None:
+        return
+    owner, token = _PENDING_MENU_ACK
+    from .cli import mutation_lock
+    with mutation_lock():
+        if owner == "managed":
+            guard.confirm(token)
+        else:
+            nat_editor.confirm(token)
+    _PENDING_MENU_ACK = None
 
 
 def _clear_screen():
@@ -103,27 +126,12 @@ def _protected_ssh_ports():
 def _mutate(operation, argv):
     from .cli import mutation_lock
     preview = tunnels.handle(operation, [*argv, "--dry-run"], mutation_lock)
-    # An Add/Edit choice followed by validated fields already constitutes
-    # the request to save. Avoid a second default-No Apply prompt. Only broad
-    # all-except forwarding and destructive deletion need a specific warning.
-    is_all_except = ("--mode" in argv and
-                     argv[argv.index("--mode") + 1] == "all-except")
-    if operation == "delete" and not _confirm("Delete this connection permanently?"):
-        return
-    if operation in ("create", "update") and is_all_except:
-        if not _confirm("Forward nearly ALL ports, including new services?"):
-            return
+    # The selected action is sufficient; no generic Apply/Delete y/N.
+    # Core preflight and CLI deletion safety remain intact.
     if operation == "delete":
         argv = [*argv, "--yes"]
     result = tunnels.handle(operation, argv, mutation_lock)
-    if result.get("pending_confirmation"):
-        pending = result["pending_confirmation"]
-        print(_paint("93", "  Keep this SSH window open for 2 minutes while the change is checked."))
-        if _confirm("Still connected and keep the change?"):
-            with mutation_lock():
-                guard.confirm(pending)
-        else:
-            print("  Change will roll back automatically; do not close SSH.")
+    _queue_rollback_ack(result)
     print(_paint("92", "  ✓ Applied"))
 
 
@@ -208,16 +216,15 @@ def _tunnel_wizard(old=None, all_ports=False):
     print(_paint("90", f"  Saved as: {name}  |  TCP + UDP by default"))
 
     if old and set(old["protocols"]) == {"tcp", "udp"}:
-        both = _ask("Update BOTH TCP and UDP? (Y/n)", "y")
-        if both is None:
+        # A protocol selector changes scope, not a yes/no approval.
+        protocol = _ask("Protocols to edit (both/tcp/udp)", "both")
+        if protocol is None:
             return
-        if both.lower() in ("n", "no"):
-            only = _ask("Update which one (tcp/udp)", "tcp")
-            if only is None:
-                return
-            if only.lower() not in ("tcp", "udp"):
-                raise PM2Error("E_VALIDATION", "Protocol must be tcp or udp")
-            _mutate_single_protocol(old, argv, only.lower())
+        protocol = protocol.lower()
+        if protocol not in ("both", "tcp", "udp"):
+            raise PM2Error("E_VALIDATION", "Choose both, tcp or udp")
+        if protocol != "both":
+            _mutate_single_protocol(old, argv, protocol)
             return
     _mutate("update" if old else "create", argv)
 
@@ -343,9 +350,9 @@ def _menu_key(choices, selected, shortcuts=()):
         while True:
             char = os.read(fd, 1)
             if not char:
-                return "0"
-            if char == b"\x03":  # Ctrl+C
-                return "0"
+                return None
+            if char == b"\x03":  # Ctrl+C must not silently confirm a risky edit.
+                return None
             if char == b"\x1b":
                 seq = b""
                 if select.select([fd], [], [], 0.05)[0]:
@@ -432,17 +439,23 @@ def _choose(*choices, selected=0, shortcuts=()):
         raise ValueError("Menu shortcuts must be unique")
     selected = max(0, min(selected, len(choices) - 1))
     _ui_actions(*choices, selected=selected)
-    if not (os.isatty(0) and os.isatty(1) and sys.stdin.isatty() and
-            sys.stdout.isatty() and
-            os.getenv("TERM", "").lower() not in ("", "dumb")):
-        return _ask("Choose option", "0")
-    try:
-        _draw_menu_prompt(choices, selected, "")
-        return _menu_key(choices, selected, shortcuts=shortcuts)
-    except (OSError, ValueError, ImportError):
-        # Nonstandard terminal: provide an ordinary numeric choice.
-        print()
-        return _ask("Choose option", "0")
+    live_tty = (os.isatty(0) and os.isatty(1) and
+                sys.stdin.isatty() and sys.stdout.isatty())
+    if not live_tty or os.getenv("TERM", "").lower() in ("", "dumb"):
+        action = _ask("Choose option", "0")
+    else:
+        try:
+            _draw_menu_prompt(choices, selected, "")
+            action = _menu_key(choices, selected, shortcuts=shortcuts)
+        except (OSError, ValueError, ImportError):
+            # Nonstandard terminal: provide an ordinary numeric choice.
+            print()
+            action = _ask("Choose option", "0")
+    if action is not None and live_tty:
+        # This is proof that the SSH TTY still accepts an operator command.
+        # No y/N question; failure to interact lets systemd roll back.
+        _ack_on_next_menu_action()
+    return action
 
 
 def _pick_row(title, rows, describe):
@@ -548,7 +561,7 @@ def _ui_ports_intro():
     _ui_line(_paint("96;1", " ▤  PORT FORWARDING"))
     _ui_line("  Send traffic arriving on a port to another server.")
     _ui_line(_paint("90", _ui_cut(
-        "  Other apps\x27 network rules are kept safe. Changes need confirmation.",
+        "  Other apps\x27 network rules remain untouched.",
         width - 7)))
     _ui_edge("bottom", width)
 
@@ -561,9 +574,7 @@ def _delete_all():
         return
     if any(p["enabled"] for p in shaping.schedule_load()["policies"]):
         raise PM2Error("E_CONFLICT", "Remove active speed-limit policies before deleting tunnels")
-    print(_paint("91", "  Remove saved port connections? Other apps will not be changed."))
-    if not _confirm("Remove ALL saved port connections?"):
-        return
+    print(_paint("93", "  Removing only Port Manager-owned connections."))
     with mutation_lock():
         current = config.load(transaction.CONFIG)
         if guard._read() is not None:
@@ -573,11 +584,7 @@ def _delete_all():
             result = guard.apply(proposed)
         else:
             result = transaction.apply(proposed)
-        if result.get("pending_confirmation"):
-            if _confirm("Keep the change after checking SSH?"):
-                guard.confirm(result["pending_confirmation"])
-            else:
-                print("  Pending 120s rollback; network change not confirmed.")
+        _queue_rollback_ack(result)
     print(_paint("92", "  ✓ Saved connection removal requested"))
 
 
@@ -620,12 +627,7 @@ def _complete_pending_guard(result):
     token = result.get("pending_confirmation")
     if not token:
         return
-    if _confirm("SSH still works; keep this change?"):
-        from .cli import mutation_lock
-        with mutation_lock():
-            guard.confirm(token)
-    else:
-        print(_paint("93", "  Change will automatically roll back within 120 seconds."))
+    _queue_rollback_ack(result)
 
 
 def _edit_external(group):
@@ -644,34 +646,26 @@ def _edit_external(group):
         source_port = _ask("Port on THIS server", group["port"])
         if source_port is None:
             return
+    if target == group["destination"] and (
+            source_port is None or str(source_port) == str(group["port"])):
+        print(_paint("90", "  Nothing changed."))
+        return
     selected = list(members)
     if group["protocol"] == "tcp+udp":
-        both = _ask("Apply to BOTH TCP and UDP? (Y/n)", "y")
-        if both is None:
+        protocol = _ask("Protocols to edit (both/tcp/udp)", "both")
+        if protocol is None:
             return
-        if both.lower() in ("n", "no"):
-            protocol = _ask("Only which protocol (tcp/udp)", "tcp")
-            if protocol is None:
-                return
-            if protocol.lower() not in ("tcp", "udp"):
-                raise PM2Error("E_VALIDATION", "Choose tcp or udp")
-            selected = [m for m in members if m["protocol"] == protocol.lower()]
-    if not _confirm("Apply with automatic 120s rollback?"):
-        return
+        protocol = protocol.lower()
+        if protocol not in ("both", "tcp", "udp"):
+            raise PM2Error("E_VALIDATION", "Choose both, tcp or udp")
+        if protocol != "both":
+            selected = [m for m in members if m["protocol"] == protocol]
     from .cli import mutation_lock
     with mutation_lock():
         result = nat_editor.apply(selected, target, source_port)
     token = result.get("pending_confirmation")
     if token:
-        print(_paint("93", "  Rollback armed. Check SSH/network before confirming."))
-        if _confirm("SSH still works; keep this change?"):
-            with mutation_lock():
-                nat_editor.confirm(token)
-            print(_paint("92", "  Changes saved."))
-        else:
-            with mutation_lock():
-                nat_editor.rollback(token)
-            print(_paint("93", "  Original rule restored."))
+        _queue_rollback_ack(result, owner="foreign")
     else:
         print(_paint("90", "  Destination was unchanged."))
 
@@ -812,9 +806,8 @@ def _limit(port, interface, proto="tcp,udp"):
         if not mine:
             print("  No limit configured.")
             return
-        if _confirm("Remove configured limit(s)?"):
-            plan["policies"] = [p for p in plan["policies"] if p not in mine]
-            _persist_policy(plan)
+        plan["policies"] = [p for p in plan["policies"] if p not in mine]
+        _persist_policy(plan)
         return
     if choice != "1":
         return
@@ -847,8 +840,6 @@ def _limit(port, interface, proto="tcp,udp"):
     })
     if port == 0:
         print(_paint("91", "  WARNING: ALL IPv4 traffic on this interface, including SSH, can be slowed/dropped."))
-        if not _confirm("Confirm interface-wide rate policing?"):
-            return
     _persist_policy(plan)
 
 
