@@ -149,7 +149,7 @@ class QuickTunnelTests(unittest.TestCase):
             simple_ui._tunnel_wizard(old)
         self.assertEqual(answers, ["Destination IPv4",
                                   "Ports (5555,5555:6666,80:8080)",
-                                  "Update BOTH TCP and UDP? (Y/n)"])
+                                  "Protocols to edit (both/tcp/udp)"])
         self.assertEqual(mutate.call_args.args[0], "update")
         self.assertEqual(mutate.call_args.args[1][-2:],
                          ["--name", "port-5555-to-2-29-39-22"])
@@ -165,8 +165,7 @@ class QuickTunnelTests(unittest.TestCase):
             answers.append(label)
             return {
                 "Destination IPv4": "2.29.39.23",
-                "Update BOTH TCP and UDP? (Y/n)": "n",
-                "Update which one (tcp/udp)": "tcp",
+                "Protocols to edit (both/tcp/udp)": "tcp",
             }.get(label, default)
         with (mock.patch.object(simple_ui, "_title"),
               mock.patch.object(simple_ui, "_ask", side_effect=answer),
@@ -176,8 +175,7 @@ class QuickTunnelTests(unittest.TestCase):
             simple_ui._tunnel_wizard(old)
         self.assertEqual(answers, ["Destination IPv4",
                                   "Ports (5555,5555:6666,80:8080)",
-                                  "Update BOTH TCP and UDP? (Y/n)",
-                                  "Update which one (tcp/udp)"])
+                                  "Protocols to edit (both/tcp/udp)"])
         split.assert_called_once()
         self.assertEqual(split.call_args.args[2], "tcp")
         mutate.assert_not_called()

@@ -82,3 +82,58 @@ def find_conflicts(snapshot, tunnels):
                 conflicts.append({"rule": line[:500], "tunnel": tunnel["name"]})
                 break
     return conflicts
+
+
+def blocking_conflicts(snapshot, tunnels):
+    """Actual NAT interception ahead of PM2's PREROUTING hook, not mere overlap.
+
+    When V2 has no hook yet, its installer will insert it at PREROUTING #1,
+    before existing NAT rules. Once installed, later broader DNAT rules are
+    legitimate fallback matches for other local destination addresses.
+    """
+    entries = []
+    by_chain = {}
+    for line in snapshot.splitlines():
+        if not line.startswith("-A "):
+            continue
+        try:
+            args = shlex.split(line)
+        except ValueError:
+            continue
+        if len(args) < 4:
+            continue
+        by_chain.setdefault(args[1], []).append((line, args))
+        if args[1] == "PREROUTING":
+            entries.append((line, args))
+    hook_at = next((i for i, (_, args) in enumerate(entries)
+                    if _argument(args, ("-j", "--jump")) == "PM2_NAT_PRE"),
+                   None)
+    if hook_at is None:
+        # Creating a tunnel prepends PM2's hook to the NAT PREROUTING chain.
+        return []
+    risky = []
+    visited = set()
+    def visit(line, args, tunnel, depth=0):
+        if depth > 8:
+            return True
+        if not _matches(args, tunnel):
+            return False
+        target = _argument(args, ("-j", "--jump"))
+        if target in TARGETS:
+            return True
+        if target in by_chain and target != "PM2_NAT_PRE":
+            if target in visited:
+                return True  # Unknown loop; don't assume safe ordering.
+            visited.add(target)
+            try:
+                return any(visit(child_line, child, tunnel, depth + 1)
+                           for child_line, child in by_chain[target])
+            finally:
+                visited.remove(target)
+        return False
+    for line, args in entries[:hook_at]:
+        for tunnel in tunnels:
+            if tunnel.get("enabled") and visit(line, args, tunnel):
+                risky.append({"rule": line[:500], "tunnel": tunnel["name"]})
+                break
+    return risky

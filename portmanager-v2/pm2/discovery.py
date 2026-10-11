@@ -53,7 +53,7 @@ def audit(tunnels):
         interfaces[item["ifname"]] = (item.get("flags", []), ips)
         all_ips |= ips
     foreign_nat = run(["iptables-save", "-t", "nat"])
-    collisions = nat_conflicts.find_conflicts(foreign_nat, tunnels)
+    collisions = nat_conflicts.blocking_conflicts(foreign_nat, tunnels)
     if collisions:
         raise PM2Error(
             "E_CONFLICT",
