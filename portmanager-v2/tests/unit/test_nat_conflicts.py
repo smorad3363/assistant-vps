@@ -49,7 +49,8 @@ class NatConflictTests(unittest.TestCase):
         self.assertTrue(nat_conflicts.find_conflicts(negated, [self.tunnel()]))
 
     def test_existing_broad_fallback_after_pm2_hook_is_legal(self):
-        t = self.tunnel(mapping="8086:8086", listen_ip="77.90.10.180")
+        t = self.tunnel(mapping="8086:8086", listen_ip="77.90.10.180",
+                        target_ip="2.29.39.22")
         snapshot = (
             "*nat\n"
             "-A PREROUTING -m comment --comment pm2:owned-hook -j PM2_NAT_PRE\n"

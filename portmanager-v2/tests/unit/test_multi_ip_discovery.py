@@ -15,6 +15,8 @@ class InterfaceIpv4Tests(unittest.TestCase):
             mapping="8086", target_ip="2.29.39.22")
 
     def commands(self, argv, **kwargs):
+        if argv[:2] == ["systemctl", "is-active"]:
+            return "inactive"
         if argv == ["iptables-save"]:
             return "*nat\n-A PREROUTING -j PM2_NAT_PRE\nCOMMIT\n"
         if argv == ["iptables-save", "-t", "nat"]:
