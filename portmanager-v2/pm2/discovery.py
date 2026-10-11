@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 from .errors import PM2Error
+from . import nat_conflicts
 
 
 def run(argv, *, allowed=(0,), timeout=8):
@@ -52,11 +53,13 @@ def audit(tunnels):
         interfaces[item["ifname"]] = (item.get("flags", []), ips)
         all_ips |= ips
     foreign_nat = run(["iptables-save", "-t", "nat"])
-    for line in foreign_nat.splitlines():
-        if line.startswith("-A ") and not line.startswith("-A PM2_") and re.search(
-                r"-j (DNAT|REDIRECT|NETMAP)\b", line):
-            raise PM2Error("E_CONFLICT", "Foreign DNAT rule needs manual review",
-                           {"rule": line[:160]})
+    collisions = nat_conflicts.find_conflicts(foreign_nat, tunnels)
+    if collisions:
+        raise PM2Error(
+            "E_CONFLICT",
+            "Existing NAT forwarding overlaps the requested port; inspect all iptables rules",
+            {"rule": collisions[0]["rule"], "tunnel": collisions[0]["tunnel"],
+             "conflict_count": len(collisions)})
     listening = []
     for line in run(["ss", "-H", "-lntu"]).splitlines():
         fields = line.split()

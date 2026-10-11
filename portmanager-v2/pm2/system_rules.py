@@ -58,3 +58,17 @@ def detect_nat(limit=20):
     except (OSError, Exception) as exc:
         return [], "Could not inspect existing NAT rules: " + str(exc)[:140]
     return parse_nat(output, limit), None
+
+
+def detect_all():
+    """Read all IPv4 iptables tables, including manual and foreign rules.
+
+    Unlike the NAT preview, this returns every chain, policy and rule without
+    silently truncating. The terminal browser handles pagination read-only.
+    """
+    try:
+        output = run(["iptables-save"], timeout=20)
+    except Exception as exc:
+        return [], "Could not inspect IPv4 iptables rules: " + str(exc)[:160]
+    return [line for line in output.splitlines()
+            if line.startswith(("*", ":", "-A ", "-I ", "-N ", "-P ", "COMMIT"))], None
