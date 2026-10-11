@@ -1392,7 +1392,7 @@ def menu():
         _title("HOME")
         choice = _choose(("1", "See live traffic and control speed"),
                          ("2", "View and forward ports"),
-                         ("3", "Quick view / edit existing ports"),
+                         ("3", "Change or remove port connections"),
                          ("4", "Daily port traffic (download / upload)"),
                          ("0", "Exit Port Manager"))
         if choice in ("0", None):
