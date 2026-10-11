@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .errors import PM2Error
-from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules, usage_ledger, iptables_ui, nat_editor
+from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules, usage_ledger, iptables_ui, nat_editor, validation
 
 
 def _paint(code, text):
@@ -120,52 +120,76 @@ def _mutate(operation, argv):
     print(_paint("92", "  ✓ Done"))
 
 
+def _auto_tunnel_name(target, mapping, saved):
+    """Generate a short ASCII name; never ask for one during quick setup."""
+    if mapping:
+        validation.mappings(mapping)
+        first = str(validation.port(mapping.split(",", 1)[0].strip().split(":", 1)[0]))
+    else:
+        first = "all"
+    base = f"port-{first}-to-{target.replace('.', '-')}"
+    used = {t["name"].lower() for t in saved}
+    index = 1
+    while True:
+        suffix = "" if index == 1 else f"-{index}"
+        name = base[:64-len(suffix)] + suffix
+        if name.lower() not in used:
+            return name
+        index += 1
+
+
+def _compact_mapping(pairs):
+    """Keep existing 1:1 port pairs terse when prefilled in edit mode."""
+    return ",".join(
+        str(p["listen_port"]) if p["listen_port"] == p["target_port"]
+        else f'{p["listen_port"]}:{p["target_port"]}' for p in pairs)
+
+
 def _tunnel_wizard(old=None, all_ports=False):
     try:
-        iface, ip = _network_defaults()
+        # The listening IPv4 is always one of this host's assigned addresses.
+        # Never ask users to type arbitrary source IPs or interfaces.
+        iface, ip = _network_defaults() if old is None else (
+            old["interface"], old["listen_ip"])
     except PM2Error as err:
         print(f"  Interface autodetection failed: {err.message}")
         return
-    name_default = old["name"] if old else f"port-link-{len(config.load(transaction.CONFIG)['tunnels'])+1}"
-    name = old["name"] if old else _ask("Name for this port connection", name_default)
-    if name is None:
-        return
-    target = _ask("Send traffic to this IP address", old["target_ip"] if old else None)
+    target = _ask("Destination IPv4", old["target_ip"] if old else None)
     if not target:
         return
-    listen_ip = old["listen_ip"] if old else ip
-    device = old["interface"] if old else iface
-    is_all = (old["mode"] == "all-except") if old else all_ports
-    print(_paint("90", f"  Using network {device} on this server ({listen_ip})"))
+    target = validation.ip4(target, "target_ip", target=True)
+    listen_ip, device = (old["listen_ip"], old["interface"]) if old else (ip, iface)
+    is_all = old["mode"] == "all-except" if old else all_ports
+
     argv = ([old["id"]] if old else []) + [
-        "--name", name, "--interface", device, "--listen-ip", listen_ip,
+        "--interface", device, "--listen-ip", listen_ip,
         "--target-ip", target,
         "--protocol", ",".join(old["protocols"]) if old else "tcp,udp",
-        "--mode", "all-except" if is_all else "ports"
+        "--mode", "all-except" if is_all else "ports",
     ]
     if is_all:
-        existing = ",".join(str(p) for p in old["exclude"]) if old else _protected_ssh_ports()
-        excludes = _ask("Ports to keep unchanged (SSH/admin)", existing)
-        if excludes is None:
+        default = ",".join(str(p) for p in old["exclude"]) if old else _protected_ssh_ports()
+        exclude = _ask("Ports NOT to forward (SSH/admin)", default)
+        if exclude is None:
             return
-        argv += ["--exclude", excludes, "--ack-all-ports"]
-        print(_paint("91", "  Warning: forwarding almost all ports can break remote login."))
+        argv += ["--exclude", exclude, "--ack-all-ports"]
+        mapping = None
+        print(_paint("91", "  Caution: all-except forwarding can disrupt remote access."))
     else:
-        if old and old["mapping"]:
-            preserved = ",".join(f'{p["listen_port"]}:{p["target_port"]}' for p in old["mapping"])
-            mapping = _ask("Port pairs on this server:destination", preserved)
-        else:
-            port_in = _ask("Port on this server")
-            port_out = _ask("Port on destination server", port_in)
-            if not port_in or not port_out:
-                return
-            mapping = f"{port_in}:{port_out}"
-            more = _ask("More port pairs source:destination,... (optional)", "")
-            if more:
-                mapping += "," + more
+        default = _compact_mapping(old["mapping"]) if old else None
+        mapping = _ask("Ports (5555,5555:6666,80:8080)", default)
         if not mapping:
             return
+        # Check shorthand and collisions before asking for confirmation.
+        validation.mappings(mapping)
         argv += ["--mapping", mapping]
+
+    name = old["name"] if old else _auto_tunnel_name(
+        target, mapping, config.load(transaction.CONFIG)["tunnels"])
+    argv += ["--name", name]
+    print(_paint("90", f"  Source: {device} / {listen_ip} (detected on this server)"))
+    print(_paint("90", f"  Saved as: {name}  |  TCP + UDP by default"))
+
     if old and set(old["protocols"]) == {"tcp", "udp"}:
         both = _ask("Update BOTH TCP and UDP? (Y/n)", "y")
         if both is None:
@@ -179,7 +203,6 @@ def _tunnel_wizard(old=None, all_ports=False):
             _mutate_single_protocol(old, argv, only.lower())
             return
     _mutate("update" if old else "create", argv)
-
 
 
 # Read-only, reference-style port configuration screen. Network operations
