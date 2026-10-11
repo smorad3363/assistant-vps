@@ -283,6 +283,26 @@ class LiveScreenTests(unittest.TestCase):
         self.assertIn("NIC", nic_info["compact"])
         self.assertTrue(nic_info["scheduled_now"])
 
+    def test_one_minute_network_and_port_trends_are_consistent(self):
+        screen = self.make_view()
+        data = sample()
+        data["interface_overview"] = {
+            "interface": "ALL", "rx_mbps": 550.0, "tx_mbps": 490.0,
+            "graph_60s_rx": "   ▁▅█", "graph_60s_tx": "   ▁▄█",
+            "avg1m_rx_mbps": 110, "avg1m_tx_mbps": 90,
+            "coverage_1m_seconds": 20}
+        data["rows"][0].update({"graph_60s_up": "   ▁▅█",
+                                 "graph_60s_down": "   ▁▃█"})
+        screen.window.getmaxyx = lambda: (42, 160)
+        screen.draw(data)
+        cells = screen.window.writes
+        text = "\n".join(value for _, _, value in cells)
+        self.assertIn("avg1m:110.00*", text)
+        self.assertIn("avg1m:90.00*", text)
+        self.assertIn("60s", text)
+        self.assertTrue(any(value.startswith("▲ UP    ") for _, _, value in cells))
+        self.assertTrue(any(value.startswith("▼ DOWN  ") for _, _, value in cells))
+
     def test_graph_scaling_preserves_missing_history(self):
         trend = live_screen.LiveScreen._large_trend("  ▁▃█", 50)
         self.assertEqual(len(trend), 50)
