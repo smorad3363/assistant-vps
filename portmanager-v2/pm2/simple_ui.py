@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .errors import PM2Error
-from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules, usage_ledger
+from . import config, guard, limit_windows, port_graph, services, shaping, transaction, tunnels, system_rules, usage_ledger, iptables_ui
 
 
 def _paint(code, text):
@@ -160,6 +160,9 @@ def _tunnel_wizard(old=None, all_ports=False):
             if not port_in or not port_out:
                 return
             mapping = f"{port_in}:{port_out}"
+            more = _ask("More port pairs source:destination,... (optional)", "")
+            if more:
+                mapping += "," + more
         if not mapping:
             return
         argv += ["--mapping", mapping]
@@ -645,7 +648,9 @@ def _tunnel_page():
         choice = _choose(("1", "Forward a port to another server"),
                          ("2", "Forward almost all ports (advanced)"),
                          ("3", "Change or remove a saved port"),
-                         ("4", "See other existing port rules"),
+                         ("4", "Browse ALL iptables tables and rules"),
+                         ("5", "Browse existing NAT forwarding rules"),
+                         ("6", "Full reset safety info (not enabled)"),
                          ("0", "Back to home"))
         if choice in ("0", None):
             return
@@ -660,7 +665,11 @@ def _tunnel_page():
         elif choice == "3":
             _manage()
         elif choice == "4":
+            iptables_ui.browse()
+        elif choice == "5":
             _inspect_existing_rule()
+        elif choice == "6":
+            iptables_ui.full_reset_information()
 
 
 def _persist_policy(plan):
@@ -1356,6 +1365,15 @@ def menu():
                 _usage_report()
         except PM2Error as exc:
             print(_paint("91", f"  {exc.code}: {exc.message}"))
+            if exc.details and exc.details.get("rule"):
+                print(_paint("93", "  Conflicting existing rule:"))
+                import textwrap
+                for part in textwrap.wrap(_ui_clean(exc.details["rule"]),
+                                          width=max(35, _ui_width() - 6),
+                                          break_long_words=True,
+                                          break_on_hyphens=False):
+                    print("  " + part)
+                print(_paint("96", "  Inspect: Ports > [4] Browse ALL iptables rules"))
             _ask("Enter to continue")
         except (OSError, ValueError) as exc:
             print(_paint("91", f"  Invalid input: {str(exc)[:140]}"))
