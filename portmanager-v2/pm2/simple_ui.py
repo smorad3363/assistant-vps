@@ -441,8 +441,14 @@ def _choose(*choices, selected=0, shortcuts=()):
     _ui_actions(*choices, selected=selected)
     live_tty = (os.isatty(0) and os.isatty(1) and
                 sys.stdin.isatty() and sys.stdout.isatty())
-    if not live_tty or os.getenv("TERM", "").lower() in ("", "dumb"):
-        action = _ask("Choose option", "0")
+    # Standard readline mode avoids raw/cbreak SSH-keyboard incompatibility.
+    # Keep the original colored screen and all validated backend actions.
+    line_mode = os.getenv("PORTMANAGER_MENU_INPUT", "").lower() in ("line", "simple", "plain")
+    if line_mode or not live_tty or os.getenv("TERM", "").lower() in ("", "dumb"):
+        action = _ask("Choose option number (then Enter)", choices[selected][0])
+        if action not in {key for key, _ in choices} and action not in shortcuts and action not in ("r", "0"):
+            print("  Invalid option number.")
+            action = None
     else:
         try:
             _draw_menu_prompt(choices, selected, "")

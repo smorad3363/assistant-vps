@@ -21,6 +21,21 @@ curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/por
 `sudo bash v1` is not valid for piped script arguments. Use `-s -- v1`.
 See [version router guide](docs/RELEASE-ROUTER.fa.md).
 
+### Keyboard input compatibility
+
+If the menu highlights an entry but Enter/numbers are not being processed
+by the SSH terminal, exit with Ctrl+C and relaunch using normal line input:
+
+```bash
+sudo env PORTMANAGER_MENU_INPUT=line portmanager
+```
+
+Now type the full menu number followed by Enter (for example, `9` to
+preview complete removal). The interface keeps its normal layout/colors,
+but no longer depends on single-byte/arrow-key terminal support. For an
+already installed older build use `sudo env TERM=dumb portmanager` as an
+immediate fallback without updating.
+
 ## Complete removal from inside the terminal
 
 Run `sudo portmanager` or `sudo portmanager2`, then select
