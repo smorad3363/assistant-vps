@@ -34,3 +34,21 @@ clsact; it never touches V1's root qdisc.
 **Never deploy rate enforcement on a live VPS without independent console
 access, snapshot and a test plan.** See `portmanager-v2/README.md` and
 `portmanager-v2/docs/RELEASE-ROUTER.fa.md`.
+
+## Uninstall Port Manager V2 (including owned data)
+
+**First preview the exact removal without changes:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall --dry-run
+```
+
+**Then remove V2 with confirmation:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall
+```
+
+For deliberate noninteractive removal, append `--yes` instead. The dedicated implementation is [uninstall.sh](uninstall.sh).
+
+This verifies ownership of the installed V2 release, configuration and data, systemd units, iptables chains, history-monitor counters and tc filters before removal. It clears V2-owned rules and services and permanently deletes V2 configuration, saved statistics, logs, and any integrity-verified archived V1 backup. It does **not** reset unrelated iptables rules, Docker, UFW, GRE, other services, or IPv4 forwarding. It does **not** remove or certify cleanup of any standalone V1 legacy firewall, tc, cron or other resources. An unknown ownership marker, changed firewall rule, foreign chain reference, active V1 executable or active V1 cron job aborts removal rather than guessing. Take a snapshot and use independent console access on production gateways; removing active managed forwarding rules can interrupt traffic.
