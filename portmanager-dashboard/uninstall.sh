@@ -139,10 +139,12 @@ def main():
         # Recheck immediately before any changes; refusing drift is safer than
         # partial cleanup on a shared firewall host.
         legacy, _, hist, monitored = prepare()
-        # The minute-sampler cannot race us while this lock is held. Clear
-        # only chains/links that history_collector._inspect verified as ours.
-        history_collector._clear(hist)
+        # The exclusive lock prevents a racing V2 writer. All chain/links
+        # have already passed exact ownership checks before mutation.
         cli.uninstall(argparse.Namespace(dry_run=False, yes=True, purge=False))
+        # The V2 sampler is disabled and the release is gone; modules already
+        # loaded in this process can now safely remove its accounting hooks.
+        history_collector._clear(hist)
         for directory in paths:
             if directory.is_symlink() or not directory.is_dir():
                 raise PM2Error('E_CONFLICT', f'V2 data directory changed during removal: {directory}')

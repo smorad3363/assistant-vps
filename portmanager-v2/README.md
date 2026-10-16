@@ -4,7 +4,7 @@ oort Manager V2 has its own binary (`portmanager2`), configuration, firewall
 chains, SQLite accounting database and optional services. It does not alter
 the original V1 executable or compressed V1 payload.
 
-## One shared installer URL (after merging this branch)
+## One shared installer URL
 
 **Default V2:**
 
@@ -20,6 +20,27 @@ curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/por
 
 `sudo bash v1` is not valid for piped script arguments. Use `-s -- v1`.
 See [version router guide](docs/RELEASE-ROUTER.fa.md).
+
+## Complete removal from inside the terminal
+
+Run `sudo portmanager` or `sudo portmanager2`, then select
+**[9] Uninstall Port Manager (complete V2)**. It shows a read-only ownership
+preview and requires typing `REMOVE-PORTMANAGER2` before removing the
+program, its verified firewall/tc resources and all V2 configuration/history.
+The local `bin/uninstall.sh` ships with every installed release; the menu
+does not need internet access to remove the program.
+
+The direct CLI alternative is:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall --dry-run
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall
+```
+
+This only removes V2 resources (and an integrity-checked archive of an old V1
+executable when present). It does not reset global iptables, Docker, UFW, GRE,
+third-party tc resources or independent legacy V1 rules. Unknown ownership
+blocks uninstall and should be reviewed manually before proceeding.
 
 ## Small live-screen and existing-rules fix (2.1.0-rc.5)
 

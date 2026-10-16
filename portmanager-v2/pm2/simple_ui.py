@@ -1422,6 +1422,42 @@ def _usage_report(custom=False):
 
 
 
+def _full_uninstall_page():
+    """Show the V2 ownership preview, then perform local, confirmed removal.
+
+    Use a child process so the active dashboard exits cleanly when the
+    installed release is deleted. Never attempt a global firewall reset.
+    """
+    script = Path(__file__).resolve().parents[1] / "bin" / "uninstall.sh"
+    _title("FULL UNINSTALL", compact=True)
+    _ui_edge("top")
+    _ui_line("  Permanently remove Port Manager V2, saved data and its own rules.")
+    _ui_line("  Other applications' iptables, tc and GRE rules will be preserved.")
+    _ui_line("  Existing V1/legacy network rules are NOT included.")
+    _ui_edge("bottom")
+    if script.is_symlink() or not script.is_file() or script.stat().st_uid != 0:
+        raise PM2Error("E_CONFLICT", "Bundled uninstaller is missing or untrusted")
+    print("\n  Checking ownership and showing removal preview...\n")
+    preview = subprocess.run(["bash", str(script), "--dry-run"], check=False)
+    if preview.returncode:
+        print(_paint("91", f"\n  Uninstall preflight failed (exit {preview.returncode}). No deletion started."))
+        _ask("Enter to return")
+        return False
+    print(_paint("91;1", "\n  WARNING: Saved Port Manager V2 settings, statistics and logs will be lost."))
+    if _ask("Type REMOVE-PORTMANAGER2 to confirm") != "REMOVE-PORTMANAGER2":
+        print("  Cancelled. No changes made.")
+        _ask("Enter to return")
+        return False
+    print("\n  Removing verified Port Manager V2 resources...\n")
+    removed = subprocess.run(["bash", str(script), "--yes"], check=False)
+    if removed.returncode:
+        print(_paint("91", f"\n  Uninstall stopped (exit {removed.returncode}). Review the error above."))
+        _ask("Enter to return")
+        return False
+    print(_paint("92;1", "\n  Port Manager V2 removed successfully. Returning to shell."))
+    return True
+
+
 def menu():
     if not os.isatty(0):
         raise PM2Error("E_VALIDATION", "Interactive Port Manager requires a terminal")
@@ -1430,6 +1466,7 @@ def menu():
         choice = _choose(("1", "Live traffic & speed control"),
                          ("2", "Ports & tunnels"),
                          ("3", "Daily traffic reports"),
+                         ("9", "Uninstall Port Manager (complete V2)"),
                          ("0", "Exit Port Manager"))
         if choice in ("0", None):
             _clear_screen()
@@ -1441,6 +1478,10 @@ def menu():
                 _tunnel_page()
             elif choice == "3":
                 _usage_report()
+            elif choice == "9":
+                if _full_uninstall_page():
+                    _clear_screen()
+                    return 0
         except PM2Error as exc:
             print(_paint("91", f"  {exc.code}: {exc.message}"))
             if exc.details and exc.details.get("rule"):
