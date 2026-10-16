@@ -98,6 +98,36 @@ class NoPromptsTests(unittest.TestCase):
         confirm.assert_called_once_with("nat-token")
         self.assertIsNone(simple_ui._PENDING_MENU_ACK)
 
+    def test_uninstall_asks_only_one_keep_or_delete_question(self):
+        for choice, flag in (("1", "--keep-data"), ("2", "--purge-data")):
+            with self.subTest(choice=choice):
+                with (mock.patch.object(simple_ui, "_choose", return_value=choice) as choose,
+                      mock.patch.object(simple_ui, "_title"),
+                      mock.patch.object(simple_ui, "_ui_edge"),
+                      mock.patch.object(simple_ui, "_ui_line"),
+                      mock.patch.object(simple_ui.Path, "is_symlink", return_value=False),
+                      mock.patch.object(simple_ui.Path, "is_file", return_value=True),
+                      mock.patch.object(simple_ui.Path, "stat", return_value=mock.Mock(st_uid=0)),
+                      mock.patch.object(simple_ui.subprocess, "run",
+                                        return_value=mock.Mock(returncode=0)) as run,
+                      mock.patch.object(simple_ui, "_ask") as ask,
+                      contextlib.redirect_stdout(io.StringIO())):
+                    self.assertTrue(simple_ui._full_uninstall_page())
+                self.assertEqual(choose.call_count, 1)
+                self.assertEqual(run.call_count, 1)
+                self.assertIn(flag, run.call_args.args[0])
+                ask.assert_not_called()
+
+    def test_cancel_uninstall_does_not_change_server(self):
+        with (mock.patch.object(simple_ui, "_choose", return_value="0"),
+              mock.patch.object(simple_ui, "_title"),
+              mock.patch.object(simple_ui, "_ui_edge"),
+              mock.patch.object(simple_ui, "_ui_line"),
+              mock.patch.object(simple_ui.subprocess, "run") as run,
+              contextlib.redirect_stdout(io.StringIO())):
+            self.assertFalse(simple_ui._full_uninstall_page())
+            run.assert_not_called()
+
     def test_home_option_2_goes_to_ports(self):
         with (mock.patch.object(simple_ui.os, "isatty", return_value=True),
               mock.patch.object(simple_ui, "_title"),

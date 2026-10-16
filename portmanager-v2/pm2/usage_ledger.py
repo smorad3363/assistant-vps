@@ -6,6 +6,7 @@ not known: precise intra-interval timestamps do not exist. No invented
 backfill and no cross-port provider billing claim.
 """
 from collections import defaultdict
+from bisect import bisect_left
 from datetime import datetime, timezone, timedelta, time as day_time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import re
@@ -227,19 +228,32 @@ def summarize(intervals, start, end):
 
     grouped = {}
     overlap_sources = set()
-    # Different chains can count the same forwarded bytes. Prefer one
-    # authoritative source per overlapped timespan, even if their sample
-    # boundaries differ by a fraction of a second. We conservatively
-    # exclude the second whole interval rather than sum duplicate bytes.
+    # Source-priority-aware interval selection, O(n log n), rather than
+    # checking each minute sample against every previously accepted sample.
     for key, rows in candidates.items():
-        chosen = []
+        higher, higher_starts, same_rank = [], [], []
+        current_rank = None
         for row in sorted(rows, key=lambda x: (_rank(x[2]), x[0], x[1])):
-            if any(row[0] < accepted[1] and accepted[0] < row[1]
-                   for accepted in chosen):
+            priority = _rank(row[2])
+            if priority != current_rank:
+                if same_rank:
+                    higher = sorted(higher + same_rank, key=lambda x: (x[0], x[1]))
+                    higher_starts = [item[0] for item in higher]
+                    same_rank = []
+                current_rank = priority
+            # Higher-priority accepted intervals are sorted and disjoint.
+            # Only their two neighbors around this start can overlap.
+            pos = bisect_left(higher_starts, row[0])
+            conflict = (
+                (pos > 0 and higher[pos - 1][1] > row[0])
+                or (pos < len(higher) and higher[pos][0] < row[1])
+                or (same_rank and same_rank[-1][1] > row[0])
+            )
+            if conflict:
                 overlap_sources.add(key)
                 continue
-            chosen.append(row)
-        grouped[key] = sorted(chosen)
+            same_rank.append(row)
+        grouped[key] = sorted(higher + same_rank)
     results = []
     for (proto, port), records in grouped.items():
         low_up = low_down = extra_up = extra_down = 0

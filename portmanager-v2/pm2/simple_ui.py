@@ -1366,6 +1366,11 @@ def _usage_report(custom=False):
                 print("  Enter ALL or a port between 1 and 65535.")
                 return
             port = int(chosen_port)
+    _title("LOADING DAILY REPORT", compact=True)
+    _ui_edge("top")
+    _ui_line("  Reading traffic records and preparing the 14-day report...")
+    _ui_edge("bottom")
+    sys.stdout.flush()
     result = usage_ledger.report(start, end, zone_name, port=port)
     days = list(reversed(result.get("daily", [])))
     page = 0
@@ -1429,40 +1434,32 @@ def _usage_report(custom=False):
 
 
 def _full_uninstall_page():
-    """Show the V2 ownership preview, then perform local, confirmed removal.
-
-    Use a child process so the active dashboard exits cleanly when the
-    installed release is deleted. Never attempt a global firewall reset.
-    """
+    """Ask only whether old data should remain available for reinstall."""
     script = Path(__file__).resolve().parents[1] / "bin" / "uninstall.sh"
-    _title("FULL UNINSTALL", compact=True)
+    _title("UNINSTALL PORT MANAGER", compact=True)
     _ui_edge("top")
-    _ui_line("  Permanently remove Port Manager V2, saved data and its own rules.")
-    _ui_line("  Other applications' iptables, tc and GRE rules will be preserved.")
-    _ui_line("  Existing V1/legacy network rules are NOT included.")
+    _ui_line("  Keep previous settings and traffic history for reinstall?")
     _ui_edge("bottom")
+    choice = _choose(
+        ("1", "YES - remove program but keep data for reinstall"),
+        ("2", "NO - remove program and delete all saved data"),
+        ("0", "Cancel and go back"),
+    )
+    if choice not in ("1", "2"):
+        return False
     if script.is_symlink() or not script.is_file() or script.stat().st_uid != 0:
         raise PM2Error("E_CONFLICT", "Bundled uninstaller is missing or untrusted")
-    print("\n  Checking ownership and showing removal preview...\n")
-    preview = subprocess.run(["bash", str(script), "--dry-run"], check=False)
-    if preview.returncode:
-        print(_paint("91", f"\n  Uninstall preflight failed (exit {preview.returncode}). No deletion started."))
-        _ask("Enter to return")
-        return False
-    print(_paint("91;1", "\n  WARNING: Saved Port Manager V2 settings, statistics and logs will be lost."))
-    if _ask("Type REMOVE-PORTMANAGER2 to confirm") != "REMOVE-PORTMANAGER2":
-        print("  Cancelled. No changes made.")
-        _ask("Enter to return")
-        return False
-    print("\n  Removing verified Port Manager V2 resources...\n")
-    removed = subprocess.run(["bash", str(script), "--yes"], check=False)
+    data_option = "--keep-data" if choice == "1" else "--purge-data"
+    print("\n  Removing Port Manager V2 and owned system rules...\n", flush=True)
+    removed = subprocess.run(["bash", str(script), "--yes", data_option],
+                             check=False)
     if removed.returncode:
-        print(_paint("91", f"\n  Uninstall stopped (exit {removed.returncode}). Review the error above."))
+        print(_paint("91", f"\n  Uninstall stopped (exit {removed.returncode}). Review error above."))
         _ask("Enter to return")
         return False
-    print(_paint("92;1", "\n  Port Manager V2 removed successfully. Returning to shell."))
+    print(_paint("92;1", "\n  Removed. Data " +
+                 ("kept for reinstall." if choice == "1" else "deleted; reinstall starts fresh.")))
     return True
-
 
 def menu():
     if not os.isatty(0):

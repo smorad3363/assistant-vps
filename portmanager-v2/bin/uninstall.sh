@@ -7,16 +7,20 @@ export LC_ALL=C
 [[ "$(id -u)" -eq 0 ]] || { echo '[portmanager] Run as root/sudo.' >&2; exit 1; }
 mode=apply
 yes=0
+data_choice=ask
 for arg in "$@"; do
   case "$arg" in
     --dry-run) mode=preview ;;
     --yes) yes=1 ;;
+    --keep-data) data_choice=keep ;;
+    --purge-data) data_choice=purge ;;
     -h|--help)
       printf '%s\n' \
-        'Usage: install.sh | sudo bash -s -- uninstall [--dry-run|--yes]' \
-        '  --dry-run   Show ownership checks and removal plan, change nothing' \
-        '  --yes       Confirm irreversible deletion of V2 program, state, logs, and saved V1 archive' \
-        'Without --yes, type REMOVE-PORTMANAGER2 in the server terminal.'
+        'Usage: sudo bash -s -- uninstall [--dry-run] [--keep-data|--purge-data] [--yes]' \
+        '  --keep-data    Keep settings, traffic database and logs for reinstall' \
+        '  --purge-data   Delete all V2 saved data; reinstall starts from zero' \
+        '  --dry-run      Print removal plan without modifying system' \
+        'Without flags, only asks whether to keep previous data; --yes defaults to keep.'
       exit 0 ;;
     *) echo "[portmanager] Unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -25,7 +29,7 @@ command -v python3 >/dev/null 2>&1 || { echo '[portmanager] python3 is required.
 
 # Keep the runtime's own safety/ownership code authoritative. This script must
 # not guess which firewall rules, tc filters or systemd units belong to V2.
-python3 -I - "$mode" "$yes" <<'PY'
+python3 -I - "$mode" "$yes" "$data_choice" <<'PY'
 import argparse
 import json
 import os
@@ -36,7 +40,7 @@ import sys
 
 # Isolated Python startup prevents root importing a foreign pm2 from CWD.
 sys.path.insert(0, '/opt/portmanager2/current')
-mode, confirmed = sys.argv[1], sys.argv[2] == "1"
+mode, confirmed, data_choice = sys.argv[1], sys.argv[2] == "1", sys.argv[3]
 opt = Path('/opt/portmanager2')
 current = opt / 'current'
 launcher = Path('/usr/local/bin/portmanager2')
@@ -109,54 +113,57 @@ def prepare():
 
 
 def main():
-    # Dry run does not acquire or mutate the global lock.
+    # Single decision: preserve data, or delete it to start fresh.
+    choice = data_choice
+    if mode != 'preview' and choice == 'ask':
+        if confirmed:
+            choice = 'keep'
+        else:
+            try:
+                with open('/dev/tty', 'r+', encoding='utf-8') as tty:
+                    tty.write('Keep saved Port Manager data for next install? [Y/n]: ')
+                    tty.flush()
+                    answer = tty.readline().strip().lower()
+            except OSError:
+                raise PM2Error('E_VALIDATION', 'No terminal: specify --keep-data or --purge-data')
+            if answer not in ('', 'y', 'yes', 'n', 'no'):
+                print('[portmanager] Cancelled: answer Y or N.', file=sys.stderr)
+                return
+            choice = 'purge' if answer in ('n', 'no') else 'keep'
     legacy, plan, hist, monitored = prepare()
-    print('[portmanager] Verified Port Manager V2 removal plan:')
-    for item in plan.get('would_remove', []):
-        print(f'  - {item}')
-    for item in paths:
-        print(f'  - {item}/ (all V2-owned configuration, data and logs)')
-    if legacy:
-        print('  - archived V1 recovery binary/cron snapshot (inside V2 data)')
-    print(f'  - verified PM2_HIST_RX/TX accounting chains ({len(monitored)} tracked protocol/port pairs)')
-    print('[portmanager] Unrelated iptables rules, host tc qdiscs, Docker, UFW, and system settings are NOT reset.')
-    if legacy:
-        print('[portmanager] WARNING: Legacy V1 kernel rules/tc or independent V1 files are NOT removed by this V2 uninstaller.')
     if mode == 'preview':
-        print('[portmanager] Dry run: no changes made.')
-        return
-    if not confirmed:
-        try:
-            with open('/dev/tty', 'r+', encoding='utf-8') as tty:
-                tty.write('Type REMOVE-PORTMANAGER2 to permanently delete V2 and its saved data: ')
-                tty.flush()
-                answer = tty.readline().strip()
-        except OSError:
-            raise PM2Error('E_VALIDATION', 'Interactive confirmation unavailable; pass --yes explicitly')
-        if answer != 'REMOVE-PORTMANAGER2':
-            raise PM2Error('E_VALIDATION', 'Uninstall cancelled')
-    with cli.mutation_lock():
-        # Recheck immediately before any changes; refusing drift is safer than
-        # partial cleanup on a shared firewall host.
-        legacy, _, hist, monitored = prepare()
-        # The exclusive lock prevents a racing V2 writer. All chain/links
-        # have already passed exact ownership checks before mutation.
-        cli.uninstall(argparse.Namespace(dry_run=False, yes=True, purge=False))
-        # The V2 sampler is disabled and the release is gone; modules already
-        # loaded in this process can now safely remove its accounting hooks.
-        history_collector._clear(hist)
+        print('[portmanager] V2 removal plan:')
+        for item in plan.get('would_remove', []):
+            print(f'  - {item}')
+        print(f'  - verified traffic-counter chains ({len(monitored)} port/protocol pairs)')
         for directory in paths:
-            if directory.is_symlink() or not directory.is_dir():
-                raise PM2Error('E_CONFLICT', f'V2 data directory changed during removal: {directory}')
-            shutil.rmtree(directory)
+            action = 'delete' if choice == 'purge' else 'keep'
+            print(f'  - {action} {directory}/')
+        print('[portmanager] Unrelated GRE/Docker/UFW/legacy-V1 system rules are untouched.')
+        return
+    with cli.mutation_lock():
+        # Validate owners again after acquiring the exclusive mutation lock.
+        legacy, _, hist, monitored = prepare()
+        cli.uninstall(argparse.Namespace(dry_run=False, yes=True, purge=False))
+        # The owned sampler/timers have stopped, so its verified history
+        # counters can now be deleted without affecting other iptables chains.
+        history_collector._clear(hist)
         remaining, _ = history_collector._inspect()
         if any(hooked or present for _, _, hooked, present in remaining):
             raise PM2Error('E_APPLY', 'V2 history chains remain after removal')
         if firewall.owned_footprint_present(firewall.snapshot()):
             raise PM2Error('E_APPLY', 'V2 firewall footprint remains after removal')
-    print('[portmanager] Port Manager V2 executable, owned services, filters, history chains, and data removed.')
+        if choice == 'purge':
+            for directory in paths:
+                if directory.is_symlink() or not directory.is_dir():
+                    raise PM2Error('E_CONFLICT', f'V2 data directory changed: {directory}')
+                shutil.rmtree(directory)
+    if choice == 'keep':
+        print('[portmanager] V2 program and owned system rules removed. Saved data kept for next install.')
+    else:
+        print('[portmanager] V2 program, owned rules and saved data removed. Next install starts from zero.')
     if legacy:
-        print('[portmanager] NOTE: Pre-existing V1 firewall/tc artifacts may remain; no foreign or legacy rules were flushed.')
+        print('[portmanager] NOTE: Independent V1 firewall/tc rules have not been modified.')
 
 
 try:

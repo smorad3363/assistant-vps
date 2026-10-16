@@ -36,26 +36,31 @@ but no longer depends on single-byte/arrow-key terminal support. For an
 already installed older build use `sudo env TERM=dumb portmanager` as an
 immediate fallback without updating.
 
-## Complete removal from inside the terminal
+## Menu uninstall: one data-retention choice (option 9)
 
-Run `sudo portmanager` or `sudo portmanager2`, then select
-**[9] Uninstall Port Manager (complete V2)**. It shows a read-only ownership
-preview and requires typing `REMOVE-PORTMANAGER2` before removing the
-program, its verified firewall/tc resources and all V2 configuration/history.
-The local `bin/uninstall.sh` ships with every installed release; the menu
-does not need internet access to remove the program.
+Open `sudo portmanager` and select **[9] Uninstall Port Manager (complete V2)**.
+The ONLY decision is **keep previous data** (settings, traffic database, history,
+logs) or **delete data** (the next installation starts from zero). Reinstalling
+automatically reuses existing V2 directories and database when retained.
 
-The direct CLI alternative is:
+Either choice removes the V2 executable and its verified systemd, iptables
+and tc resources; neither flushes foreign GRE, Docker, UFW or legacy V1 rules.
+Ownership preflight remains mandatory, but has no extra confirmation screens.
 
+Direct terminal uninstall asks the same single question:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall --dry-run
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall
 ```
+For noninteractive use `uninstall --yes --keep-data` or
+`uninstall --yes --purge-data`; use `uninstall --dry-run` to preview.
 
-This only removes V2 resources (and an integrity-checked archive of an old V1
-executable when present). It does not reset global iptables, Docker, UFW, GRE,
-third-party tc resources or independent legacy V1 rules. Unknown ownership
-blocks uninstall and should be reviewed manually before proceeding.
+## Faster option 3: daily traffic reports
+
+The 14-day per-port aggregation previously used a quadratic duplicate/overlap
+scan, which could look frozen with many stored minute samples. An indexed,
+source-priority-aware interval sweep now preserves the same measured bounds
+while running roughly O(n log n). A loading header appears before reading
+the database.
 
 ## Small live-screen and existing-rules fix (2.1.0-rc.5)
 

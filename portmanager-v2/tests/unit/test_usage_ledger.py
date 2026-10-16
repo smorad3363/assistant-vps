@@ -242,6 +242,37 @@ class PortUsageTests(unittest.TestCase):
         self.assertEqual(items[0]["missing_seconds"], 60)
         self.assertEqual(items[0]["total_bytes_lower"], 60)
 
+    def test_optimized_overlap_matches_reference_selection(self):
+        import random
+        rng = random.Random(1337)
+        for _ in range(100):
+            rows = []
+            for _ in range(55):
+                start = rng.randrange(0, 360)
+                end = start + rng.randrange(1, 65)
+                rows.append((start, end, rng.choice(("auto", "v1", "uuid-v2")),
+                             "tcp", 8080, 10, 20))
+            selected = []
+            overlapped = False
+            for row in sorted(rows, key=lambda x: (
+                    usage_ledger._rank(x[2]), x[0], x[1])):
+                if any(row[0] < old[1] and old[0] < row[1] for old in selected):
+                    overlapped = True
+                    continue
+                selected.append(row)
+            actual = usage_ledger.summarize(rows, 0, 500)[0]
+            self.assertEqual(actual["total_bytes_lower"], len(selected) * 30)
+            self.assertEqual(actual["overlapping_sources"], overlapped)
+
+    def test_large_minute_history_is_not_quadratic(self):
+        import time
+        intervals = [(i * 60, (i+1) * 60, "auto", "tcp", 8443, 5, 9)
+                     for i in range(20_160)]
+        started = time.monotonic()
+        result = usage_ledger.summarize(intervals, 0, 20_160 * 60)
+        self.assertEqual(result[0]["total_bytes_lower"], 20_160 * 14)
+        self.assertLess(time.monotonic() - started, 8.0)
+
     def test_duplicate_auto_and_v2_counters_do_not_double_billing(self):
         rows = [(0, 60, "auto", "tcp", 8080, 40, 60),
                 (0, 60, "aaaacccc-1111-4444-8888-0123456789ab",

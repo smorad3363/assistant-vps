@@ -35,20 +35,21 @@ clsact; it never touches V1's root qdisc.
 access, snapshot and a test plan.** See `portmanager-v2/README.md` and
 `portmanager-v2/docs/RELEASE-ROUTER.fa.md`.
 
-## Uninstall Port Manager V2 (including owned data)
+## Menu uninstall (data can survive reinstallation)
 
-**First preview the exact removal without changes:**
+Run `sudo portmanager`, choose **[9]**, then choose:
+- **Yes**: uninstall V2 and its owned system rules but keep the configuration,
+  previous traffic reports and database; reinstall automatically reloads them.
+- **No**: uninstall V2 and all its data; reinstall initializes from zero.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall --dry-run
-```
-
-**Then remove V2 with confirmation:**
+No second confirmation or typed phrases. The direct uninstall command asks
+the same question:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall
 ```
 
-For deliberate noninteractive removal, append `--yes` instead. The dedicated implementation is [uninstall.sh](uninstall.sh).
+Add `--yes --keep-data` or `--yes --purge-data` to choose noninteractively.
+`--dry-run` previews only. Unrelated iptables, tc, GRE, Docker, UFW or
+standalone legacy V1 artifacts are not reset.
 
-This verifies ownership of the installed V2 release, configuration and data, systemd units, iptables chains, history-monitor counters and tc filters before removal. It clears V2-owned rules and services and permanently deletes V2 configuration, saved statistics, logs, and any integrity-verified archived V1 backup. It does **not** reset unrelated iptables rules, Docker, UFW, GRE, other services, or IPv4 forwarding. It does **not** remove or certify cleanup of any standalone V1 legacy firewall, tc, cron or other resources. An unknown ownership marker, changed firewall rule, foreign chain reference, active V1 executable or active V1 cron job aborts removal rather than guessing. Take a snapshot and use independent console access on production gateways; removing active managed forwarding rules can interrupt traffic.
