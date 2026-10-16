@@ -7,8 +7,9 @@ REF="${PORTMANAGER_INSTALL_REF:-master}"
 case "${1:-v2}" in
   v2|2|"") TARGET="portmanager-v2/install.sh" ;;
   v1|1) TARGET="portmanager-v1/install.sh" ;;
+  uninstall|remove) TARGET="portmanager-dashboard/uninstall.sh"; shift ;;
   *)
-    printf '%s\n' 'Usage:'       '  curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash'       '  curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- v1' >&2
+    printf '%s\n' 'Usage:'       '  curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash'       '  curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- v1'       '  curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/portmanager-dashboard/install.sh | sudo bash -s -- uninstall [--dry-run|--yes]' >&2
     exit 2
     ;;
 esac
@@ -36,7 +37,9 @@ fi
 download_https "$url" "$tmp"
 [[ -s "$tmp" ]] || { echo "Empty installer payload" >&2; exit 1; }
 bash -n "$tmp"
-if [[ "$TARGET" == "portmanager-v2/install.sh" ]]; then
+if [[ "$TARGET" == "portmanager-dashboard/uninstall.sh" ]]; then
+  bash "$tmp" "$@"
+elif [[ "$TARGET" == "portmanager-v2/install.sh" ]]; then
   PORTMANAGER2_REF="${PORTMANAGER2_REF:-$REF}" bash "$tmp"
 else
   PORTMANAGER_INSTALL_REF="$REF" bash "$tmp"
