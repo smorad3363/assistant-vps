@@ -77,7 +77,18 @@ HTTPServer(('192.0.2.2',65433),Handler).serve_forever()
 PY
 SERVER_PID=$!
 sleep 1
-out="$(ip netns exec "$PEER" curl -4 --max-time 8 -fsS http://192.0.2.1:65432/)"
+if ! out="$(ip netns exec "$PEER" curl -4 --max-time 8 -fsS http://192.0.2.1:65432/)"; then
+  echo 'FAIL: TCP connection timed out. Owned-only namespace diagnostics:' >&2
+  for ns in "$ENTRY" "$PEER"; do
+    echo "-- $ns routes --" >&2
+    ip -n "$ns" -4 route show table main >&2 || true
+    ip -n "$ns" -4 route show table 45001 >&2 || true
+    ip -n "$ns" -4 rule show >&2 || true
+    ip -n "$ns" -s link show gtn1 >&2 || true
+    ip netns exec "$ns" nft -a list table ip gre_tun >&2 || true
+  done
+  exit 1
+fi
 [[ "$out" == 'GRE_LAB_OK' ]] || { echo "FAIL: unexpected payload: $out" >&2; exit 1; }
 ip netns exec "$ENTRY" nft -j list table ip gre_tun | python3 -c 'import json,sys; j=json.load(sys.stdin); cs=[i["counter"] for i in j["nftables"] if "counter" in i]; assert any(c["name"]=="p0001u" and c["bytes"]>0 for c in cs), cs; assert any(c["name"]=="p0001d" and c["bytes"]>0 for c in cs), cs'
 echo 'PASS: NET-01 two GRE endpoints, NET-04 target==peer outer IP, forward TCP both directions, named counters.'
