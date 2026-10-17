@@ -69,7 +69,7 @@ def verify():
             assert hashlib.sha256(target.read_bytes()).hexdigest()==digest, f'Hash mismatch: {name}'
             declared.add(name)
         actual={p.relative_to(ROOT).as_posix() for p in ROOT.rglob('*') if p.is_file()
-                and '__pycache__' not in p.parts and p.name!='SHA256SUMS'}
+                and '__pycache__' not in p.parts and '.git' not in p.parts and p.name!='SHA256SUMS'}
         assert declared==actual, 'Manifest file inventory mismatch'
     print('PASS: schemas, examples, catalogs, fixtures, requirements and package integrity.')
 
