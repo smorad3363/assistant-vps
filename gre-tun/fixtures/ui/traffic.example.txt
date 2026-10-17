@@ -1,0 +1,32 @@
+Traffic
+
+ID: P0002
+Listen: 192.0.2.10:5445
+Target: 198.51.100.20:5454
+Protocol: Both
+Current upload: 1.25 Mbps
+Current download: 12.50 Mbps
+Upload limit: Unlimited
+Download limit: 20 Mbps
+
+Last 1h
+Upload: 450.00 MB
+Download: 900.00 MB
+Total: 1.35 GB
+Avg upload: 1.00 Mbps
+Avg download: 2.00 Mbps
+Coverage: Complete (3600 s)
+
+Last 24h
+Upload: 450.00 MB
+Download: 900.00 MB
+Total: 1.35 GB
+Avg upload: 0.04 Mbps
+Avg download: 0.08 Mbps
+Coverage: Complete (86400 s)
+Updated: 2026-10-17T00:00:00Z
+
+r) Refresh
+0) Back
+
+Select:

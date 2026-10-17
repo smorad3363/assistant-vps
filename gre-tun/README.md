@@ -1,42 +1,51 @@
 # GRE Tunnel Manager
 
-**Development preview — NOT production ready.**
+**Status: 0.1.0-dev — configuration-only preview, NOT production-ready.**
 
-An independent project intended for Ubuntu 22.04/24.04 to manage several native IPv4 GRE tunnels and individual port mappings. The implementation follows GRE Tunnel Manager contract v1.0.0.
+This project follows the attached GRE Tunnel Manager contract v1.0.0. It is intended for Ubuntu Server 22.04 / 24.04. Python 3 standard library is used for the runtime CLI. The frozen contract package is included in this source tree.
 
-## Permanent installer / updater
+## Permanent install and update command
 
-The entry point is reserved at this **unchanging** path:
+The **same command for initial installation and all future updates**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-tun/install.sh | sudo bash
 ```
 
-At this first GitHub commit the full code has not been uploaded. The bootstrap exits safely without changing the host until the complete tested project tree is published here. Do **not** use as a replacement for existing network management.
+This URL is only usable after this complete `gre-tun/` source tree has been committed to the specified branch. Do not deploy by treating a GitHub path that has not yet been published as available.
 
-When the release is ready, this same command will download the current release, validate it, preserve configuration and historic traffic data, and install/update it in place. Future releases must not change this URL.
+For local source installation, after extracting the release on the target server:
 
-## Intended interface
-
-```text
-GRE Tunnel Manager
-
-1) Create tunnel
-2) Manage tunnels and ports
-3) Test connection
-4) Uninstall
-
-0) Exit
+```bash
+sudo bash install.sh --local "$PWD"
 ```
 
-Features required before a production release: bidirectional GRE routing, 5445:5454 source/target port mapping, TCP/UDP/Both, per-port aggregate speed caps, rolling 1h/24h volume and average-speed figures, peer setup tokens, scoped rollback, service recovery, and ownership-safe uninstall.
+Launch and inspect:
 
-## Status
+```bash
+sudo gre-tun
+gre-tun --version
+gre-tun status --json
+gre-tun config validate --file /etc/gre-tun/config.json
+gre-tun test all
+```
 
-- Roadmap and frozen contract package received and checked.
-- Offline development snapshot created locally; 47 unit/contract tests passed.
-- Full runnable files are **not yet committed to this GitHub folder**.
-- Real GRE/NAT/QoS integration tests: NOT RUN.
-- Production release: BLOCKED.
+**Important:** The development release only saves tunnel and port *desired configurations*. It does NOT install live GRE interfaces, NAT, tc queues, or routes, and never reports a tunnel as connected. `gre-tun apply` refuses to activate non-empty configurations with `E_NOT_READY`. There is no functional live uninstall/rollback in this release. Do not use it to replace an existing tunnel manager.
 
-Keep all application messages and terminal output in English. Treat external addresses and fixtures as examples only.
+## Safety / updates
+
+- Installer downloads source to a staging directory, validates Python/JSON, protects preexisting nonowned application paths, and preserves `/etc/gre-tun` and `/var/lib/gre-tun` across updates.
+- Every install/update uses the same URL and Git branch. The reference stays constant as new versions appear at that path.
+- Runtime programs and installer output use English ASCII; Persian quick start lives outside terminal output.
+- The preview systemd service executes a read-only status command at startup. It does not reconcile real networking.
+- For production, the runtime must implement complete native nftables forwarding, bidirectional QoS and accounting, bounded diagnostics, transactional rollback, and ownership-scoped uninstall; then pass isolated netns/VM tests.
+
+## Test commands
+
+```bash
+bash RUN_CONTRACT_TESTS.sh
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+bash -n install.sh templates/gre-tun
+```
+
+See `IMPLEMENTATION_STATUS.md` and `TEST_RESULTS.md` for the verified state. Only offline tests have been executed in this environment. No production or live GRE test has been conducted.

@@ -1,0 +1,109 @@
+{
+  "command": "gre-tun",
+  "commands": [
+    {
+      "action": "menu",
+      "mutates": "only after a selected confirmed action",
+      "syntax": "gre-tun"
+    },
+    {
+      "action": "print 1.0.0",
+      "mutates": false,
+      "syntax": "gre-tun --version"
+    },
+    {
+      "action": "fixed command help",
+      "mutates": false,
+      "syntax": "gre-tun --help"
+    },
+    {
+      "action": "read coherent status",
+      "mutates": false,
+      "syntax": "gre-tun status [--json]"
+    },
+    {
+      "action": "bounded diagnostic; default all",
+      "mutates": "only own report files",
+      "syntax": "gre-tun test [Txxxx|all] [--json]"
+    },
+    {
+      "action": "traffic snapshot",
+      "mutates": "serialized statistics observation only",
+      "syntax": "gre-tun stats Pxxxx|Txxxx [--json]"
+    },
+    {
+      "action": "reconcile saved config; --check is read-only",
+      "mutates": "without --check",
+      "syntax": "gre-tun apply [--check]"
+    },
+    {
+      "action": "print saved setup token",
+      "mutates": false,
+      "syntax": "gre-tun peer export Txxxx"
+    },
+    {
+      "action": "validate and confirm local setup or negotiated update",
+      "mutates": "after confirmation",
+      "syntax": "gre-tun peer import --code TOKEN"
+    },
+    {
+      "action": "accept conflict token; stage next candidate list and confirm",
+      "mutates": "after confirmation",
+      "syntax": "gre-tun peer regenerate --code TOKEN"
+    },
+    {
+      "action": "schema and cross-field validation; no network apply",
+      "mutates": false,
+      "syntax": "gre-tun config validate --file PATH"
+    },
+    {
+      "action": "remove owned runtime objects; retain saved data",
+      "mutates": true,
+      "syntax": "gre-tun uninstall --keep-data --yes"
+    },
+    {
+      "action": "remove owned runtime objects and saved data",
+      "mutates": true,
+      "syntax": "gre-tun uninstall --delete-data --yes"
+    }
+  ],
+  "default": "interactive_menu",
+  "exit_codes": {
+    "apply_rolled_back": 4,
+    "diagnostic_fail": 6,
+    "diagnostic_unverified": 7,
+    "recovery_incomplete": 5,
+    "success_or_cancel": 0,
+    "usage": 2,
+    "validation_or_conflict": 3
+  },
+  "root_required_for_network": true,
+  "stats_json_keys": [
+    "contract_version",
+    "item_id",
+    "as_of_ms",
+    "current",
+    "last_1h",
+    "last_24h",
+    "limits",
+    "includes_earlier_settings"
+  ],
+  "status_json_keys": [
+    "contract_version",
+    "config_revision",
+    "tunnels",
+    "forwards",
+    "service",
+    "pending_transaction"
+  ],
+  "test_json_keys": [
+    "contract_version",
+    "test_id",
+    "timestamp_utc",
+    "tunnel_id",
+    "structure",
+    "reachability",
+    "result",
+    "log_path"
+  ]
+}

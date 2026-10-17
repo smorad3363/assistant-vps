@@ -1,0 +1,150 @@
+{
+  "E_ADDRESS_CONFLICT": {
+    "exit_code": 3,
+    "message": "No free tunnel address is available from this setup code."
+  },
+  "E_APPLY": {
+    "exit_code": 4,
+    "message": "Changes failed. Previous settings were restored."
+  },
+  "E_BUSY": {
+    "exit_code": 3,
+    "message": "Another operation is running. Try again shortly."
+  },
+  "E_CAPABILITY": {
+    "exit_code": 3,
+    "message": "A required system feature is unavailable: {feature}."
+  },
+  "E_CHOICE": {
+    "exit_code": 2,
+    "message": "Select one of the listed options."
+  },
+  "E_CODE": {
+    "exit_code": 3,
+    "message": "The setup code is invalid or damaged."
+  },
+  "E_CODE_HOST": {
+    "exit_code": 3,
+    "message": "This setup code is for a different server."
+  },
+  "E_CONFIG": {
+    "exit_code": 3,
+    "message": "Saved settings are invalid: {detail}."
+  },
+  "E_DATA": {
+    "exit_code": 3,
+    "message": "Invalid data: {detail}."
+  },
+  "E_DEPENDENCY": {
+    "exit_code": 3,
+    "message": "A required package could not be installed: {package}."
+  },
+  "E_FIREWALL_CONFLICT": {
+    "exit_code": 3,
+    "message": "Existing firewall rules conflict with this tunnel: {detail}."
+  },
+  "E_ID_EXHAUSTED": {
+    "exit_code": 3,
+    "message": "No unused object IDs remain in this installation."
+  },
+  "E_IP": {
+    "exit_code": 3,
+    "message": "Enter a valid unicast IPv4 address."
+  },
+  "E_LIMIT": {
+    "exit_code": 3,
+    "message": "Enter a whole number from 0 to 100000, or Unlimited."
+  },
+  "E_LOCAL_IP": {
+    "exit_code": 3,
+    "message": "The selected local IP is not available on this server."
+  },
+  "E_MTU": {
+    "exit_code": 3,
+    "message": "The selected network path cannot use the required tunnel MTU."
+  },
+  "E_NAME": {
+    "exit_code": 3,
+    "message": "Use 1 to 32 English letters, numbers, spaces, dots, underscores or hyphens."
+  },
+  "E_NON_TTY": {
+    "exit_code": 2,
+    "message": "Use an explicit command when no interactive terminal is available."
+  },
+  "E_NOT_FOUND": {
+    "exit_code": 3,
+    "message": "The selected item does not exist."
+  },
+  "E_OS": {
+    "exit_code": 3,
+    "message": "Supported systems: Ubuntu 22.04 and 24.04 with systemd."
+  },
+  "E_PEER_SELF": {
+    "exit_code": 3,
+    "message": "The peer IP must belong to another server."
+  },
+  "E_PORT_BATCH": {
+    "exit_code": 3,
+    "message": "Enter no more than 256 ports at a time."
+  },
+  "E_PORT_CONFLICT": {
+    "exit_code": 3,
+    "message": "{ip}:{port}/{protocol} is already in use."
+  },
+  "E_PORT_DUPLICATE": {
+    "exit_code": 3,
+    "message": "The same input port appears more than once."
+  },
+  "E_PORT_FORMAT": {
+    "exit_code": 3,
+    "message": "Use PORT or LISTEN:TARGET, separated by commas."
+  },
+  "E_PORT_RANGE": {
+    "exit_code": 3,
+    "message": "Ports must be between 1 and 65535."
+  },
+  "E_QOS_UNSUPPORTED": {
+    "exit_code": 3,
+    "message": "This system cannot apply the requested speed limit safely."
+  },
+  "E_REQUIRED": {
+    "exit_code": 3,
+    "message": "A value is required."
+  },
+  "E_RESOURCE_CONFLICT": {
+    "exit_code": 3,
+    "message": "A required network resource is already used by another application: {resource}."
+  },
+  "E_ROLLBACK_INCOMPLETE": {
+    "exit_code": 5,
+    "message": "Changes failed and recovery is incomplete. Report: {path}."
+  },
+  "E_ROUTE": {
+    "exit_code": 3,
+    "message": "The required network path is unavailable or would loop."
+  },
+  "E_SAMPLE": {
+    "exit_code": 3,
+    "message": "Traffic data is incomplete or invalid."
+  },
+  "E_SINGLE_PORT": {
+    "exit_code": 3,
+    "message": "Edit one port mapping at a time."
+  },
+  "E_STALE_CODE": {
+    "exit_code": 3,
+    "message": "A newer setup code is already saved."
+  },
+  "E_TIMEOUT": {
+    "exit_code": 3,
+    "message": "The operation timed out: {operation}."
+  },
+  "E_UNINSTALL": {
+    "exit_code": 5,
+    "message": "Uninstall is incomplete. Remaining resources: {detail}."
+  },
+  "E_YES_NO": {
+    "exit_code": 2,
+    "message": "Enter yes or no."
+  }
+}

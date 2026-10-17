@@ -1,0 +1,111 @@
+{
+  "create": {
+    "items": [
+      {
+        "key": "1",
+        "text": "new_tunnel"
+      },
+      {
+        "key": "2",
+        "text": "import_code"
+      }
+    ],
+    "prompt": "select",
+    "title": "create_title",
+    "zero": "back"
+  },
+  "main": {
+    "items": [
+      {
+        "key": "1",
+        "text": "main_create"
+      },
+      {
+        "key": "2",
+        "text": "main_manage"
+      },
+      {
+        "key": "3",
+        "text": "main_test"
+      },
+      {
+        "key": "4",
+        "text": "main_uninstall"
+      }
+    ],
+    "prompt": "select",
+    "title": "app_title",
+    "zero": "exit"
+  },
+  "port": {
+    "items": [
+      {
+        "key": "1",
+        "text": "edit_mapping"
+      },
+      {
+        "key": "2",
+        "text": "speed_limits"
+      },
+      {
+        "key": "3",
+        "text": "disable_port",
+        "text_disabled": "enable_port"
+      },
+      {
+        "key": "4",
+        "text": "delete_port"
+      }
+    ],
+    "prompt": "select",
+    "title": "port_title",
+    "zero": "back"
+  },
+  "ports": {
+    "items": [
+      {
+        "key": "1",
+        "text": "add_ports"
+      },
+      {
+        "key": "2",
+        "text": "edit_port"
+      },
+      {
+        "key": "3",
+        "text": "traffic"
+      }
+    ],
+    "prompt": "select",
+    "title": "ports_title",
+    "zero": "back"
+  },
+  "tunnel": {
+    "items": [
+      {
+        "key": "1",
+        "text": "ports"
+      },
+      {
+        "key": "2",
+        "text": "edit_tunnel"
+      },
+      {
+        "key": "3",
+        "text": "disable_tunnel",
+        "text_disabled": "enable_tunnel"
+      },
+      {
+        "key": "4",
+        "text": "show_code"
+      },
+      {
+        "key": "5",
+        "text": "delete_tunnel"
+      }
+    ],
+    "prompt": "select",
+    "title": "tunnel_title",
+    "zero": "back"
+  }
+}

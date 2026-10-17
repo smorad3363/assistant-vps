@@ -1,0 +1,30 @@
+{
+  "application_root": "/opt/gre-tun",
+  "config": "/etc/gre-tun/config.json",
+  "launcher": "/usr/local/bin/gre-tun",
+  "lock": "/run/gre-tun/app.lock",
+  "lock_timeout_seconds": 5,
+  "log_rotation": {
+    "bytes_per_file": 2097152,
+    "rotated_files": 2
+  },
+  "logs": "/var/log/gre-tun",
+  "max_test_report_lines": 20,
+  "nft_family": "ip",
+  "nft_table": "gre_tun",
+  "operation_timeout_seconds": 45,
+  "reconcile_seconds": 30,
+  "repair_budget_count": 3,
+  "repair_budget_seconds": 900,
+  "repair_cooldown_seconds": 180,
+  "retained_revisions": 5,
+  "retained_test_reports": 20,
+  "retention_seconds": 90000,
+  "runtime": "/run/gre-tun",
+  "sample_seconds": 60,
+  "service": "/etc/systemd/system/gre-tun.service",
+  "state": "/var/lib/gre-tun/state",
+  "statistics": "/var/lib/gre-tun/stats.sqlite3",
+  "sysctl": "/etc/sysctl.d/90-gre-tun.conf",
+  "transaction_guard_seconds": 60
+}

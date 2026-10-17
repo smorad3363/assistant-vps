@@ -1,0 +1,36 @@
+{
+  "as_of_ms": 86400000,
+  "contract_version": "1.0.0",
+  "current": {
+    "download_mbps": "12.50",
+    "upload_mbps": "1.25"
+  },
+  "includes_earlier_settings": false,
+  "item_id": "P0002",
+  "last_1h": {
+    "as_of_ms": 86400000,
+    "avg_download_mbps": "2.00",
+    "avg_upload_mbps": "1.00",
+    "coverage_ms": 3600000,
+    "download_bytes": 900000000,
+    "status": "complete",
+    "total_bytes": 1350000000,
+    "upload_bytes": 450000000,
+    "window_seconds": 3600
+  },
+  "last_24h": {
+    "as_of_ms": 86400000,
+    "avg_download_mbps": "0.08",
+    "avg_upload_mbps": "0.04",
+    "coverage_ms": 86400000,
+    "download_bytes": 900000000,
+    "status": "complete",
+    "total_bytes": 1350000000,
+    "upload_bytes": 450000000,
+    "window_seconds": 86400
+  },
+  "limits": {
+    "download_mbps": 20,
+    "upload_mbps": 0
+  }
+}

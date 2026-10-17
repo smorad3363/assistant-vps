@@ -1,0 +1,162 @@
+{
+  "$defs": {
+    "window": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "avg_download_mbps": {
+          "pattern": "^[0-9]+\\.[0-9]{2}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "avg_upload_mbps": {
+          "pattern": "^[0-9]+\\.[0-9]{2}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coverage_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "download_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "empty",
+            "partial",
+            "complete"
+          ]
+        },
+        "total_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "upload_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "window_seconds": {
+          "enum": [
+            3600,
+            86400
+          ],
+          "type": "integer"
+        }
+      },
+      "required": [
+        "as_of_ms",
+        "window_seconds",
+        "coverage_ms",
+        "status",
+        "upload_bytes",
+        "download_bytes",
+        "total_bytes",
+        "avg_upload_mbps",
+        "avg_download_mbps"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:gre-tun:stats:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "as_of_ms": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "contract_version": {
+      "const": "1.0.0"
+    },
+    "current": {
+      "additionalProperties": false,
+      "properties": {
+        "download_mbps": {
+          "pattern": "^[0-9]+\\.[0-9]{2}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "upload_mbps": {
+          "pattern": "^[0-9]+\\.[0-9]{2}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "upload_mbps",
+        "download_mbps"
+      ],
+      "type": "object"
+    },
+    "includes_earlier_settings": {
+      "type": "boolean"
+    },
+    "item_id": {
+      "pattern": "^[PT][0-9]{4}$",
+      "type": "string"
+    },
+    "last_1h": {
+      "$ref": "#/$defs/window"
+    },
+    "last_24h": {
+      "$ref": "#/$defs/window"
+    },
+    "limits": {
+      "additionalProperties": false,
+      "properties": {
+        "download_mbps": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "upload_mbps": {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "upload_mbps",
+        "download_mbps"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "contract_version",
+    "item_id",
+    "as_of_ms",
+    "current",
+    "last_1h",
+    "last_24h",
+    "limits",
+    "includes_earlier_settings"
+  ],
+  "title": "Logical traffic snapshot",
+  "type": "object"
+}

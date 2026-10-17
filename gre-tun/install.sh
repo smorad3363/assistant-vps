@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Permanent GRE Tunnel Manager install/update bootstrap.
-# Safe to run repeatedly. Refuses incomplete or unverified releases.
+# Stable entry point for first installation and all future updates.
+# Development build 0.1.0-dev: installs a configuration/diagnostic preview only.
 set -euo pipefail
 umask 077
-
 OWNER='smorad3363'
 REPO='assistant-vps'
 BRANCH='master'
@@ -11,90 +10,91 @@ FOLDER='gre-tun'
 APP='/opt/gre-tun'
 LAUNCH='/usr/local/bin/gre-tun'
 UNIT='/etc/systemd/system/gre-tun.service'
-SOURCE_URL='https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-tun/src/gre_tun/cli.py'
-TMP=''
+OWN_MARK='.gre-tun-owned'
+LOCAL_SOURCE=''
 STAGE=''
-OLD=''
+BACKUP=''
+HAD_EXISTING=0
 
 log() { printf '[gre-tun] %s\n' "$*"; }
 die() { printf '[gre-tun] Error: %s\n' "$*" >&2; exit 1; }
 cleanup() {
-  if [[ -n "$TMP" && -d "$TMP" ]]; then rm -rf -- "$TMP"; fi
-  if [[ -n "$STAGE" && -d "$STAGE" ]]; then rm -rf -- "$STAGE"; fi
+  if [[ -n "$STAGE" && -e "$STAGE" ]]; then rm -rf -- "$STAGE"; fi
+  if [[ -n "$LOCAL_SOURCE" && -d "$LOCAL_SOURCE" && "${REMOVE_LOCAL_SOURCE:-0}" == 1 ]]; then rm -rf -- "$LOCAL_SOURCE"; fi
 }
 trap cleanup EXIT
-[[ "$EUID" -eq 0 ]] || die 'Root privileges required.'
-command -v curl >/dev/null || die 'curl is required.'
-# The bootstrap becomes live only after all app sources have been published.
-if ! curl -fsSIL --connect-timeout 5 --max-time 12 "$SOURCE_URL" >/dev/null; then
-  die 'Release source is not published yet. No host changes were made.'
-fi
-[[ -f /etc/os-release ]] || die 'Unknown operating system.'
+
+[[ "${EUID}" == '0' ]] || die 'Run as root using sudo.'
+[[ -f /etc/os-release ]] || die 'Linux OS release file is missing.'
+# shellcheck disable=SC1091
 . /etc/os-release
-[[ "$ID" == ubuntu && ( "$VERSION_ID" == 22.04 || "$VERSION_ID" == 24.04 ) ]] || die 'Ubuntu 22.04/24.04 required.'
+[[ "$ID" == 'ubuntu' && ( "$VERSION_ID" == '22.04' || "$VERSION_ID" == '24.04' ) ]] || die 'Supported: Ubuntu 22.04 or 24.04.'
 [[ -d /run/systemd/system ]] || die 'systemd is required.'
-for item in "$APP" "$LAUNCH" "$UNIT"; do
-  if [[ -e "$item" || -L "$item" ]]; then
-    [[ -f "$APP/.gre-tun-owned" ]] || die "Foreign installation at $item; refusing overwrite."
+for existing in "$APP" "$LAUNCH" "$UNIT"; do
+  if [[ -e "$existing" || -L "$existing" ]]; then
+    [[ -f "$APP/$OWN_MARK" ]] || die "Non-owned installation conflict: $existing"
   fi
 done
-command -v git >/dev/null || die 'git is required (apt-get install git).'
-command -v python3 >/dev/null || die 'python3 is required.'
-TMP="$(mktemp -d /tmp/gre-tun-install.XXXXXXXX)"
-timeout 90 git clone -q --depth 1 --single-branch --branch "$BRANCH" \
-  "https://github.com/$OWNER/$REPO.git" "$TMP/source" || die 'Repository download failed.'
-SRC="$TMP/source/$FOLDER"
-for f in src/gre_tun/cli.py src/gre_tun/contract.py \
-  templates/gre-tun templates/gre-tun.service contracts/menus.json \
-  contracts/ui.en.json SHA256SUMS; do
-  [[ -f "$SRC/$f" ]] || die "Release missing $f. No host changes made."
-done
-python3 - "$SRC" <<'PY' || die 'Release manifest validation failed.'
-import ast, hashlib, json, pathlib, sys
-r=pathlib.Path(sys.argv[1])
-declared=set()
-for line in (r/'SHA256SUMS').read_text().splitlines():
-    digest, name=line.split('  ',1)
-    p=(r/name).resolve()
-    if not p.is_relative_to(r.resolve()) or not p.is_file():
-        raise SystemExit('Unsafe source manifest entry')
-    if hashlib.sha256(p.read_bytes()).hexdigest()!=digest:
-        raise SystemExit('Source checksum mismatch')
-    declared.add(name)
-actual={p.relative_to(r).as_posix() for p in r.rglob('*') if p.is_file()
-        and '.git' not in p.parts and '__pycache__' not in p.parts
-        and p.name!='SHA256SUMS'}
-if actual != declared: raise SystemExit('Source file inventory mismatch')
-for p in (r/'src/gre_tun').glob('*.py'):
-    ast.parse(p.read_text(encoding='utf-8'),filename=str(p))
+if [[ -e "$APP" ]]; then HAD_EXISTING=1; fi
+
+if [[ "${1:-}" == '--local' ]]; then
+  [[ $# -eq 2 && -d "$2" ]] || die 'Usage: install.sh --local /path/to/gre-tun'
+  SRC="$(cd "$2" && pwd -P)"
+else
+  command -v git >/dev/null || {
+    log 'Installing required git from official Ubuntu package repositories.'
+    export DEBIAN_FRONTEND=noninteractive
+    timeout 120 apt-get update -qq || die 'apt-get update failed.'
+    timeout 180 apt-get install -y -qq git || die 'git installation failed.'
+  }
+  LOCAL_SOURCE="$(mktemp -d /tmp/gre-tun-source.XXXXXXXX)"
+  REMOVE_LOCAL_SOURCE=1
+  log 'Downloading source from the pinned repository and branch.'
+  timeout 90 git clone --quiet --depth 1 --single-branch --branch "$BRANCH" \
+    "https://github.com/$OWNER/$REPO.git" "$LOCAL_SOURCE/source" || die 'Git download failed.'
+  SRC="$LOCAL_SOURCE/source/$FOLDER"
+fi
+[[ -f "$SRC/src/gre_tun/cli.py" && -f "$SRC/src/gre_tun/contract.py" && -f "$SRC/templates/gre-tun" ]] || die 'Incomplete or unready source; existing installation is unchanged.'
+command -v python3 >/dev/null || die 'python3 must be installed from Ubuntu repositories.'
+python3 - "$SRC" <<'PY' || die 'Source integrity validation failed.'
+import ast
+import pathlib
+import sys
+base=pathlib.Path(sys.argv[1])
+for path in (base/'src/gre_tun').rglob('*.py'):
+    ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
 for name in ('contracts/menus.json','contracts/ui.en.json'):
-    json.loads((r/name).read_text())
-print('[gre-tun] Source validated.')
+    import json
+    json.loads((base/name).read_text(encoding='utf-8'))
+print('[gre-tun] Python syntax and JSON validated.')
 PY
 STAGE="$(mktemp -d /opt/.gre-tun-stage.XXXXXXXX)"
-cp -a "$SRC/." "$STAGE/"
-printf 'managed by gre-tun installer\n' > "$STAGE/.gre-tun-owned"
-chmod 600 "$STAGE/.gre-tun-owned"
-if [[ -d "$APP" ]]; then
-  OLD="$(mktemp -d /opt/.gre-tun-prev.XXXXXXXX)"
-  rmdir "$OLD"
-  mv "$APP" "$OLD"
+cp -a -- "$SRC/." "$STAGE/"
+printf 'managed by gre-tun installer\n' > "$STAGE/$OWN_MARK"
+chmod 600 "$STAGE/$OWN_MARK"
+# Save a compact snapshot for rollback; only the application code is swapped.
+if [[ $HAD_EXISTING == 1 ]]; then
+  BACKUP="$(mktemp -d /opt/.gre-tun-previous.XXXXXXXX)"
+  rmdir -- "$BACKUP"
+  mv -- "$APP" "$BACKUP"
 fi
-if ! mv "$STAGE" "$APP"; then
-  if [[ -n "$OLD" ]]; then mv "$OLD" "$APP"; fi
-  die 'Unable to install source.'
+if ! mv -- "$STAGE" "$APP"; then
+  [[ -z "$BACKUP" ]] || mv -- "$BACKUP" "$APP"
+  die 'Failed to activate application code.'
 fi
 STAGE=''
-if ! install -m 755 "$APP/templates/gre-tun" "$LAUNCH"; then
-  die 'Could not install launcher. Manual recovery required.'
-fi
-if ! install -m 644 "$APP/templates/gre-tun.service" "$UNIT"; then
-  die 'Could not install service. Manual recovery required.'
+if ! install -m 0755 "$APP/templates/gre-tun" "$LAUNCH" || ! install -m 0644 "$APP/templates/gre-tun.service" "$UNIT"; then
+  rm -rf -- "$APP"
+  [[ -z "$BACKUP" ]] || mv -- "$BACKUP" "$APP"
+  die 'Failed to install the launcher or service.'
 fi
 mkdir -p /etc/gre-tun /var/lib/gre-tun/state /var/log/gre-tun /run/gre-tun
 chmod 700 /etc/gre-tun /var/lib/gre-tun/state /var/log/gre-tun /run/gre-tun
 systemctl daemon-reload
-systemctl enable gre-tun.service >/dev/null
-[[ -z "$OLD" ]] || rm -rf "$OLD"
-log 'Installation/update finished. Saved settings and statistics were preserved.'
+if ! systemctl enable gre-tun.service >/dev/null; then
+  log 'Warning: service activation was not enabled.'
+fi
+if [[ -n "$BACKUP" ]]; then rm -rf -- "$BACKUP"; fi
+log 'Installed source preview. Existing config and traffic data were preserved.'
+log 'This development build does not activate GRE, NAT, or QoS.'
 log 'Run: sudo gre-tun'

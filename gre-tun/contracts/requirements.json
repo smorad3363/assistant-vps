@@ -1,0 +1,221 @@
+{
+  "cases": [
+    {
+      "expected": "Exact four-option menu; English only",
+      "id": "UI-01",
+      "implementation_result": "NOT RUN",
+      "scenario": "gre-tun default launch"
+    },
+    {
+      "expected": "Three mappings; no target-port question",
+      "id": "UI-02",
+      "implementation_result": "NOT RUN",
+      "scenario": "Add 443,5445:5454,8080"
+    },
+    {
+      "expected": "Others unchanged; one confirmation",
+      "id": "UI-03",
+      "implementation_result": "NOT RUN",
+      "scenario": "Edit one field and Enter others"
+    },
+    {
+      "expected": "No partial saved mutation",
+      "id": "UI-04",
+      "implementation_result": "NOT RUN",
+      "scenario": "EOF, invalid token, back"
+    },
+    {
+      "expected": "Payload in both directions; exact outer path",
+      "id": "NET-01",
+      "implementation_result": "NOT RUN",
+      "scenario": "Real two-ended GRE"
+    },
+    {
+      "expected": "No duplicate interface/rule/ID",
+      "id": "NET-02",
+      "implementation_result": "NOT RUN",
+      "scenario": "Same outer pair imported twice"
+    },
+    {
+      "expected": "Independent paths; one removal isolated",
+      "id": "NET-03",
+      "implementation_result": "NOT RUN",
+      "scenario": "Four-tunnel mesh"
+    },
+    {
+      "expected": "TCP/UDP work; outer GRE never loops",
+      "id": "NET-04",
+      "implementation_result": "NOT RUN",
+      "scenario": "Target equals peer outer IP"
+    },
+    {
+      "expected": "Correct per-forward table and replies",
+      "id": "NET-05",
+      "implementation_result": "NOT RUN",
+      "scenario": "Two tunnels share target"
+    },
+    {
+      "expected": "Scoped peer SNAT and return routing work",
+      "id": "NET-06",
+      "implementation_result": "NOT RUN",
+      "scenario": "Third-party target"
+    },
+    {
+      "expected": "Correct routing/accounting/capping; no bypass",
+      "id": "NET-07",
+      "implementation_result": "NOT RUN",
+      "scenario": "UDP fragments/large packets"
+    },
+    {
+      "expected": "Matching IPv4 TCP input blocked; UDP checked separately",
+      "id": "CON-01",
+      "implementation_result": "NOT RUN",
+      "scenario": "Local TCP wildcard listener"
+    },
+    {
+      "expected": "IPv4 exposure detected or conservative conflict",
+      "id": "CON-02",
+      "implementation_result": "NOT RUN",
+      "scenario": "Dual-stack wildcard listener"
+    },
+    {
+      "expected": "Allowed when truly disjoint",
+      "id": "CON-03",
+      "implementation_result": "NOT RUN",
+      "scenario": "Same port different specific IP"
+    },
+    {
+      "expected": "Overlap blocked without deleting it",
+      "id": "CON-04",
+      "implementation_result": "NOT RUN",
+      "scenario": "Existing DNAT/REDIRECT/TPROXY"
+    },
+    {
+      "expected": "Relevant conflict reported; no false coexistence",
+      "id": "CON-05",
+      "implementation_result": "NOT RUN",
+      "scenario": "Foreign DROP/NOTRACK/flowtable/zone"
+    },
+    {
+      "expected": "Refused; foreign object unchanged",
+      "id": "CON-06",
+      "implementation_result": "NOT RUN",
+      "scenario": "Existing reserved name/mark/table"
+    },
+    {
+      "expected": "<=22 Mbps receiver; >=16 in capable lab",
+      "id": "QOS-01",
+      "implementation_result": "NOT RUN",
+      "scenario": "20 Mbps cap, 30-second steady sample"
+    },
+    {
+      "expected": "One shared cap per direction",
+      "id": "QOS-02",
+      "implementation_result": "NOT RUN",
+      "scenario": "Many clients + Both"
+    },
+    {
+      "expected": "Independent counters/classes/limits",
+      "id": "QOS-03",
+      "implementation_result": "NOT RUN",
+      "scenario": "Two ports to same target"
+    },
+    {
+      "expected": "Immediate scoped class update; other traffic unchanged",
+      "id": "QOS-04",
+      "implementation_result": "NOT RUN",
+      "scenario": "Cap edit/unlimited"
+    },
+    {
+      "expected": "No policy-route loop; IFB class used",
+      "id": "QOS-05",
+      "implementation_result": "NOT RUN",
+      "scenario": "Reply with inherited ctmark"
+    },
+    {
+      "expected": "Counters grow beyond first packet",
+      "id": "STA-01",
+      "implementation_result": "NOT RUN",
+      "scenario": "Single long-lived connection"
+    },
+    {
+      "expected": "Reference exact bytes/rounding/coverage",
+      "id": "STA-02",
+      "implementation_result": "NOT RUN",
+      "scenario": "Fixed 1h/24h fixtures"
+    },
+    {
+      "expected": "No negative/huge/duplicated volume",
+      "id": "STA-03",
+      "implementation_result": "NOT RUN",
+      "scenario": "Restart, epoch reset and gap"
+    },
+    {
+      "expected": "Zero bytes with real covered time",
+      "id": "STA-04",
+      "implementation_result": "NOT RUN",
+      "scenario": "Idle or disabled known interval"
+    },
+    {
+      "expected": "Attribution retained with correct label/tunnel",
+      "id": "STA-05",
+      "implementation_result": "NOT RUN",
+      "scenario": "Edited/deleted port history"
+    },
+    {
+      "expected": "No duplicates, restarts or counter reset",
+      "id": "LIFE-01",
+      "implementation_result": "NOT RUN",
+      "scenario": "Repeated apply"
+    },
+    {
+      "expected": "Scoped rollback guard restores prior owned state",
+      "id": "LIFE-02",
+      "implementation_result": "NOT RUN",
+      "scenario": "Failed cutover / killed shell"
+    },
+    {
+      "expected": "Desired state/caps return; saved history retained",
+      "id": "LIFE-03",
+      "implementation_result": "NOT RUN",
+      "scenario": "Reboot"
+    },
+    {
+      "expected": "Active objects gone, saved state restores safely",
+      "id": "LIFE-04",
+      "implementation_result": "NOT RUN",
+      "scenario": "Keep-data uninstall/reinstall"
+    },
+    {
+      "expected": "No owned residual state or active objects",
+      "id": "LIFE-05",
+      "implementation_result": "NOT RUN",
+      "scenario": "Delete-data uninstall"
+    },
+    {
+      "expected": "UNVERIFIED; no destructive heal",
+      "id": "TEST-01",
+      "implementation_result": "NOT RUN",
+      "scenario": "ICMP blocked but service active"
+    },
+    {
+      "expected": "FAIL, never PASS",
+      "id": "TEST-02",
+      "implementation_result": "NOT RUN",
+      "scenario": "Structure mismatch with ping reply"
+    },
+    {
+      "expected": "No fabricated outage; bounded output",
+      "id": "TEST-03",
+      "implementation_result": "NOT RUN",
+      "scenario": "Quiet tunnel / UNKNOWN link"
+    },
+    {
+      "expected": "Byte/semantic-equivalent state survives all operations",
+      "id": "OWN-01",
+      "implementation_result": "NOT RUN",
+      "scenario": "Foreign sentinels and SSH"
+    }
+  ],
+  "contract_version": "1.0.0"
+}

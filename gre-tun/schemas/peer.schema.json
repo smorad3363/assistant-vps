@@ -1,0 +1,82 @@
+{
+  "$id": "urn:gre-tun:peer:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidates": {
+      "items": {
+        "pattern": "^10\\.[0-9]+\\.[0-9]+\\.[0-9]+/30$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "key": {
+      "maximum": 4294967295,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "kind": {
+      "enum": [
+        "setup",
+        "conflict"
+      ]
+    },
+    "mtu": {
+      "maximum": 1400,
+      "minimum": 1280,
+      "type": "integer"
+    },
+    "outer_a": {
+      "format": "ipv4",
+      "type": "string"
+    },
+    "outer_b": {
+      "format": "ipv4",
+      "type": "string"
+    },
+    "pair_id": {
+      "pattern": "^[0-9a-f]{16}$",
+      "type": "string"
+    },
+    "rejected_cidrs": {
+      "items": {
+        "pattern": "^10\\.[0-9]+\\.[0-9]+\\.[0-9]+/30$",
+        "type": "string"
+      },
+      "maxItems": 16,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "revision": {
+      "maximum": 2147483647,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "selected_index": {
+      "maximum": 15,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "pair_id",
+    "outer_a",
+    "outer_b",
+    "key",
+    "mtu",
+    "candidates",
+    "selected_index",
+    "revision",
+    "rejected_cidrs"
+  ],
+  "title": "GT1 peer payload",
+  "type": "object"
+}

@@ -1,0 +1,73 @@
+{
+  "contract_version": "1.0.0",
+  "internal_types": "Use Python dataclasses for HostSnapshot, Proposal, MutationPlan and result records. Keep side effects behind an injectable command runner and filesystem/state adapters. Tests must be able to inspect exact argv and mutation order without running them.",
+  "modules": {
+    "cli": [
+      "main(argv=None) -> int",
+      "build_parser() -> ArgumentParser"
+    ],
+    "config": [
+      "load_config(path) -> dict",
+      "validate_config(config, observed) -> None",
+      "save_config_atomic(config, path) -> None"
+    ],
+    "contract": [
+      "Reuse the frozen pure functions; installed renderer receives root=/opt/gre-tun explicitly."
+    ],
+    "daemon": [
+      "main() -> int",
+      "reconcile_once(context) -> None"
+    ],
+    "diagnostics": [
+      "test_tunnel(tunnel_id, context) -> dict",
+      "test_all(context) -> list[dict]"
+    ],
+    "firewall": [
+      "render_owned_batch(config, current) -> str",
+      "check_batch(batch) -> None",
+      "apply_batch(batch) -> None"
+    ],
+    "network": [
+      "inspect_owned(config, ownership) -> NetworkSnapshot",
+      "plan_network(before, after, observed) -> MutationPlan",
+      "verify_network(config, observed) -> Verification"
+    ],
+    "peer": [
+      "create_pair(config, local_ip, peer_ip, name, observed) -> Proposal",
+      "import_token(config, token, observed) -> Proposal",
+      "export_token(config, tunnel_id) -> str"
+    ],
+    "ports": [
+      "add_batch(config, tunnel_id, mappings, protocol, listen_ip, target_ip) -> Proposal",
+      "edit_forward(config, forward_id, changes) -> Proposal"
+    ],
+    "qos": [
+      "plan_qos(config, observed) -> MutationPlan",
+      "verify_qos(config, observed) -> Verification"
+    ],
+    "stats": [
+      "sample_all(context, now) -> None",
+      "get_stats(item_id, now, context) -> dict",
+      "sample_current(item_id, context) -> dict",
+      "prune_history(context, now) -> None"
+    ],
+    "transactions": [
+      "execute(proposal, context) -> TransactionResult",
+      "recover_pending(context) -> None",
+      "rollback(transaction_id, context) -> TransactionResult"
+    ],
+    "ui": [
+      "run_menu(context) -> int",
+      "render_screen(screen, data) -> str",
+      "read_field(field, current, context) -> value"
+    ],
+    "uninstall": [
+      "uninstall(keep_data, context) -> UninstallResult"
+    ],
+    "validation": [
+      "inspect_host() -> HostSnapshot",
+      "check_conflicts(proposal, snapshot) -> list[Conflict]"
+    ]
+  },
+  "source_root": "src/gre_tun"
+}

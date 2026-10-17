@@ -1,0 +1,11 @@
+Manage tunnel
+
+1) Ports
+2) Edit tunnel
+3) Enable tunnel
+4) Show setup code
+5) Delete tunnel
+
+0) Back
+
+Select:

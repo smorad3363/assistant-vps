@@ -1,0 +1,10 @@
+Manage port
+
+1) Edit mapping
+2) Speed limits
+3) Enable port
+4) Delete port
+
+0) Back
+
+Select:

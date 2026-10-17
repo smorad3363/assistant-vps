@@ -1,0 +1,24 @@
+{
+  "config_revision": 1,
+  "contract_version": "1.0.0",
+  "forwards": [],
+  "next_forward_id": 1,
+  "next_tunnel_id": 2,
+  "role": "foreign",
+  "schema_version": 1,
+  "tunnels": [
+    {
+      "enabled": true,
+      "id": 1,
+      "inside_cidr": "10.246.180.244/30",
+      "key": 1964587664,
+      "local_ip": "198.51.100.20",
+      "mtu": 1400,
+      "name": "Tunnel 1",
+      "pair_id": "75193a90a671ad3d",
+      "peer_ip": "192.0.2.10",
+      "setup_revision": 1,
+      "wan_if": "eth0"
+    }
+  ]
+}

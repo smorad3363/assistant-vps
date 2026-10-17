@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export PYTHONPATH='/opt/gre-tun/src'
+exec /usr/bin/python3 -m gre_tun.cli "$@"

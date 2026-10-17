@@ -1,0 +1,13 @@
+[Unit]
+Description=GRE Tunnel Manager (development preview only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/gre-tun status
+RemainAfterExit=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

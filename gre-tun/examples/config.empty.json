@@ -1,0 +1,10 @@
+{
+  "config_revision": 1,
+  "contract_version": "1.0.0",
+  "forwards": [],
+  "next_forward_id": 1,
+  "next_tunnel_id": 1,
+  "role": "iran",
+  "schema_version": 1,
+  "tunnels": []
+}

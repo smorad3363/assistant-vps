@@ -1,0 +1,17 @@
+Implement GRE Tunnel Manager from the attached gre-tun-spec-v1.0 package.
+
+This is an implementation request. Produce the complete runnable application, installer, tests, and release archive. Do not respond with another roadmap or a partial prototype.
+
+Read 00_START_HERE_FA.md, SPEC.md, all numbered docs, contracts, schemas, examples, reference code, and tests. Follow the precedence in SPEC.md. Use the frozen architecture, UI strings, menu numbering, file paths, input grammar, traffic definitions, and acceptance criteria. Preserve the four-item main menu. All application code, comments, messages, logs, and CLI output must be English. The final explanation to the user may be Persian.
+
+Scope is a fresh installation. Do not import old chats, real addresses, special ports, legacy cleanup, migration, Port Manager logic, a web panel, or a remote SSH agent. The application starts with gre-tun. Use Python 3 standard library, a small Bash installer/launcher, native nftables, iproute2/tc, SQLite, and systemd exactly as specified. No runtime pip packages, Docker requirement, AI API, external telemetry, or generated shell evaluation.
+
+Implement one complete milestone at a time and continue autonomously through all milestones. Keep IMPLEMENTATION_STATUS.md accurate. Routine choices already fixed here do not need user questions. If a genuine contradiction makes implementation impossible, describe the exact conflicting requirements and propose the smallest change; do not silently redesign the product or change golden files to make tests pass.
+
+Start by running the included contract tests. Reuse reference/contract.py unchanged for its specified pure behavior or implement a byte/behavior-equivalent adapter. Then implement the application under src/gre_tun/, the installer, lifecycle behavior, and full integration tests. Add meaningful tests for the remaining networking risks listed in docs/05_ROADMAP_AND_TESTS.md. Never execute a production network mutation on the current host as a development test. Use disposable VMs and isolated network namespaces. Do not require or request real production SSH credentials to build the project.
+
+The bundled tests cover contracts only. Do not describe the tunnel, bandwidth shaping, reboot, rollback, or uninstall as tested until their actual integration tests pass. Missing privileges, dependencies, or VMs must be recorded as NOT RUN with the exact reason. Deliver the code even when an environment-specific test is blocked, but mark release readiness truthfully and give one short command to run the outstanding tests in the specified lab.
+
+Before finishing, run all available contract, static, and integration checks; review forward/reply symmetry, same-destination forwarding through different tunnels, reply-direction routing loops, local port collisions including wildcard/IPv6 listeners, fragment handling, shared TCP+UDP limits, counter resets, rolling statistics, transaction recovery, and preservation of unrelated host state. Inspect and test uninstall in both keep-data modes. Repeated apply must not duplicate rules or reset counters.
+
+Deliver a ZIP containing the complete source tree, working install.sh, gre-tun launcher, frozen contracts, test results, README, version, and checksums. Include ready-to-copy local installation, launch, test, and uninstall commands. Do not invent a GitHub URL or claim deployment to a server. Report only actual test outcomes. The target agent setting is the user's chosen GPT-6 High, but the project and this prompt must remain model-independent.

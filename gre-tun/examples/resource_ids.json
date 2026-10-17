@@ -1,0 +1,15 @@
+{
+  "download_class": "2:2",
+  "download_leaf": "2002:",
+  "forward_label": "P0002",
+  "gre_if": "gtn1",
+  "ifb_if": "gti1",
+  "mark": "0x47001002",
+  "route_mark": "0x47001000/0xfffff000",
+  "route_table": 45001,
+  "rule_priority": 30001,
+  "tunnel_label": "T0001",
+  "underlay_rule_priority": 20001,
+  "upload_class": "1:2",
+  "upload_leaf": "1002:"
+}

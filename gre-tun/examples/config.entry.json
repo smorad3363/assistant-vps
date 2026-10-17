@@ -1,0 +1,67 @@
+{
+  "config_revision": 1,
+  "contract_version": "1.0.0",
+  "forwards": [
+    {
+      "created_at": "2026-10-17T00:00:00Z",
+      "download_mbps": 0,
+      "enabled": true,
+      "generation": 1,
+      "id": 1,
+      "listen_ip": "192.0.2.10",
+      "listen_port": 443,
+      "protocol": "both",
+      "target_ip": "10.246.180.246",
+      "target_port": 443,
+      "tunnel_id": 1,
+      "upload_mbps": 0
+    },
+    {
+      "created_at": "2026-10-17T00:00:00Z",
+      "download_mbps": 20,
+      "enabled": true,
+      "generation": 1,
+      "id": 2,
+      "listen_ip": "192.0.2.10",
+      "listen_port": 5445,
+      "protocol": "both",
+      "target_ip": "10.246.180.246",
+      "target_port": 5454,
+      "tunnel_id": 1,
+      "upload_mbps": 0
+    },
+    {
+      "created_at": "2026-10-17T00:00:00Z",
+      "download_mbps": 0,
+      "enabled": true,
+      "generation": 1,
+      "id": 3,
+      "listen_ip": "192.0.2.10",
+      "listen_port": 8080,
+      "protocol": "both",
+      "target_ip": "10.246.180.246",
+      "target_port": 8080,
+      "tunnel_id": 1,
+      "upload_mbps": 0
+    }
+  ],
+  "next_forward_id": 4,
+  "next_tunnel_id": 2,
+  "role": "iran",
+  "schema_version": 1,
+  "tunnels": [
+    {
+      "enabled": true,
+      "id": 1,
+      "inside_cidr": "10.246.180.244/30",
+      "key": 1964587664,
+      "local_ip": "192.0.2.10",
+      "mtu": 1400,
+      "name": "Tunnel 1",
+      "pair_id": "75193a90a671ad3d",
+      "peer_ip": "198.51.100.20",
+      "setup_revision": 1,
+      "wan_if": "eth0"
+    }
+  ]
+}

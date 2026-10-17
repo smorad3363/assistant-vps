@@ -1,0 +1,72 @@
+[
+  {
+    "expected": [
+      {
+        "listen_port": 443,
+        "target_port": 443
+      }
+    ],
+    "input": "443"
+  },
+  {
+    "expected": [
+      {
+        "listen_port": 5445,
+        "target_port": 5454
+      }
+    ],
+    "input": "5445:5454"
+  },
+  {
+    "expected": [
+      {
+        "listen_port": 443,
+        "target_port": 443
+      },
+      {
+        "listen_port": 5445,
+        "target_port": 5454
+      },
+      {
+        "listen_port": 8080,
+        "target_port": 8080
+      }
+    ],
+    "input": "443,5445:5454,8080"
+  },
+  {
+    "expected": [
+      {
+        "listen_port": 80,
+        "target_port": 8080
+      },
+      {
+        "listen_port": 443,
+        "target_port": 443
+      }
+    ],
+    "input": " 80 : 8080 , 443 "
+  },
+  {
+    "expected": [
+      {
+        "listen_port": 80,
+        "target_port": 80
+      }
+    ],
+    "input": "00080:0080"
+  },
+  {
+    "expected": [
+      {
+        "listen_port": 1,
+        "target_port": 65535
+      },
+      {
+        "listen_port": 65535,
+        "target_port": 1
+      }
+    ],
+    "input": "1:65535,65535:1"
+  }
+]

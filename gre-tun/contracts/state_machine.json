@@ -1,0 +1,74 @@
+{
+  "contract_version": "1.0.0",
+  "transitions": {
+    "apply_confirm": {
+      "0": "previous_menu",
+      "no": "previous_menu",
+      "yes": "transaction"
+    },
+    "create": {
+      "0": "main",
+      "1": "new_tunnel_fields",
+      "2": "import_code_field"
+    },
+    "import_code_field": {
+      "conflict_response": "regenerate_candidates",
+      "invalid": "same_field",
+      "same_revision_same_content": "already_configured",
+      "valid": "apply_confirm"
+    },
+    "main": {
+      "0": "exit",
+      "1": "create",
+      "2": "tunnel_select",
+      "3": "test_select",
+      "4": "uninstall_confirm"
+    },
+    "new_tunnel_fields": {
+      "cancel": "create",
+      "invalid": "same_field",
+      "valid": "apply_confirm"
+    },
+    "port": {
+      "0": "ports",
+      "1": "edit_port_fields",
+      "2": "limit_fields",
+      "3": "toggle_port",
+      "4": "delete_port_confirm"
+    },
+    "ports": {
+      "0": "tunnel",
+      "1": "add_port_fields",
+      "2": "port_select",
+      "3": "traffic_select"
+    },
+    "traffic": {
+      "0": "ports",
+      "r": "refresh_once"
+    },
+    "transaction": {
+      "commit": "previous_menu",
+      "failed_recovered": "previous_menu",
+      "failed_recovery": "show_recovery_report"
+    },
+    "tunnel": {
+      "0": "tunnel_select",
+      "1": "ports",
+      "2": "edit_tunnel_fields",
+      "3": "toggle_tunnel",
+      "4": "show_code",
+      "5": "delete_tunnel_confirm"
+    },
+    "tunnel_select": {
+      "0": "main",
+      "id": "tunnel",
+      "n": "next_page",
+      "p": "previous_page"
+    },
+    "uninstall_confirm": {
+      "0": "main",
+      "empty_or_yes": "uninstall_keep",
+      "no": "uninstall_delete"
+    }
+  }
+}

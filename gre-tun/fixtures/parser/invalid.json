@@ -1,0 +1,94 @@
+[
+  {
+    "error": "E_REQUIRED",
+    "input": ""
+  },
+  {
+    "error": "E_REQUIRED",
+    "input": "  "
+  },
+  {
+    "error": "E_PORT_RANGE",
+    "input": "0"
+  },
+  {
+    "error": "E_PORT_RANGE",
+    "input": "65536"
+  },
+  {
+    "error": "E_PORT_RANGE",
+    "input": "443:0"
+  },
+  {
+    "error": "E_PORT_RANGE",
+    "input": "443:65536"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "443,"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": ",443"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "443,,80"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "80-90"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "tcp:443"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "443/udp"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "443:80:90"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "443:"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": ":443"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "+443"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "-443"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "1.5"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "44 3"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "\u06f4\u06f4\u06f3"
+  },
+  {
+    "error": "E_PORT_FORMAT",
+    "input": "443\n80"
+  },
+  {
+    "error": "E_PORT_DUPLICATE",
+    "input": "80,080"
+  },
+  {
+    "error": "E_PORT_DUPLICATE",
+    "input": "443,443:8443"
+  }
+]
