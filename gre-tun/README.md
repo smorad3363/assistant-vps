@@ -1,51 +1,47 @@
 # GRE Tunnel Manager
 
-**Status: 0.1.0-dev — configuration-only preview, NOT production-ready.**
+**Release: 0.2.0-dev / NOT PRODUCTION READY.** Contract version: 1.0.0.
 
-This project follows the attached GRE Tunnel Manager contract v1.0.0. It is intended for Ubuntu Server 22.04 / 24.04. Python 3 standard library is used for the runtime CLI. The frozen contract package is included in this source tree.
+The Python standard-library CLI stores desired tunnel and port-forward definitions, exchanges bounded setup tokens, validates the local structure, and reads per-forward SQLite traffic histories. A native GRE / nftables engine has been prototyped but **live activation is restricted to an explicitly marked disposable lab**. The HTB/IFB shaping, independent 60-second rollback, and two-ended Ubuntu VM acceptance gates are not complete. Do not replace a working GRE deployment with this release.
 
-## Permanent install and update command
-
-The **same command for initial installation and all future updates**:
+## Permanent, unchanged installation AND update command
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-tun/install.sh | sudo bash
 ```
 
-This URL is only usable after this complete `gre-tun/` source tree has been committed to the specified branch. Do not deploy by treating a GitHub path that has not yet been published as available.
+The URL is permanent: the `master/gre-tun/install.sh` file remains the public entry point for both initial installation and all subsequent updates. This development installer verifies a complete SHA256 inventory, tests the downloaded source, checks path ownership and atomically swaps only the owned application source. Configuration and SQLite history are kept outside `/opt/gre-tun`. It installs official Ubuntu dependencies if missing. It does **not** enable any new GRE forwarding on installation. Run only on Ubuntu Server 22.04/24.04 with systemd.
 
-For local source installation, after extracting the release on the target server:
-
-```bash
-sudo bash install.sh --local "$PWD"
-```
-
-Launch and inspect:
+After installation:
 
 ```bash
 sudo gre-tun
-gre-tun --version
-gre-tun status --json
-gre-tun config validate --file /etc/gre-tun/config.json
-gre-tun test all
+sudo gre-tun --version
+sudo gre-tun status --json
+sudo gre-tun apply --check
+sudo gre-tun stats P0001 --json
+sudo systemctl status gre-tun.service --no-pager
 ```
 
-**Important:** The development release only saves tunnel and port *desired configurations*. It does NOT install live GRE interfaces, NAT, tc queues, or routes, and never reports a tunnel as connected. `gre-tun apply` refuses to activate non-empty configurations with `E_NOT_READY`. There is no functional live uninstall/rollback in this release. Do not use it to replace an existing tunnel manager.
+`gre-tun apply` explicitly refuses live activation on ordinary hosts. The internal experimental reconciler requires *both* an explicit disposable-lab marker and an opt-in environment flag. This intentionally differs from a production-ready package. No production launch command is supplied in this development release.
 
-## Safety / updates
+## What is implemented
 
-- Installer downloads source to a staging directory, validates Python/JSON, protects preexisting nonowned application paths, and preserves `/etc/gre-tun` and `/var/lib/gre-tun` across updates.
-- Every install/update uses the same URL and Git branch. The reference stays constant as new versions appear at that path.
-- Runtime programs and installer output use English ASCII; Persian quick start lives outside terminal output.
-- The preview systemd service executes a read-only status command at startup. It does not reconcile real networking.
-- For production, the runtime must implement complete native nftables forwarding, bidirectional QoS and accounting, bounded diagnostics, transactional rollback, and ownership-scoped uninstall; then pass isolated netns/VM tests.
+- Frozen menu strings and exactly four main actions; local peer configuration and secure-input parsing, e.g. `5445:5454`.
+- Atomic, lock-protected desired-state JSON; tunnel/forward numeric IDs and non-reuse within the saved configuration.
+- Editing, toggling, and deleting locally defined port mappings; export/import GRE setup tokens.
+- Native GRE and nftables policy/NAT rule rendering, local capability/conflict preflight and fail-closed bandwidth rejection. Live backend is experimental and **not yet certified**.
+- Named forward accounting counter reader, SQLite intervals, coverage-aware rolling 1h/24h rates; background **read-only accounting daemon**. Current two-second speeds and the supported complete traffic kernel path are NOT RUN.
+- Stable installer with source inventory hashes, offline unit tests and no default network activation.
 
-## Test commands
+## Tests
 
 ```bash
 bash RUN_CONTRACT_TESTS.sh
+PYTHONPATH=src python3 -m unittest discover -s tests/unit -v
 PYTHONPATH=src python3 -m unittest discover -s tests -v
-bash -n install.sh templates/gre-tun
+sudo bash tests/integration/run.sh
+sudo bash tests/integration/reboot-check.sh
 ```
 
-See `IMPLEMENTATION_STATUS.md` and `TEST_RESULTS.md` for the verified state. Only offline tests have been executed in this environment. No production or live GRE test has been conducted.
+The integration scripts refuse unmarked servers and return `77` as NOT RUN; they are not substitutes for two-ended live validation. See `TEST_RESULTS.md`, `IMPLEMENTATION_STATUS.md`, the original spec and tests for remaining acceptance cases.

@@ -1,13 +1,18 @@
 [Unit]
-Description=GRE Tunnel Manager (development preview only)
+Description=GRE Tunnel Manager (stats collector; no automatic network changes)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-ExecStart=/usr/local/bin/gre-tun status
-RemainAfterExit=yes
+Type=simple
+ExecStart=/usr/local/bin/gre-tun daemon
+Restart=on-failure
+RestartSec=10
+UMask=0077
 NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/gre-tun /var/log/gre-tun /run/gre-tun
 
 [Install]
 WantedBy=multi-user.target

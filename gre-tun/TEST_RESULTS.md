@@ -1,11 +1,11 @@
-# Actual tests — 2026-10-17
+# Test results - 0.2.0-dev
 
-- Contract suite: **34 passed**.
-- Additional development tests: **13 passed**.
-- Total automated offline unit and contract tests: **47 passed**.
-- Python source syntax: passed local compileall check.
-- Bash syntax: passed `bash -n` for installer and launcher.
-- Frozen schemas, examples, menus and manifest: verified with `tests/verify_package.py`.
-- Live GRE/nft/tc forwarding and rollback: **NOT RUN**; code not yet implemented, no isolated netns/VM validation.
-- Installer on Ubuntu 22.04/24.04: **NOT RUN**; sandbox host is not a deployment VM.
-- Remote GitHub installation: **NOT RUN**; publishing must be verified first.
+Date: 2026-10-17. Host: Debian 13 (trixie), x86_64, no CAP_NET_ADMIN, no nft binary.
+
+- Frozen contract + package schema tests: PASS when source SHA256SUMS matches this release.
+- Python unit tests: see runner output in release build; these are offline-only.
+- GRE peers, real TCP/UDP payload, firewall coexistence, tc/IFB caps: NOT RUN.
+- Crash injection, independent guard, scoping, real uninstall: NOT RUN.
+- Ubuntu 22.04 and 24.04, reboot, foreign sentinels, 16-tunnel scale: NOT RUN.
+
+No deployment, PASS status, throughput or production guarantee is inferred from the offline test suite.

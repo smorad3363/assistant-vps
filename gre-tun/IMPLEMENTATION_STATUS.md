@@ -1,23 +1,24 @@
-# Implementation status
+# GRE Tunnel Manager implementation status
 
-Date: 2026-10-17
-Contract: 1.0.0
-Development application: 0.1.0-dev
-Release ready: **NO**
+Date: 2026-10-17. Contract: 1.0.0. App: 0.2.0-dev.
 
-| Area | Status |
+**NOT production ready.** This environment runs Debian 13 without CAP_NET_ADMIN; it cannot prove real tunnel forwarding, firewall rule syntax on the actual target kernel, tc shaping or reboot recovery.
+
+| Component | Status |
 |---|---|
-| Frozen specification, menu strings, schemas, reference behavior | Included / offline tests pass |
-| Atomic, lock-protected desired-state JSON storage | Implemented / offline tests |
-| First-run host role, GRE pair identity, parser, peer GT1 setup token | Preview implemented / offline tests |
-| Local port mapping input (`5445:5454`) and cap input | Preview implemented / offline tests |
-| CLI menu, read-only status, bounded NOT RUN diagnostic reports | Preview implemented / offline tests |
-| Stable installer entry point and safe source code refresh | Implemented / syntax checks; no Ubuntu VM install test |
-| Atomic live GRE, underlay route and nftables forwarding | **NOT IMPLEMENTED** |
-| Bidirectional tc/IFB shaping with per-forward aggregate limits | **NOT IMPLEMENTED** |
-| Persistent SQLite metering and 1h/24h accounting | **NOT IMPLEMENTED** |
-| Journal + systemd-run rollback + ownership-safe uninstall | **NOT IMPLEMENTED** |
-| Live Ubuntu 22.04/24.04 with actual traffic and reboot | **NOT RUN** |
-| New dedicated GitHub repository | Blocked: linked GitHub connector cannot create a repository |
+| Peer token, port parsing, menu contracts, atomic config | Offline tested |
+| Forward edits and local toggle/delete | Implemented; kernel behavior NOT RUN |
+| GRE interface/policy rule/nft renderer | Prototype only, live lab gate required |
+| Existing firewall detection | Conservative refusal, not full compatibility |
+| SQLite rolling 1h/24h accounting | Offline-tested partial implementation |
+| Background stats sampler | Implemented; real counters NOT RUN |
+| Current per-forward 2s speed | Not implemented |
+| Upload/download HTB/IFB bandwidth caps | Not implemented; nonzero cap refuses apply |
+| Crash-safe journal + independently armed rollback | Not implemented |
+| Production-safe owned uninstall | Not implemented |
+| Automatic boot reconciliation/repair | Not implemented |
+| Ubuntu 22.04/24.04 two-host and four-tunnel integration | NOT RUN |
+| Stable command, source integrity, app-file refresh | Offline tested; target Ubuntu installation NOT RUN |
+| New standalone repository | Github connector cannot create repository; deployed under `smorad3363/assistant-vps/gre-tun` |
 
-Do not install this build as a production replacement. The preview systemd service cannot change networking.
+Never call this build a functional completed tunnel manager. The installer is non-activating and preserving user data by design.

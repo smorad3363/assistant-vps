@@ -101,6 +101,6 @@ class CLITests(unittest.TestCase):
         output=io.StringIO()
         with patch('sys.stdout',output):
             self.assertEqual(cli.main(['--version']),0)
-        self.assertIn('0.1.0-dev',output.getvalue())
+        self.assertIn('0.2.0-dev',output.getvalue())
 
 if __name__=='__main__':unittest.main()

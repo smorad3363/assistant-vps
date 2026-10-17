@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import sys
 from . import __version__
-from . import config, contract, diagnostics, network, peer
+from . import config, contract, diagnostics, network, peer, stats, daemon
 
 ROOT = Path(__file__).resolve().parents[2]
 MENU = json.loads((ROOT / "contracts/menus.json").read_text())
@@ -171,6 +171,53 @@ def add_ports(t):
     config.save_if_changed(d)
     print("Port mappings saved but NOT activated (development release).")
 
+def port_detail(f):
+    while True:
+        print(f"P{f['id']:04d} | {f['listen_ip']}:{f['listen_port']} -> {f['target_ip']}:{f['target_port']} | {f['protocol']} | {'Enabled' if f['enabled'] else 'Disabled'}")
+        choice=menu('port',f['enabled'])
+        if choice=='0':return
+        d=copy.deepcopy(config.read())
+        item=next((x for x in d['forwards'] if x['id']==f['id']),None)
+        if item is None:return
+        if choice=='1':
+            old=copy.deepcopy(item)
+            mapping=prompt(MESSAGES['ports_edit'].format(value=f"{item['listen_port']}:{item['target_port']}"), f"{item['listen_port']}:{item['target_port']}")
+            fields=contract.parse_ports(mapping)
+            if len(fields)!=1:raise config.ConfigError('E_PORT_FORMAT: Enter one port mapping.')
+            item.update(fields[0])
+            proto={'1':'tcp','2':'udp','3':'both'}
+            chosen=prompt(MESSAGES['protocol_edit'].format(value={'tcp':'1','udp':'2','both':'3'}[item['protocol']]),{'tcp':'1','udp':'2','both':'3'}[item['protocol']])
+            if chosen not in proto:raise config.ConfigError('E_PROTOCOL')
+            item['protocol']=proto[chosen]
+            item['listen_ip']=prompt(MESSAGES['listen_ip_prompt'].format(value=item['listen_ip']),item['listen_ip'])
+            item['target_ip']=prompt(MESSAGES['target_ip_prompt'].format(value=item['target_ip']),item['target_ip'])
+            if any(item[k]!=old[k] for k in ('listen_ip','listen_port','target_ip','target_port','protocol')):
+                item['generation']+=1
+        elif choice=='2':
+            item['upload_mbps']=cap_prompt(MESSAGES['upload_limit_prompt'].format(value=item['upload_mbps']))
+            item['download_mbps']=cap_prompt(MESSAGES['download_limit_prompt'].format(value=item['download_mbps']))
+        elif choice=='3':
+            if not confirm('Enable this port? [y/N]:' if not item['enabled'] else MESSAGES['disable_port_confirm'],not item['enabled']):continue
+            item['enabled']=not item['enabled']
+        elif choice=='4':
+            if not confirm(MESSAGES['delete_port_confirm'],False):continue
+            d['forwards']=[x for x in d['forwards'] if x['id']!=f['id']]
+        else:continue
+        config.validate(d)
+        if choice in ('1','2') and not confirm():continue
+        config.save_if_changed(d)
+        if choice=='4':print(MESSAGES['deleted']);return
+        f.update(item)
+        print('Saved locally; live network changes require an explicit apply.')
+
+
+def traffic_view(item_id):
+    c=config.read()
+    if c is None:return
+    with stats.connect() as db:
+        report=stats.snapshot(db,c,item_id)
+    print(json.dumps(report,indent=2))
+
 def ports_menu(t):
     while True:
         c=config.read();forwards=[f for f in c["forwards"] if f["tunnel_id"]==t["id"]]
@@ -181,8 +228,10 @@ def ports_menu(t):
         elif choice=="2":
             f=select_id(forwards,"P",MESSAGES["port_id_prompt"])
             if not f:continue
-            print("Forward edits require the network transaction implementation.")
-        elif choice=="3": print("Traffic counters are not yet collected (NOT RUN).")
+            port_detail(f)
+        elif choice=="3":
+            f=select_id(forwards,"P",MESSAGES["traffic_id_prompt"])
+            if f:traffic_view(f"P{f['id']:04d}")
 
 def manage_menu():
     while True:
@@ -210,6 +259,8 @@ def main(argv=None):
     sub=p.add_subparsers(dest="command")
     s=sub.add_parser("status");s.add_argument("--json",action="store_true")
     a=sub.add_parser("apply");a.add_argument("--check",action="store_true")
+    sub.add_parser("daemon")
+    z=sub.add_parser("stats");z.add_argument("item");z.add_argument("--json",action="store_true")
     t=sub.add_parser("test");t.add_argument("tunnel",nargs="?",default="all");t.add_argument("--json",action="store_true")
     v=sub.add_parser("config");v.add_argument("verb",choices=["validate"]);v.add_argument("--file",required=True)
     e=sub.add_parser("peer");e.add_argument("verb",choices=["export","import","regenerate"]);e.add_argument("value",nargs="?");e.add_argument("--code")
@@ -220,6 +271,12 @@ def main(argv=None):
             info=diagnostics.status()
             print(json.dumps(info,indent=2) if args.json else f"Revision: {info['config_revision']} | Tunnels: {len(info['tunnels'])} | Forwards: {len(info['forwards'])} | State: {info['service']}")
             return 0
+        if args.command=="daemon":return daemon.main()
+        if args.command=="stats":
+            c=config.read()
+            if c is None:raise config.ConfigError('E_SETUP_REQUIRED')
+            with stats.connect() as db: report=stats.snapshot(db,c,args.item)
+            print(json.dumps(report,indent=2));return 0
         if args.command=="config":
             config.validate(json.loads(Path(args.file).read_text()))
             print("Configuration is valid.");return 0
@@ -240,6 +297,8 @@ def main(argv=None):
             print("E_NOT_READY: Regeneration is not available in this development release.");return 3
         if os.geteuid()!=0:
             print(MESSAGES["root_required"]);return 3
+        if not sys.stdin.isatty():
+            print('Error [E_NON_TTY]: Use an explicit command.',file=sys.stderr);return 2
         if config.read() is None:setup()
         while True:
             selection=menu("main")
