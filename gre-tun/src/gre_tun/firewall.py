@@ -44,7 +44,6 @@ def generate(c, table_exists=False):
         # A gateway may have many GRE tunnels. Only the expected /30 peer
         # source is allowed to access the kernel from this owned tunnel.
         lines.append(f'add rule ip gre_tun input_guard iifname "{iface}" ip saddr != {remote} drop comment "gt:t{tid}:bad-peer"')
-        lines.append(f'add rule ip gre_tun forward_guard iifname "{iface}" ip saddr != {remote} drop comment "gt:t{tid}:bad-peer"')
         for other in active.values():
             lines.append(f'add rule ip gre_tun forward_guard iifname "{iface}" oifname "gtn{other["id"]}" drop comment "gt:t{tid}:no-transit"')
         # Transit toward real physical WAN; peer-side masquerading is only for
@@ -68,6 +67,11 @@ def generate(c, table_exists=False):
         lines.append(f'add rule ip gre_tun snat_stage ct direction original ct mark {m} oifname "{iface}" snat to {own} comment "gt:p{fid}:entry-snat"')
     for t in active.values():
         iface=f'gtn{t["id"]}'
+        _,remote=address_pair(t)
+        # Reply packets for explicitly marked forwards must pass before the
+        # default peer-source guard. A legitimate reply originates at the
+        # destination service's public IP, not at the GRE inner address.
+        lines.append(f'add rule ip gre_tun forward_guard iifname "{iface}" ip saddr != {remote} drop comment "gt:t{t["id"]}:bad-peer"')
         # This rule must be last among owned forward hooks, after explicit
         # reverse/original exceptions; foreign firewall drops still apply.
         lines.append(f'add rule ip gre_tun forward_guard oifname "{iface}" drop comment "gt:t{t["id"]}:egress-deny"')

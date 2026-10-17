@@ -40,6 +40,13 @@ class FirewallTests(unittest.TestCase):
         self.assertNotIn('p0001u',text)
         self.assertIn('p0002u',text)
 
+    def test_known_reply_precedes_source_guard(self):
+        text=firewall.generate(self.c)
+        reply='iifname "gtn1" ct direction reply ct mark 0x47001001 ct state established,related accept'
+        drop='iifname "gtn1" ip saddr != '
+        self.assertIn(reply,text)
+        self.assertLess(text.index(reply),text.index('forward_guard '+drop))
+
     def test_no_transit_across_gre(self):
         text=firewall.generate(self.c)
         self.assertIn('oifname "gtn1" drop',text)
