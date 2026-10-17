@@ -58,15 +58,32 @@ fi
 command -v python3 >/dev/null || die 'python3 must be installed from Ubuntu repositories.'
 python3 - "$SRC" <<'PY' || die 'Source integrity validation failed.'
 import ast
+import hashlib
+import json
 import pathlib
 import sys
-base=pathlib.Path(sys.argv[1])
+base=pathlib.Path(sys.argv[1]).resolve()
+manifest=base/'SHA256SUMS'
+if not manifest.is_file(): raise SystemExit('Missing source checksum manifest.')
+declared=set()
+for line in manifest.read_text(encoding='utf-8').splitlines():
+    digest, relative=line.split('  ',1)
+    candidate=base/relative
+    target=candidate.resolve()
+    if not target.is_relative_to(base) or not candidate.is_file() or candidate.is_symlink():
+        raise SystemExit('Unsafe source manifest entry.')
+    if hashlib.sha256(candidate.read_bytes()).hexdigest()!=digest:
+        raise SystemExit('Source file checksum mismatch.')
+    declared.add(relative)
+actual={q.relative_to(base).as_posix() for q in base.rglob('*')
+        if q.is_file() and '.git' not in q.parts and '__pycache__' not in q.parts
+        and q.name!='SHA256SUMS'}
+if declared!=actual: raise SystemExit('Source inventory mismatch.')
 for path in (base/'src/gre_tun').rglob('*.py'):
     ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
 for name in ('contracts/menus.json','contracts/ui.en.json'):
-    import json
     json.loads((base/name).read_text(encoding='utf-8'))
-print('[gre-tun] Python syntax and JSON validated.')
+print('[gre-tun] Source hashes, Python syntax and JSON validated.')
 PY
 STAGE="$(mktemp -d /opt/.gre-tun-stage.XXXXXXXX)"
 cp -a -- "$SRC/." "$STAGE/"
