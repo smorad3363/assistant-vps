@@ -14,10 +14,10 @@ from .contract import inside_addresses
 TABLE='gre_tun'
 CHAIN_SPEC={
  'classify':'type filter hook prerouting priority -150; policy accept;',
- 'dnat':'type nat hook prerouting priority -90; policy accept;',
+ 'dnat_stage':'type nat hook prerouting priority -90; policy accept;',
  'forward_guard':'type filter hook forward priority 10; policy accept;',
  'account':'type filter hook postrouting priority 90; policy accept;',
- 'snat':'type nat hook postrouting priority 110; policy accept;',
+ 'snat_stage':'type nat hook postrouting priority 110; policy accept;',
  'input_guard':'type filter hook input priority 10; policy accept;',
 }
 
@@ -32,7 +32,7 @@ def generate(c, table_exists=False):
     validate(c)
     lines=[]
     if table_exists: lines.append('delete table ip gre_tun')
-    lines.extend(['add table ip gre_tun']+[f'add chain ip gre_tun \"{name}\" {{ {spec} }}' for name,spec in CHAIN_SPEC.items()])
+    lines.extend(['add table ip gre_tun']+[f'add chain ip gre_tun {name} {{ {spec} }}' for name,spec in CHAIN_SPEC.items()])
     active={t['id']:t for t in c['tunnels'] if t['enabled']}
     managed=[f for f in c['forwards'] if f['enabled'] and f['tunnel_id'] in active]
     for f in managed:
@@ -50,7 +50,7 @@ def generate(c, table_exists=False):
         # Transit toward real physical WAN; peer-side masquerading is only for
         # this specific expected inner source and selected underlay interface.
         lines.append(f'add rule ip gre_tun forward_guard iifname "{iface}" ip saddr {remote} oifname "{t["wan_if"]}" accept comment "gt:t{tid}:peer-out"')
-        lines.append(f'add rule ip gre_tun snat iifname "{iface}" ip saddr {remote} oifname "{t["wan_if"]}" masquerade comment "gt:t{tid}:peer-snat"')
+        lines.append(f'add rule ip gre_tun snat_stage iifname "{iface}" ip saddr {remote} oifname "{t["wan_if"]}" masquerade comment "gt:t{tid}:peer-snat"')
     for f in managed:
         t=active[f['tunnel_id']];tid=t['id'];fid=f['id'];iface=f'gtn{tid}'
         own,peer=address_pair(t)
@@ -58,14 +58,14 @@ def generate(c, table_exists=False):
         for proto in (('tcp','udp') if f['protocol']=='both' else (f['protocol'],)):
             match=f'iifname "{t["wan_if"]}" ip daddr {f["listen_ip"]} {proto} dport {f["listen_port"]}'
             lines.append(f'add rule ip gre_tun classify {match} ct state new ct mark 0 ct mark set {m} comment "gt:p{fid}:classify-{proto}"')
-            lines.append(f'add rule ip gre_tun "dnat" {match} ct mark {m} dnat to {f["target_ip"]}:{f["target_port"]} comment "gt:p{fid}:dnat-{proto}"')
+            lines.append(f'add rule ip gre_tun dnat_stage {match} ct mark {m} dnat to {f["target_ip"]}:{f["target_port"]} comment "gt:p{fid}:dnat-{proto}"')
         # Subsequent packets of an already NATted connection retain ct mark.
         lines.append(f'add rule ip gre_tun classify iifname "{t["wan_if"]}" ct direction original ct mark {m} meta mark set ct mark comment "gt:p{fid}:route"')
         lines.append(f'add rule ip gre_tun forward_guard iifname "{t["wan_if"]}" oifname "{iface}" ct direction original ct mark {m} accept comment "gt:p{fid}:original"')
         lines.append(f'add rule ip gre_tun forward_guard iifname "{iface}" ct direction reply ct mark {m} ct state established,related accept comment "gt:p{fid}:reply"')
         lines.append(f'add rule ip gre_tun account ct direction original ct mark {m} oifname "{iface}" counter name p{fid:04d}u comment "gt:p{fid}:up"')
         lines.append(f'add rule ip gre_tun account ct direction reply ct mark {m} iifname "{iface}" counter name p{fid:04d}d comment "gt:p{fid}:down"')
-        lines.append(f'add rule ip gre_tun snat ct direction original ct mark {m} oifname "{iface}" snat to {own} comment "gt:p{fid}:entry-snat"')
+        lines.append(f'add rule ip gre_tun snat_stage ct direction original ct mark {m} oifname "{iface}" snat to {own} comment "gt:p{fid}:entry-snat"')
     for t in active.values():
         iface=f'gtn{t["id"]}'
         # This rule must be last among owned forward hooks, after explicit
