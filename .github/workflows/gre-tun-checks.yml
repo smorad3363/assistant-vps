@@ -1,0 +1,44 @@
+name: GRE Tunnel Manager - offline validation
+
+on:
+  push:
+    paths:
+      - 'gre-tun/**'
+      - '.github/workflows/gre-tun-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source manifest and frozen contracts
+        working-directory: gre-tun
+        run: bash RUN_CONTRACT_TESTS.sh
+      - name: Independent unit tests
+        working-directory: gre-tun
+        run: PYTHONPATH=src python3 -m unittest discover -s tests/unit -v
+      - name: Python CLI and syntax check
+        working-directory: gre-tun
+        run: |
+          bash -n install.sh templates/gre-tun tests/integration/*.sh
+          PYTHONPATH=src python3 -m unittest discover -s tests -v
+          PYTHONPATH=src python3 -m gre_tun.cli --version
+          PYTHONPATH=src python3 -m gre_tun.cli status --json
+      - name: Explicitly record unavailable integration gate
+        working-directory: gre-tun
+        run: |
+          set +e
+          bash tests/integration/run.sh
+          code=$?
+          set -e
+          test "$code" -eq 77
+          echo 'GRE/TCP/UDP/QoS two-host integration: NOT RUN'
