@@ -41,6 +41,11 @@ jobs:
           sudo gre-tun --version | grep -Fx '0.2.0-dev'
           sudo gre-tun status --json
           sudo systemctl is-active gre-tun.service
+      - name: Isolated GRE real payload and counter acceptance
+        run: |
+          sudo touch /etc/gre-tun-test-disposable-vm
+          trap 'sudo rm -f /etc/gre-tun-test-disposable-vm' EXIT
+          sudo bash gre-tun/tests/integration/run.sh
       - name: Explicitly record unavailable integration gate
         working-directory: gre-tun
         run: |
