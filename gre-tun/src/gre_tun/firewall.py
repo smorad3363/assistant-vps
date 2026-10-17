@@ -32,7 +32,7 @@ def generate(c, table_exists=False):
     validate(c)
     lines=[]
     if table_exists: lines.append('delete table ip gre_tun')
-    lines.extend(['add table ip gre_tun']+[f'add chain ip gre_tun "{name}" {{ {spec} }}' for name,spec in CHAIN_SPEC.items()])
+    lines.extend(['add table ip gre_tun']+[f'add chain ip gre_tun \"{name}\" {{ {spec} }}' for name,spec in CHAIN_SPEC.items()])
     active={t['id']:t for t in c['tunnels'] if t['enabled']}
     managed=[f for f in c['forwards'] if f['enabled'] and f['tunnel_id'] in active]
     for f in managed:
