@@ -33,6 +33,14 @@ jobs:
           PYTHONPATH=src python3 -m unittest discover -s tests -v
           PYTHONPATH=src python3 -m gre_tun.cli --version
           PYTHONPATH=src python3 -m gre_tun.cli status --json
+      - name: Full permanent-command install and update smoke test
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-tun/install.sh | sudo bash
+          sudo gre-tun --version | grep -Fx '0.2.0-dev'
+          curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-tun/install.sh | sudo bash
+          sudo gre-tun --version | grep -Fx '0.2.0-dev'
+          sudo gre-tun status --json
+          sudo systemctl is-active gre-tun.service
       - name: Explicitly record unavailable integration gate
         working-directory: gre-tun
         run: |
