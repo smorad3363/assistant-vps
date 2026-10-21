@@ -47,6 +47,11 @@ jobs:
           sudo touch /etc/gre-tun-test-disposable-vm
           trap 'sudo rm -f /etc/gre-tun-test-disposable-vm' EXIT
           sudo bash gre-tun/tests/integration/run.sh
+      - name: Isolated protocol-47 test before creating any tunnel
+        run: |
+          sudo touch /etc/gre-tun-test-disposable-vm
+          trap 'sudo rm -f /etc/gre-tun-test-disposable-vm' EXIT
+          sudo bash gre-tun/tests/integration/preflight.sh
       - name: Explicitly record unavailable integration gate
         working-directory: gre-tun
         run: |
