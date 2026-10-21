@@ -101,7 +101,7 @@ class CLITests(unittest.TestCase):
         output=io.StringIO()
         with patch('sys.stdout',output):
             self.assertEqual(cli.main(['--version']),0)
-        self.assertIn('0.2.1-dev',output.getvalue())
+        self.assertIn('0.2.2-dev',output.getvalue())
 
 if __name__=='__main__':unittest.main()
 
@@ -110,16 +110,21 @@ class DiagnosticUXTests(unittest.TestCase):
         self.config=config.empty_config('foreign')
         self.tunnel=peer.make_tunnel(1,'192.0.2.20','198.51.100.10','ens18','Lab')
 
-    def test_menu_explains_no_configured_tunnel_and_returns_to_menu(self):
+    def test_menu_allows_pre_tunnel_check_without_configured_tunnel(self):
         capture=io.StringIO()
+        fake={'peer_ip':'198.51.100.10','checks':[{'name':'IPv4 route to peer','status':'PASS','detail':'198.51.100.20 via ens18'}],
+              'summary':'Local readiness only. Protocol 47 NOT verified.'}
         with patch.object(cli.config,'read',return_value=self.config), \
              patch.object(cli.sys.stdin,'isatty',return_value=True), \
              patch.object(cli.os,'geteuid',return_value=0), \
              patch.object(cli,'menu',side_effect=['3','0']), \
+             patch('builtins.input',side_effect=['1','198.51.100.10']), \
+             patch.object(cli.precheck,'passive',return_value=fake) as checked, \
              patch('sys.stdout',capture):
             self.assertEqual(cli.main([]),0)
-        self.assertIn('No tunnels configured. Nothing was tested.',capture.getvalue())
-        self.assertIn('does not activate GRE',capture.getvalue())
+        checked.assert_called_once_with('198.51.100.10')
+        self.assertIn('Pre-tunnel test',capture.getvalue())
+        self.assertIn('Protocol 47 NOT verified',capture.getvalue())
 
     def test_cli_test_without_tunnel_is_unverified_not_success(self):
         capture=io.StringIO()
@@ -179,7 +184,7 @@ class DiagnosticUXTests(unittest.TestCase):
         self.config['tunnels'].append(self.tunnel)
         capture=io.StringIO()
         with patch.object(cli.config,'read',return_value=self.config), \
-             patch('builtins.input',return_value='0'),patch('sys.stdout',capture), \
+             patch('builtins.input',side_effect=['2','0']),patch('sys.stdout',capture), \
              patch.object(cli.diagnostics,'test') as t:
             cli.interactive_test()
         self.assertIn('T0001',capture.getvalue())

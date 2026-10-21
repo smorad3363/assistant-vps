@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stable entry point for first installation and all future updates.
-# Development build 0.2.1-dev: inert install; live GRE requires isolated lab gate.
+# Development build 0.2.2-dev: inert install; live GRE requires isolated lab gate.
 set -euo pipefail
 umask 077
 OWNER='smorad3363'
@@ -145,6 +145,6 @@ fi
 if [[ -n "$BACKUP" ]]; then rm -rf -- "$BACKUP"; fi
 if [[ -n "$PREVIOUS_LAUNCH" ]]; then rm -f -- "$PREVIOUS_LAUNCH"; fi
 if [[ -n "$PREVIOUS_UNIT" ]]; then rm -f -- "$PREVIOUS_UNIT"; fi
-log 'Installed development build 0.2.1-dev. Existing config and traffic data were preserved.'
+log 'Installed development build 0.2.2-dev. Existing config and traffic data were preserved.'
 log 'Network activation is locked to a disposable lab pending VM acceptance tests.'
 log 'Run: sudo gre-tun'

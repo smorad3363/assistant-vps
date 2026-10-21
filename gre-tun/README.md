@@ -1,6 +1,6 @@
 # GRE Tunnel Manager
 
-**Release: 0.2.1-dev / NOT PRODUCTION READY.** Contract version: 1.0.0.
+**Release: 0.2.2-dev / NOT PRODUCTION READY.** Contract version: 1.0.0.
 
 The Python standard-library CLI stores desired tunnel and port-forward definitions, exchanges bounded setup tokens, validates the local structure, and reads per-forward SQLite traffic histories. A native GRE / nftables engine has been prototyped but **live activation is restricted to an explicitly marked disposable lab**. The HTB/IFB shaping, independent 60-second rollback, and two-ended Ubuntu VM acceptance gates are not complete. Do not replace a working GRE deployment with this release.
 
@@ -46,16 +46,53 @@ sudo bash tests/integration/reboot-check.sh
 
 The integration scripts refuse unmarked servers and return `77` as NOT RUN; they are not substitutes for two-ended live validation. See `TEST_RESULTS.md`, `IMPLEMENTATION_STATUS.md`, the original spec and tests for remaining acceptance cases.
 
-## Test connection behavior in 0.2.1-dev
+## Connection tests before any tunnel exists (0.2.2-dev)
 
-Option `3) Test connection` now explains when no tunnel is configured,
-instead of silently returning to the menu. After saving a tunnel, the
-menu allows `all` or a tunnel ID, checks for an owned GRE interface, and
-performs a bounded peer-inner ICMP probe **only** when that interface
-exists, matches the saved ownership manifest and has the expected local
-inner address. Nonresponding ICMP remains UNVERIFIED; no port-forward,
-rate-cap or application-level probe is implied. `gre-tun test all` exits
-with code 7 if unconfigured or unverified, 6 on structural failure, and
-0 only for a successful inner ICMP test. No network settings are changed.
+`3) Test connection` now works **without a saved tunnel or a role/setup configuration**. Its four choices
+are (1) pre-tunnel readiness, (2) existing configured GRE tunnel test,
+(3) receive a bounded GRE protocol-47 challenge, and (4) send the challenge.
+The four *main* menu choices are unchanged. The readiness test checks
+IPv4 route/source interface, public source address, ICMP reachability and
+privileges without writing files or network settings. ICMP may be blocked;
+**ICMP success does not prove GRE** and passive readiness never claims GRE PASS.
+
+From the Iran host before configuring the tunnel:
+
+```bash
+sudo gre-tun test --peer 178.83.45.63
+```
+
+To test GRE protocol 47 in **both directions without creating a tunnel**,
+open an SSH terminal on each machine. First run on the foreign host:
+
+```bash
+sudo gre-tun test --listen --peer IRAN_PUBLIC_IPV4
+```
+
+The listener prints a random 32-character token, and waits up to 120 seconds.
+Immediately run on the Iran host (replacing TOKEN with the printed token):
+
+```bash
+sudo gre-tun test --probe --peer 178.83.45.63 --token TOKEN
+```
+
+A matching response reports `GRE path: PASS` on the sender; the listener
+reports reception of the same challenge. A timeout reports `UNVERIFIED`,
+never a false success. Neither mode creates a tunnel, address, route, firewall
+rule, NAT rule, qdisc or persistent process. Each uses an in-memory raw IPv4
+socket for a few seconds, requires root/CAP_NET_RAW, and sends a handful of
+small experimental-protocol GRE packets. The receiver accepts requests only
+from the specified peer and only with the exact random token. A firewall may
+filter protocol 47; allowing a TCP/UDP *port* numbered 47 does not allow GRE.
+
+This test is evidence of **GRE protocol-47 traversal**, not proof that keyed
+GRE configuration, MTU, NAT, port forwarding or speed caps will work. Those
+still require an active disposable lab and two-endpoint traffic tests.
+
+If a tunnel is already saved, choice (2) checks the recorded owned interface
+and bounded inner ICMP. `gre-tun test all` retains its prior semantics.
+Passive `gre-tun test --peer IP` exits 7 if readiness is inconclusive, 6 on a
+local route failure. Active GRE tests return 0 only for a matching authenticated
+challenge, 7 when they cannot verify passage.
 
 **This remains a development build: storing a tunnel does not activate it.**

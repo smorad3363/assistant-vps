@@ -3,11 +3,12 @@ import argparse
 import copy
 from datetime import datetime, timezone
 import json
+import secrets
 import os
 from pathlib import Path
 import sys
 from . import __version__
-from . import config, contract, diagnostics, network, peer, stats, daemon
+from . import config, contract, diagnostics, network, peer, stats, daemon, precheck
 
 ROOT = Path(__file__).resolve().parents[2]
 MENU = json.loads((ROOT / "contracts/menus.json").read_text())
@@ -262,10 +263,46 @@ def print_test_results(reports, requested='all'):
     print('Note: an ICMP reply does not verify port forwarding, QoS, or production readiness.')
 
 
+def _precheck_print(info):
+    print(f"Pre-tunnel test | Peer: {info['peer_ip']}")
+    for item in info['checks']:
+        print(f"{item['name']}: {item['status']} | {item['detail']}")
+    print(info['summary'])
+
+
 def interactive_test():
+    print('1) Pre-tunnel connection check (no tunnel needed)')
+    print('2) Test a configured GRE tunnel')
+    print('3) Listen for a temporary GRE protocol-47 challenge')
+    print('4) Send a temporary GRE protocol-47 challenge')
+    print('0) Back')
+    try:
+        mode = input('Select:\n').strip()
+    except (KeyboardInterrupt, EOFError):
+        print(MESSAGES['cancelled']);return
+    if mode == '0':return
+    if mode in ('1', '3', '4'):
+        peer_ip=prompt('Enter peer public IPv4:')
+        info=precheck.passive(peer_ip)
+        _precheck_print(info)
+        if mode in ('3', '4'):
+            print('Both servers must use the same 32-character token.')
+            if mode == '3':
+                token=secrets.token_hex(16)
+                print('Share this token privately with the peer:', token)
+                print(f'On the peer run: sudo gre-tun test --probe --peer {info["source_ip"] or "YOUR_IP"} --token {token}')
+                print('Listening for GRE for up to 120 seconds...')
+                result=precheck.exchange(peer_ip,token,listen=True)
+            else:
+                token=prompt('Enter token generated on the listening server:')
+                result=precheck.exchange(peer_ip,token)
+            print(f"GRE path: {result['result']} | {result['detail']}")
+        return
+    if mode != '2':
+        print('Invalid selection.');return
     c = config.read()
     if not c or not c['tunnels']:
-        print_test_results([])
+        print('No saved tunnel. Use option 1 to test the peer before creating a tunnel.')
         return
     print('Configured tunnels:')
     for t in c['tunnels']:
@@ -273,18 +310,13 @@ def interactive_test():
     try:
         selected = input(MESSAGES['test_id_prompt'] + '\n').strip() or 'all'
     except (KeyboardInterrupt, EOFError):
-        print(MESSAGES['cancelled'])
-        return
-    if selected == '0':
-        return
+        print(MESSAGES['cancelled']);return
+    if selected == '0':return
     if selected.lower() == 'all':
-        print_test_results(diagnostics.test())
-        return
-    try:
-        idx = int(selected.lstrip('Tt'))
+        print_test_results(diagnostics.test());return
+    try:idx = int(selected.lstrip('Tt'))
     except ValueError:
-        print('Invalid tunnel ID. Enter T0001, 1, all, or 0 to go back.')
-        return
+        print('Invalid tunnel ID. Enter T0001, 1, all, or 0 to go back.');return
     print_test_results(diagnostics.test(idx), selected)
 
 
@@ -306,6 +338,11 @@ def main(argv=None):
     sub.add_parser("daemon")
     z=sub.add_parser("stats");z.add_argument("item");z.add_argument("--json",action="store_true")
     t=sub.add_parser("test");t.add_argument("tunnel",nargs="?",default="all");t.add_argument("--json",action="store_true")
+    t.add_argument('--peer',metavar='IPV4',help='peer public IPv4 for pre-tunnel test')
+    t.add_argument('--listen',action='store_true',help='receive short-lived GRE protocol-47 challenge')
+    t.add_argument('--probe',action='store_true',help='send short-lived GRE protocol-47 challenge')
+    t.add_argument('--token',help='shared 32-character hex challenge token')
+    t.add_argument('--seconds',type=int,help='bounded active probe duration, 1 to 120 seconds')
     v=sub.add_parser("config");v.add_argument("verb",choices=["validate"]);v.add_argument("--file",required=True)
     e=sub.add_parser("peer");e.add_argument("verb",choices=["export","import","regenerate"]);e.add_argument("value",nargs="?");e.add_argument("--code")
     args=p.parse_args(argv)
@@ -327,6 +364,24 @@ def main(argv=None):
         if args.command=="apply":
             print(network.apply(config.read() or config.empty_config(),args.check));return 0
         if args.command=="test":
+            if args.listen and args.probe:
+                raise config.ConfigError('Select --listen or --probe, not both.')
+            if args.listen or args.probe:
+                if not args.peer or (args.probe and not args.token):
+                    raise config.ConfigError('Active probe requires --peer; sender requires --token.')
+                peer_ip=precheck.validate_peer(args.peer)
+                token=args.token or secrets.token_hex(16)
+                if args.listen and not args.json:
+                    print('Shared challenge token:',token,flush=True)
+                    print('Start the sender on the other host within 20 seconds.',flush=True)
+                result=precheck.exchange(peer_ip,token,listen=args.listen,seconds=args.seconds)
+                print(json.dumps(result,indent=2) if args.json else f"GRE path: {result['result']} | {result['detail']}")
+                return 0 if result['result']=='PASS' else 7
+            if args.peer:
+                info=precheck.passive(args.peer)
+                if args.json:print(json.dumps(info,indent=2))
+                else:_precheck_print(info)
+                return 6 if any(x['status']=='FAIL' for x in info['checks']) else 7
             idx=None if args.tunnel=="all" else int(args.tunnel.lstrip("Tt"))
             reports=diagnostics.test(idx)
             if args.json:
@@ -346,10 +401,12 @@ def main(argv=None):
             print(MESSAGES["root_required"]);return 3
         if not sys.stdin.isatty():
             print('Error [E_NON_TTY]: Use an explicit command.',file=sys.stderr);return 2
-        if config.read() is None:setup()
+        # Testing connectivity is possible even before choosing the host role.
         while True:
             selection=menu("main")
             if selection=="0":return 0
+            if selection in ("1", "2") and config.read() is None:
+                setup()
             if selection=="1":create_menu()
             elif selection=="2":manage_menu()
             elif selection=="3":interactive_test()

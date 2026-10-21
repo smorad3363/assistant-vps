@@ -1,12 +1,13 @@
 # GRE Tunnel Manager implementation status
 
-Date: 2026-10-17. Contract: 1.0.0. App: 0.2.0-dev.
+Date: 2026-10-21. Contract baseline: 1.0.0 (pre-tunnel test correction). App: 0.2.2-dev.
 
 **NOT production ready.** This environment runs Debian 13 without CAP_NET_ADMIN; it cannot prove real tunnel forwarding, firewall rule syntax on the actual target kernel, tc shaping or reboot recovery.
 
 | Component | Status |
 |---|---|
 | Peer token, port parsing, menu contracts, atomic config | Offline tested |
+| Pre-tunnel IPv4 readiness and GRE challenge over raw socket | Code and offline tests completed; actual two-server GRE exchange NOT RUN |
 | Forward edits and local toggle/delete | Implemented; kernel behavior NOT RUN |
 | GRE interface/policy rule/nft renderer | Prototype only, live lab gate required |
 | Existing firewall detection | Conservative refusal, not full compatibility |

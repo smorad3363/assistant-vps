@@ -1,6 +1,6 @@
 # GRE Tunnel Manager: normative implementation specification
 
-Contract version: 1.0.0. Product command: `gre-tun`. Initial product version: 1.0.0.
+Contract baseline version: 1.0.0; amendment 1.0.1 (2026-10-21, pre-tunnel tests). Product command: `gre-tun`. Initial product version: 1.0.0.
 
 MUST is mandatory; MAY only identifies an explicitly optional behavior. This package is a construction contract, not evidence that a live tunnel has been built or tested.
 
@@ -74,3 +74,12 @@ All mutations are serialized and journaled. Snapshot only owned objects and expl
 External firewall coexistence is checked, not guaranteed for arbitrary rulesets. An ACCEPT in this app's nft table cannot override a DROP in another base chain. Detect a restrictive or unclassifiable relevant ruleset before applying and give the documented short conflict message. Do not disable UFW, Docker, firewalld, or other services. Do not require an empty host if unrelated rules are demonstrably harmless.
 
 No claim of production readiness is permitted from pure tests alone. Integration gates cover real kernel forwarding, same-target multi-tunnel routes, two directions, limits, reboot, rollback, and uninstall on the stated OS matrix. Reports distinguish PASS, FAIL, and NOT RUN.
+
+## Amendment 1.0.1: pre-tunnel tests (user correction, 2026-10-21)
+
+The Test connection menu MUST work when the saved configuration has zero tunnels.
+A local route/ICMP check shall not imply GRE is reachable. A temporary raw
+protocol-47 challenge can validate bidirectional GRE packet passage without
+creating persistent network objects, using two terminals and a shared random
+nonce. Protocol 47 PASS is not keyed-tunnel/NAT/QoS acceptance. Existing schema
+and pure-function contracts remain at version 1.0.0 for backward compatibility.
