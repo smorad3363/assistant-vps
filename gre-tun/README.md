@@ -1,6 +1,6 @@
 # GRE Tunnel Manager
 
-**Release: 0.2.0-dev / NOT PRODUCTION READY.** Contract version: 1.0.0.
+**Release: 0.2.1-dev / NOT PRODUCTION READY.** Contract version: 1.0.0.
 
 The Python standard-library CLI stores desired tunnel and port-forward definitions, exchanges bounded setup tokens, validates the local structure, and reads per-forward SQLite traffic histories. A native GRE / nftables engine has been prototyped but **live activation is restricted to an explicitly marked disposable lab**. The HTB/IFB shaping, independent 60-second rollback, and two-ended Ubuntu VM acceptance gates are not complete. Do not replace a working GRE deployment with this release.
 
@@ -45,3 +45,17 @@ sudo bash tests/integration/reboot-check.sh
 ```
 
 The integration scripts refuse unmarked servers and return `77` as NOT RUN; they are not substitutes for two-ended live validation. See `TEST_RESULTS.md`, `IMPLEMENTATION_STATUS.md`, the original spec and tests for remaining acceptance cases.
+
+## Test connection behavior in 0.2.1-dev
+
+Option `3) Test connection` now explains when no tunnel is configured,
+instead of silently returning to the menu. After saving a tunnel, the
+menu allows `all` or a tunnel ID, checks for an owned GRE interface, and
+performs a bounded peer-inner ICMP probe **only** when that interface
+exists, matches the saved ownership manifest and has the expected local
+inner address. Nonresponding ICMP remains UNVERIFIED; no port-forward,
+rate-cap or application-level probe is implied. `gre-tun test all` exits
+with code 7 if unconfigured or unverified, 6 on structural failure, and
+0 only for a successful inner ICMP test. No network settings are changed.
+
+**This remains a development build: storing a tunnel does not activate it.**

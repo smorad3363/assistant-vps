@@ -244,6 +244,50 @@ def manage_menu():
         if t is None:return
         show_tunnel(c,t)
 
+def print_test_results(reports, requested='all'):
+    print(MESSAGES['test_title'])
+    if not reports:
+        if config.read() is None or not config.read()['tunnels']:
+            print('No tunnels configured. Nothing was tested.')
+            print('Select 1) Create tunnel, then 1) New tunnel or 2) Import setup code.')
+        else:
+            print(f'No matching tunnel: {requested}. Nothing was tested.')
+        print('Note: this development build does not activate GRE or port forwarding.')
+        return
+    for r in reports:
+        print(f"{r['tunnel_id']} | Peer: {r['peer_ip']} | Interface: {r['device']}")
+        print(f"Structure: {r['structure']} | Reachability: {r['reachability']}")
+        print(f"Result: {r['result']}")
+        print(r['reason'])
+    print('Note: an ICMP reply does not verify port forwarding, QoS, or production readiness.')
+
+
+def interactive_test():
+    c = config.read()
+    if not c or not c['tunnels']:
+        print_test_results([])
+        return
+    print('Configured tunnels:')
+    for t in c['tunnels']:
+        print(f"T{t['id']:04d} | {t['peer_ip']} | {t['name']}")
+    try:
+        selected = input(MESSAGES['test_id_prompt'] + '\n').strip() or 'all'
+    except (KeyboardInterrupt, EOFError):
+        print(MESSAGES['cancelled'])
+        return
+    if selected == '0':
+        return
+    if selected.lower() == 'all':
+        print_test_results(diagnostics.test())
+        return
+    try:
+        idx = int(selected.lstrip('Tt'))
+    except ValueError:
+        print('Invalid tunnel ID. Enter T0001, 1, all, or 0 to go back.')
+        return
+    print_test_results(diagnostics.test(idx), selected)
+
+
 def uninstall_prompt():
     print(MESSAGES["uninstall_title"])
     print(MESSAGES["uninstall_warning"])
@@ -285,8 +329,11 @@ def main(argv=None):
         if args.command=="test":
             idx=None if args.tunnel=="all" else int(args.tunnel.lstrip("Tt"))
             reports=diagnostics.test(idx)
-            print(json.dumps(reports,indent=2) if args.json else "\n".join(f"{t['tunnel_id']}: UNVERIFIED (NOT RUN)" for t in reports))
-            return 7 if reports else 0
+            if args.json:
+                print(json.dumps(reports, indent=2))
+            else:
+                print_test_results(reports, args.tunnel)
+            return 6 if any(t['result']=='FAIL' for t in reports) else 7 if any(t['result']=='UNVERIFIED' for t in reports) or not reports else 0
         if args.command=="peer":
             if args.verb=="export":
                 c=config.read();idx=int(args.value.lstrip("Tt"));t=next(t for t in c["tunnels"] if t["id"]==idx)
@@ -305,8 +352,7 @@ def main(argv=None):
             if selection=="0":return 0
             if selection=="1":create_menu()
             elif selection=="2":manage_menu()
-            elif selection=="3":
-                print("\n".join(f"{x['tunnel_id']}: UNVERIFIED (NOT RUN)" for x in diagnostics.test()))
+            elif selection=="3":interactive_test()
             elif selection=="4":uninstall_prompt()
     except Cancel:
         print(MESSAGES["cancelled"]);return 0

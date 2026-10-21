@@ -101,6 +101,86 @@ class CLITests(unittest.TestCase):
         output=io.StringIO()
         with patch('sys.stdout',output):
             self.assertEqual(cli.main(['--version']),0)
-        self.assertIn('0.2.0-dev',output.getvalue())
+        self.assertIn('0.2.1-dev',output.getvalue())
 
 if __name__=='__main__':unittest.main()
+
+class DiagnosticUXTests(unittest.TestCase):
+    def setUp(self):
+        self.config=config.empty_config('foreign')
+        self.tunnel=peer.make_tunnel(1,'192.0.2.20','198.51.100.10','ens18','Lab')
+
+    def test_menu_explains_no_configured_tunnel_and_returns_to_menu(self):
+        capture=io.StringIO()
+        with patch.object(cli.config,'read',return_value=self.config), \
+             patch.object(cli.sys.stdin,'isatty',return_value=True), \
+             patch.object(cli.os,'geteuid',return_value=0), \
+             patch.object(cli,'menu',side_effect=['3','0']), \
+             patch('sys.stdout',capture):
+            self.assertEqual(cli.main([]),0)
+        self.assertIn('No tunnels configured. Nothing was tested.',capture.getvalue())
+        self.assertIn('does not activate GRE',capture.getvalue())
+
+    def test_cli_test_without_tunnel_is_unverified_not_success(self):
+        capture=io.StringIO()
+        with patch.object(diagnostics,'read',return_value=self.config), \
+             patch.object(cli.config,'read',return_value=self.config), \
+             patch('sys.stdout',capture):
+            self.assertEqual(cli.main(['test','all']),7)
+        self.assertIn('No tunnels configured',capture.getvalue())
+
+    def test_test_without_owned_interface_reports_not_applied(self):
+        self.config['tunnels'].append(self.tunnel)
+        with patch.object(diagnostics,'read',return_value=self.config), \
+             patch.object(diagnostics.network,'read_state',return_value=None), \
+             patch.object(diagnostics,'_link',return_value=None):
+            reports=diagnostics.test()
+        self.assertEqual(reports[0]['structure'],'NOT_APPLIED')
+        self.assertEqual(reports[0]['result'],'UNVERIFIED')
+        self.assertEqual(reports[0]['reachability'],'NOT_RUN')
+
+    def test_does_not_probe_foreign_same_name_interface(self):
+        self.config['tunnels'].append(self.tunnel)
+        with patch.object(diagnostics,'read',return_value=self.config), \
+             patch.object(diagnostics.network,'read_state',return_value=None), \
+             patch.object(diagnostics,'_link',return_value={'ifname':'gtn1'}), \
+             patch.object(diagnostics,'_run') as probe:
+            reports=diagnostics.test()
+        self.assertEqual(reports[0]['structure'],'FOREIGN_INTERFACE')
+        self.assertEqual(reports[0]['result'],'FAIL')
+        probe.assert_not_called()
+
+    def test_owned_inner_icmp_can_pass_without_claiming_port_forward(self):
+        from types import SimpleNamespace
+        self.config['tunnels'].append(self.tunnel)
+        state={'owner':'gre-tun/1','tunnels':[self.tunnel]}
+        link={'linkinfo':{'info_kind':'gre','info_data':{'local':'192.0.2.20','remote':'198.51.100.10'}},'flags':['UP']}
+        with patch.object(diagnostics,'read',return_value=self.config), \
+             patch.object(diagnostics.network,'read_state',return_value=state), \
+             patch.object(diagnostics,'_link',return_value=link), \
+             patch.object(diagnostics,'_inner_assigned',return_value=True), \
+             patch.object(diagnostics,'_run',return_value=SimpleNamespace(returncode=0)):
+            report=diagnostics.test()[0]
+        self.assertEqual(report['result'],'PASS')
+        self.assertEqual(report['reachability'],'INNER_ICMP_OK')
+        self.assertIn('does not prove port forwarding',report['reason'])
+
+    def test_probe_failure_is_unverified_not_false_negative(self):
+        from types import SimpleNamespace
+        self.config['tunnels'].append(self.tunnel)
+        with patch.object(diagnostics,'read',return_value=self.config), \
+             patch.object(diagnostics.network,'read_state',return_value={'tunnels':[self.tunnel]}), \
+             patch.object(diagnostics,'_link',return_value={'linkinfo':{'info_kind':'gre','info_data':{'local':'192.0.2.20','remote':'198.51.100.10'}},'flags':['UP']}), \
+             patch.object(diagnostics,'_inner_assigned',return_value=True), \
+             patch.object(diagnostics,'_run',return_value=SimpleNamespace(returncode=1)):
+            self.assertEqual(diagnostics.test()[0]['result'],'UNVERIFIED')
+
+    def test_tunnel_selection_offers_all_or_id(self):
+        self.config['tunnels'].append(self.tunnel)
+        capture=io.StringIO()
+        with patch.object(cli.config,'read',return_value=self.config), \
+             patch('builtins.input',return_value='0'),patch('sys.stdout',capture), \
+             patch.object(cli.diagnostics,'test') as t:
+            cli.interactive_test()
+        self.assertIn('T0001',capture.getvalue())
+        t.assert_not_called()
