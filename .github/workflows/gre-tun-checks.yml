@@ -35,10 +35,11 @@ jobs:
           PYTHONPATH=src python3 -m gre_tun.cli status --json
       - name: Full permanent-command install and update smoke test
         run: |
+          expected="$(PYTHONPATH=gre-tun/src python3 -c 'import gre_tun; print(gre_tun.__version__)')"
           curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-tun/install.sh | sudo bash
-          sudo gre-tun --version | grep -Fx '0.2.0-dev'
+          sudo gre-tun --version | grep -Fx "$expected"
           curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-tun/install.sh | sudo bash
-          sudo gre-tun --version | grep -Fx '0.2.0-dev'
+          sudo gre-tun --version | grep -Fx "$expected"
           sudo gre-tun status --json
           sudo systemctl is-active gre-tun.service
       - name: Isolated GRE real payload and counter acceptance
