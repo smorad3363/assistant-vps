@@ -43,6 +43,38 @@ class HistoryCollectorTests(unittest.TestCase):
             selected = history_collector._select_ports()
         self.assertEqual(selected, {("tcp", 8080), ("udp", 4343), ("tcp", 5555)})
 
+
+    def test_stale_tunnel_configuration_does_not_hide_forwarded_ports(self):
+        # No PM2_ACCOUNT rule exists after restore failure. A desired tunnel
+        # must not suppress read-only monitoring of an external DNAT chain.
+        with (mock.patch.object(history_collector.accounting, "counters",
+                                return_value={}),
+              mock.patch.object(history_collector.port_graph, "port_labels",
+                                side_effect=AssertionError("config is not active accounting"))):
+            self.assertEqual(history_collector._tracked_elsewhere(), set())
+
+    def test_multiport_external_dnat_is_split_into_monitored_ports(self):
+        from pm2 import system_rules
+        raw = ("-A PF_RELAY_DNAT -p tcp -m multiport "
+               "--dports 1988,8880,8744,1953,6565 -j DNAT "
+               "--to-destination 192.0.2.44\n"
+               "-A PF_RELAY_DNAT -p udp -m multiport "
+               "--dports 1988,8880,8744,1953,6565 -j DNAT "
+               "--to-destination 192.0.2.44\n")
+        nat = system_rules.parse_nat(raw)
+        with (mock.patch.object(history_collector, "_tracked_elsewhere",
+                                return_value=set()),
+              mock.patch.object(history_collector.system_rules, "detect_nat",
+                                return_value=(nat, None)),
+              mock.patch.object(history_collector.auto_monitor, "discover",
+                                return_value=[]),
+              mock.patch.object(history_collector.auto_monitor, "run",
+                                return_value="")):
+            selected = history_collector._select_ports()
+        self.assertEqual(selected,
+                         {(proto, port) for proto in ("tcp", "udp")
+                          for port in (1988, 8880, 8744, 1953, 6565)})
+
     def test_minute_samples_survive_viewer_exit_and_skip_offline_gaps(self):
         ports = {("tcp", 443)}
         inspected = ([("PREROUTING", "PM2_HIST_RX", True, True),
