@@ -147,22 +147,25 @@ def preflight():
                     raise PM2Error("E_CONFLICT", f"Unexpected V2 enable state ({val}): {name}")
             if kind == "is-active":
                 expected = "active" if active and name == "portmanager2-sample.timer" else "inactive"
-                # A timer-triggered oneshot can legitimately be in "failed"
-                # after its last invocation; it is still the exact owned unit
-                # verified above, so that result cannot mean a foreign unit.
-                # Preserve the error in systemd/journald and warn visibly,
-                # while allowing verified upgrades that may repair the cause.
-                recoverable_sample_failure = (
-                    marker["activation"] == "active"
-                    and name == "portmanager2-sample.service"
-                    and val == "failed"
+                # The unit contents and activation flags were already checked
+                # against the owned marker. A failed owned oneshot is a runtime
+                # fault, not evidence of foreign ownership. Permit upgrades
+                # that may fix monitoring without resetting this failure,
+                # touching NAT, or assuming reboot-time restore has recovered.
+                recoverable_oneshot_failure = (
+                    active and val == "failed"
+                    and name in ("portmanager2-sample.service",
+                                 "portmanager2-restore.service")
                 )
-                if val != expected and not recoverable_sample_failure:
+                if val != expected and not recoverable_oneshot_failure:
                     raise PM2Error("E_CONFLICT", f"Unexpected V2 runtime state ({val}): {name}")
-                if recoverable_sample_failure:
-                    print("[portmanager2] WARNING: sampler service previously failed; "
-                          "install can continue, but check its journal: "
-                          "journalctl -u portmanager2-sample.service -n 60 --no-pager",
+                if recoverable_oneshot_failure:
+                    purpose = ("restore" if name == "portmanager2-restore.service"
+                               else "sampler")
+                    print(f"[portmanager2] WARNING: verified owned {purpose} service "
+                          f"previously failed; upgrade can continue, but "
+                          f"{purpose} has NOT been repaired. Check: "
+                          f"journalctl -u {name} -n 60 --no-pager",
                           file=sys.stderr)
     return marker
 
