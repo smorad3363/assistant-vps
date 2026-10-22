@@ -33,6 +33,8 @@ class ServicesTests(TestCase):
         patches = [
             mock.patch.object(services, "SYSTEMD", self.systemd),
             mock.patch.object(services, "MARKER", self.etc / "systemd-owner.json"),
+            mock.patch.object(services, "FLAGS", (
+                self.etc / "enable-restore", self.etc / "enable-sample")),
             mock.patch.object(services, "_check_root", return_value=None),
             mock.patch.object(services, "_run", side_effect=fake_systemctl),
         ]
@@ -125,7 +127,7 @@ class ServicesTests(TestCase):
             self.assertTrue(result["enabled"])
             self.assertIn("sampler service previously failed", out.getvalue())
 
-    def test_failed_restore_unit_still_blocks_install(self):
+    def test_failed_owned_restore_oneshot_allows_upgrade_but_warns(self):
         with mock.patch.object(services, "FLAGS", (
                 self.etc / "enable-restore", self.etc / "enable-sample")):
             services.install()
@@ -145,10 +147,18 @@ class ServicesTests(TestCase):
                         else "failed\n" if args[1] == "portmanager2-restore.service"
                         else "inactive\n"), stderr="")
                 return fake_systemctl(args)
-            with mock.patch.object(services, "_run", side_effect=invalid):
-                with self.assertRaises(PM2Error) as exc:
-                    services.install()
-            self.assertEqual(exc.exception.code, "E_CONFLICT")
+            from contextlib import redirect_stderr
+            from io import StringIO
+            with (mock.patch.object(services, "_run", side_effect=invalid) as run,
+                  redirect_stderr(StringIO()) as output):
+                result = services.install()
+            self.assertFalse(result["changed"])
+            self.assertTrue(result["enabled"])
+            self.assertIn("restore has NOT been repaired", output.getvalue())
+            self.assertIn("journalctl -u portmanager2-restore.service",
+                          output.getvalue())
+            self.assertFalse(any(call.args[0][0] == "reset-failed"
+                                 for call in run.call_args_list))
 
     def test_masked_unit_blocks_deletion(self):
         services.install()
