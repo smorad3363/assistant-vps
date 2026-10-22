@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0-rc.7 — 2026-10-22
+### Fixed
+- Allow upgrades when an exact owner-verified oneshot restore service has previously failed, without changing NAT rules, resetting systemd failure state, or claiming restore health.
+- Preserve fail-closed checks for foreign, modified, masked, or unexpectedly active services.
+- Surface owned service failure warnings during otherwise successful installation; operators must still diagnose reboot-time restore separately.
+
+
 ## 2.1.0-rc.6 — 2026-10-22
 ### Fixed
 - Track configured forwarding ports if their own kernel accounting rules are missing; desired configuration alone is not proof of active traffic accounting.
