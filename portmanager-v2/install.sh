@@ -18,6 +18,9 @@ progress() { printf '[%3d%%] %s\n' "$(( $1 * 100 / 7 ))" "$2"; }
 quiet_step() {
   local detail="$tmp/step.log"
   if "$@" >"$detail" 2>&1; then
+    # Surface verified service warnings even on successful upgrades.
+    # Suppressing them could misrepresent a failed reboot restore as healthy.
+    grep '^\[portmanager2\] WARNING:' "$detail" >&2 || true
     : > "$detail"
   else
     cat "$detail" >&2
