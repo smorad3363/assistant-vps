@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.0-rc.6 — 2026-10-22
+### Fixed
+- Track configured forwarding ports if their own kernel accounting rules are missing; desired configuration alone is not proof of active traffic accounting.
+- Expand foreign NAT multiport `--dports` entries for persistent per-port byte and rate monitoring, without modifying foreign NAT rules.
+- Retain historical byte records and avoid inferring unobserved or pre-update traffic.
+
 ## 2.0.0-dev.1 — 2026-10-09 (unreleased)
 ### Added
 - Independent development CLI and read-only doctor/status.
