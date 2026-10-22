@@ -10,7 +10,7 @@ import re
 import shlex
 import time
 
-from . import accounting, auto_monitor, config, sampler, transaction, port_graph, system_rules, usage_ledger
+from . import accounting, auto_monitor, sampler, port_graph, system_rules, usage_ledger
 from .errors import PM2Error
 
 CHAINS = {"down": ("PREROUTING", "PM2_HIST_RX", "ORIGINAL"),
@@ -187,10 +187,10 @@ def _tracked_elsewhere():
                 known.update((("tcp", port), ("udp", port)))
             else:
                 known.add((proto, port))
-    cfg = config.load(transaction.CONFIG)
-    for tid, proto, port in port_graph.port_labels(cfg["tunnels"]):
-        if port:
-            known.add((proto, port))
+    # Configuration describes desired tunnels, not necessarily installed rules.
+    # Excluding configured ports without live PM2_ACCOUNT counters hides traffic
+    # handled by another NAT manager (and masks stale/failed V2 restores).
+    # The kernel snapshot above is the only authoritative exclusion source.
     return known
 
 
@@ -208,14 +208,21 @@ def _select_ports(existing_monitored=()):
         for rule in rules:
             proto, raw_port = rule.get("protocol"), str(rule.get("port", ""))
             if (rule.get("target") not in ("DNAT", "REDIRECT") or
-                    proto not in ("tcp", "udp") or not raw_port.isdecimal()):
+                    proto not in ("tcp", "udp")):
                 continue
-            port = int(raw_port)
-            if not 1 <= port <= 65535:
-                continue
-            item = (proto, port)
-            if item not in known and item not in forwarded:
-                forwarded.append(item)
+            # iptables multiport uses comma-separated --dports. Each port
+            # needs its own ORIGINAL-destination mangle counter; a NAT table
+            # counter records only initial connection packets, not data volume.
+            # Skip range/invalid selectors instead of guessing a byte total.
+            for part in raw_port.split(","):
+                if not part.isdecimal():
+                    continue
+                port = int(part)
+                if not 1 <= port <= 65535:
+                    continue
+                item = (proto, port)
+                if item not in known and item not in forwarded:
+                    forwarded.append(item)
     local = auto_monitor.discover(existing=known | set(forwarded), limit=MAX_PORTS)
     # Discover() intentionally returns only its busiest 24 candidates. Do
     # not evict a quieter previously monitored listener merely because it
