@@ -71,7 +71,7 @@ def main():
     os.lseek(fd, 0, os.SEEK_SET)
     os.set_inheritable(fd, True)
     new_args = [a if a != "stdin:" else "/proc/self/fd/" + str(fd) for a in args]
-    os.execv(XRAY, [XRAY] + new_args)
+    os.execv(XRAY, [XRAY] + new_args + ["-format", "json"])
 
 if __name__ == "__main__":
     main()
