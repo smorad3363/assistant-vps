@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/local/bin/python3
 """Exec wrapper for Marzban Node Xray; applies an additive per-node WARP SOCKS5 overlay.
 
 The original Xray binary remains untouched. All non-run invocations pass through.
