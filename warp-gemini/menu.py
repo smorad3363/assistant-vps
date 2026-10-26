@@ -89,8 +89,46 @@ def status():
     print("Saved domains:", len(init()["domains"]))
     if COMPOSE.exists():
         print("Node:", run(["docker", "ps", "--filter", "name=^/master$", "--format", "{{.Status}}"], capture=True).strip() or "not running")
+    live()
     print("Host default route:")
     print(run(["ip", "-4", "route", "get", "1.1.1.1"], capture=True).splitlines()[0])
+
+
+def live():
+    """Read the actual Xray memfd configuration without exposing users/keys."""
+    settings = init()
+    found = False
+    for folder in Path("/proc").iterdir():
+        if not folder.name.isdigit():
+            continue
+        try:
+            if (folder / "comm").read_text().strip() != "xray":
+                continue
+            for fd in (folder / "fd").iterdir():
+                if "memfd:xray-warp-config" not in os.readlink(fd):
+                    continue
+                with open(fd, encoding="utf-8") as stream:
+                    cfg = json.load(stream)
+                found = True
+                outbound = next((x for x in cfg.get("outbounds", []) if x.get("tag") == "warp-gemini"), None)
+                rule = next((x for x in cfg.get("routing", {}).get("rules", [])
+                             if x.get("outboundTag") == "warp-gemini"), None)
+                active = list(rule.get("domain", [])) if rule else []
+                print("\n== LIVE XRAY ROUTING ==")
+                print("Xray PID:", folder.name)
+                print("WARP outbound:", "active" if outbound else "disabled")
+                print("Current live domain rules:")
+                for x in active:
+                    print("  -", x)
+                saved = list(settings["domains"]) if settings.get("enabled", True) else []
+                print("Saved config matches live:", saved == active)
+                if saved != active:
+                    print("NOTE: Edits are saved but not yet applied. Use option 9.")
+                return
+        except (PermissionError, FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+            continue
+    if not found:
+        print("No live managed Xray configuration found. Node may be disconnected or overlay inactive.")
 
 def show():
     d = init()
@@ -259,7 +297,7 @@ def main():
     if os.geteuid() != 0:
         sys.exit("Run sudo warp-menu")
     if len(sys.argv) > 1:
-        actions = {"status": status, "domains": show, "test": tests, "diagnose": diagnose, "integrate": install_integration}
+        actions = {"status": status, "domains": show, "test": tests, "diagnose": diagnose, "integrate": install_integration, "live": live}
         action = actions.get(sys.argv[1])
         if action:
             action()
@@ -279,6 +317,7 @@ def main():
  8) Install per-node Xray integration (no restart)
  9) Apply routing changes (brief node interruption)
 10) Diagnostics
+11) Verify live Xray routing and domain rules
  0) Exit
 =====================================""")
         choice = input("Choose: ").strip()
@@ -286,7 +325,7 @@ def main():
             actions = {
                 "1": show, "2": add, "3": remove, "4": enabled,
                 "5": status, "6": rotate, "7": tests, "8": install_integration,
-                "9": apply, "10": diagnose,
+                "9": apply, "10": diagnose, "11": live,
             }
             if choice == "0":
                 return
