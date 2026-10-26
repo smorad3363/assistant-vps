@@ -67,6 +67,8 @@ def trace(proxy=False):
     args = ["curl", "-fsS", "--connect-timeout", "5", "--max-time", "15"]
     if proxy:
         args += ["--socks5-hostname", "127.0.0.1:40000"]
+    if not proxy:
+        args.append("-4")
     args += [TRACE]
     r = run(args, timeout=19, capture=True)
     return {k: v for k, v in (line.split("=", 1) for line in r.splitlines() if "=" in line) if k in ("ip", "loc", "warp", "colo")}
