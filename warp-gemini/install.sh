@@ -111,7 +111,7 @@ MENU_HOME="/opt/warp-gemini"
 mkdir -p "$MENU_HOME"
 for name in menu.py xray-wrapper.py; do
     curl -fsSL --connect-timeout 8 --max-time 30 \
-        "https://raw.githubusercontent.com/smorad3363/assistant-vps/master/warp-gemini/$name?stamp=$(date +%s)" \
+        "https://github.com/smorad3363/assistant-vps/raw/refs/heads/master/warp-gemini/$name" \
         -o "$MENU_HOME/$name.tmp"
     if [ "$name" = "menu.py" ]; then python3 -m py_compile "$MENU_HOME/$name.tmp"; fi
     mv -f "$MENU_HOME/$name.tmp" "$MENU_HOME/$name"
