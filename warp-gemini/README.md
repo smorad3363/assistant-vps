@@ -75,3 +75,53 @@ These domains are a starting point, not a guaranteed complete list of endpoints 
 * Direct/Proxy routing can be checked with `ip -4 route get 1.1.1.1` and the Cloudflare trace endpoint.
 
 Official references: https://developers.cloudflare.com/warp-client/get-started/linux/ and https://developers.cloudflare.com/warp-client/warp-modes/
+
+
+## Interactive node manager
+
+After running the permanent installer, run:
+
+```bash
+sudo warp-menu
+```
+
+The menu supports:
+1. List domain rules and current saved settings.
+2. Add one or multiple domains (comma-separated, defaults to `domain:example.com`; `full:example.com` matches only the exact hostname).
+3. Remove individual domains by number or name.
+4. Toggle WARP routing in Xray (changes take effect at Apply).
+5. Compare the host's direct IPv4 with WARP's current exit IP, country, and connection health.
+6. Disconnect/reconnect **only the WARP tunnel** and compare exit IP before/after. A different IP or country cannot be guaranteed.
+7. Compare Gemini and AI Studio HTTP reachability over direct and WARP paths.
+8. Install a non-invasive per-node Xray executable overlay in an additional Compose override file, without restarting.
+9. Apply saved rules by recreating the Marzban Node container. **This temporarily disconnects ALL clients on that node and requires the Marzban master to reconnect.** A typed `APPLY` confirmation is required.
+10. Run diagnostics.
+11. Inspect **live Xray rules** and compare them with the saved domain list, without showing user/secret configuration.
+
+CLI equivalents for scripts:
+
+```bash
+sudo warp-menu status
+sudo warp-menu domains
+sudo warp-menu live
+sudo warp-menu test
+sudo warp-menu diagnose
+```
+
+On the tested deployment, the host uses `/opt/master/docker-compose.yml` for the `marzban-node` service. The integration adds `/opt/master/docker-compose.override.yml` and mounts a dedicated Xray executable wrapper. It does **not** modify Marzban core source code or the original Compose file. Per-node rules live in `/var/lib/master/warp-gemini.json`, an already mounted host directory. This implementation requires the Node container to share the host network namespace so SOCKS5 at `127.0.0.1:40000` is reachable.
+
+The executable wrapper applies the local domains and WARP SOCKS5 outbound each time Marzban sends a new Xray configuration. It preserves the Marzban API route ahead of domain rules. It passes configuration through an anonymous memory file descriptor instead of persisting the combined configuration on disk. The real Xray binary is unchanged. The wrapper uses an **absolute interpreter path** because Marzban Node launches Xray with a restricted environment.
+
+**Safety notes:** Other Marzban Node installations may use a different Compose path or service name. The manager intentionally refuses unknown layouts or conflicts with an existing Compose override. Use a maintenance window for Apply on high-traffic nodes. Test authenticated Gemini chats separately; HTTP 200 and `warp=on` do not ensure account eligibility.
+
+### Rollback per-node Xray routing without uninstalling WARP
+
+Only if your Compose override belongs to this manager and you intend to remove its routing integration:
+
+```bash
+sudo mv /opt/master/docker-compose.override.yml /opt/master/docker-compose.override.yml.disabled
+cd /opt/master
+sudo docker compose up -d --no-deps --force-recreate marzban-node
+```
+
+This requires the master to reconnect and interrupts active user connections. The WARP local proxy and saved rules remain available for future reactivation.
