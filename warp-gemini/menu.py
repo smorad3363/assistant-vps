@@ -121,7 +121,7 @@ def live():
                 found = True
                 outbound = next((x for x in cfg.get("outbounds", []) if x.get("tag") == "warp-gemini"), None)
                 rule = next((x for x in cfg.get("routing", {}).get("rules", [])
-                             if x.get("outboundTag") == "warp-gemini"), None)
+                             if x.get("outboundTag") == "warp-gemini" and not x.get("inboundTag")), None)
                 active = list(rule.get("domain", [])) if rule else []
                 print("\n== LIVE XRAY ROUTING ==")
                 print("Xray PID:", folder.name)
