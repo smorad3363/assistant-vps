@@ -151,25 +151,27 @@ curl -4 -fsS --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace |
 
 The two IPs may vary with Cloudflare's routing. The system's default route and other client traffic remain unchanged. Google's country and abuse checks can still block Gemini even with an IPv4 egress; live authenticated chat must be tested.
 
+## Isolated WGCF + WireProxy (real WireGuard tunnel, secondary SOCKS5)
 
-## Test WireGuard as an alternate WARP tunnel transport
+**Important:** Official Cloudflare WARP's **Local Proxy** supports MASQUE only. Attempting to run `warp-cli tunnel protocol set WireGuard` while keeping Local Proxy mode fails with `Proxy mode only supports MASQUE`. This limitation is confirmed by Cloudflare and was reproduced on Ubuntu 26.04. Do not use the old `warp-protocol wireguard` approach.
 
-The existing Cloudflare WARP Local Proxy normally connects over MASQUE. The older yonggekkk/warp-yg script includes a WGCF method that can change system-wide routes. Instead, this project adds a safer **official WireGuard-vs-MASQUE transport test** that preserves the current SOCKS5 local proxy. It is not an installation of the third-party WGCF system-wide router.
+The supported alternative in this repo is an **independent, unofficial WGCF registration** with userspace WireProxy. It is isolated from the official Cloudflare MASQUE SOCKS5 service:
 
-After running the normal permanent installer, run sudo warp-menu:
+| Backend | Local bind | Transport | Default route |
+| --- | --- | --- | --- |
+| Cloudflare official WARP proxy | 127.0.0.1:40000 | MASQUE | Unchanged |
+| WGCF + WireProxy | 127.0.0.1:40001 | WireGuard | Unchanged |
 
-- Option **14**: switch WARP transport to WireGuard and verify SOCKS5 IPv4 exit.
-- Option **15**: restore previously saved transport (normally MASQUE).
-- Option **16**: view protocol, WARP exit IP, direct exit IP and host route.
+Run the permanent one-line installer to install or update the menu and helpers. In `sudo warp-menu`:
 
-Commands:
+- **14**: install the isolated WGCF + WireProxy backend; keeps credentials and configuration on subsequent runs.
+- **15**: select Gemini backend port 40000 (official MASQUE) or 40001 (WGCF WireGuard). The selection is saved but does **not** affect active Xray until applied.
+- **16**: check WGCF service, exit IP, location and health.
+- **9**: apply the changed backend, which recreates Marzban Node and **briefly disconnects all clients**, then requires master reconnection.
+- **11**: verify the backend port in the **live Xray configuration**.
 
-    sudo warp-protocol status
-    sudo warp-protocol wireguard
-    sudo warp-protocol restore
+WGCF setup is also available via the permanent GitHub file: `sudo wgcf-wireproxy-install install`, and `sudo wgcf-wireproxy-install status`. This installer uses pinned release artifacts **wgcf 2.3.0** and **wireproxy 1.1.3**, verified with SHA-256 release digests. It preserves existing WGCF account keys and verifies `warp=on`. Those keys are private and stored at `/opt/warp-gemini/wgcf-isolated`. A separate `warp-gemini-wgcf-proxy.service` enables it across reboots. It does not edit Xray or other services.
 
-The script refuses to run unless WARP is in local proxy mode on the expected port 40000, saves the previous transport in /opt/warp-gemini/previous-warp-protocol, checks that the direct route is unchanged, and attempts rollback if the new proxy is unhealthy. It does not run wg-quick, rewrite system DNS or recreate Marzban Node.
+**Important limitation:** On the tested node both independent methods returned the same Cloudflare IPv4 exit, `104.28.193.116`. A different WireGuard transport does not guarantee a different exit IP, an allowed country or Gemini account eligibility. Only a genuine authenticated chat confirms that Gemini works.
 
-**Switching transport briefly interrupts requests already using WARP.** It does not guarantee a different IP or Gemini access. After a healthy change, reconnect the existing VPN profile and submit a real Gemini chat message to confirm.
-
-Official transport switching reference: https://developers.cloudflare.com/warp-client/get-started/linux/
+Rollback to official MASQUE is available via menu option 15 (select 40000), then apply with option 9. Never use the old global WGCF route-changing installer on the production Marzban/GRE node.
