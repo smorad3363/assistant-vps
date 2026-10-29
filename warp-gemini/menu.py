@@ -390,6 +390,22 @@ def backend_switch():
     print("Backend preference saved:", port)
     print("IMPORTANT: Use option 9 to apply (temporarily disconnects node clients).")
 
+def health_check():
+    p = "/usr/local/bin/warp-health"
+    if not Path(p).is_file():
+        print("Health monitor not installed. Re-run the permanent installer.")
+        return
+    subprocess.run([p, "check"], check=False)
+
+def health_report():
+    p = "/usr/local/bin/warp-health"
+    if not Path(p).is_file():
+        print("Health monitor not installed. Re-run the permanent installer.")
+        return
+    subprocess.run([p, "report"], check=False)
+    print("\\nHealth timer:", run(["systemctl", "is-active", "warp-gemini-health.timer"], capture=True).strip())
+    print("Read-only monitoring: does not rotate WARP IP or change Xray.")
+
 def diagnose():
     print("== Memory ==")
     run(["free", "-h"])
@@ -406,7 +422,7 @@ def main():
     if os.geteuid() != 0:
         sys.exit("Run sudo warp-menu")
     if len(sys.argv) > 1:
-        actions = {"status": status, "domains": show, "test": tests, "diagnose": diagnose, "integrate": install_integration, "live": live, "wgcf-status": wgcf_status}
+        actions = {"status": status, "domains": show, "test": tests, "diagnose": diagnose, "integrate": install_integration, "live": live, "wgcf-status": wgcf_status, "health": health_check, "health-report": health_report}
         action = actions.get(sys.argv[1])
         if action:
             action()
@@ -433,6 +449,8 @@ def main():
 15) Choose Gemini WARP backend (40000 or 40001)
 16) Show isolated WireGuard proxy status/IP
 17) Toggle single-egress Google/Gemini test for port 2053 only
+18) Run WARP and Gemini health check now
+19) Show last health report and monitor timer
  0) Exit
 =====================================""")
         choice = input("Choose: ").strip()
@@ -444,6 +462,7 @@ def main():
                 "12": toggle_ipv4, "13": toggle_sniff_2053,
                 "14": wgcf_install, "15": backend_switch, "16": wgcf_status,
                 "17": toggle_google_2053,
+                "18": health_check, "19": health_report,
             }
             if choice == "0":
                 return
