@@ -109,13 +109,15 @@ say "No Xray/Marzban configuration was changed. Use the documented SOCKS outboun
 # Install/update the operator menu. This does not enable Xray overlay or restart containers.
 MENU_HOME="/opt/warp-gemini"
 mkdir -p "$MENU_HOME"
-for name in menu.py xray-wrapper.py; do
+for name in menu.py xray-wrapper.py warp-protocol.sh; do
     curl -fsSL --connect-timeout 8 --max-time 30 \
         "https://github.com/smorad3363/assistant-vps/raw/refs/heads/master/warp-gemini/$name" \
         -o "$MENU_HOME/$name.tmp"
     if [ "$name" = "menu.py" ]; then python3 -m py_compile "$MENU_HOME/$name.tmp"; fi
+    if [ "$name" = "warp-protocol.sh" ]; then bash -n "$MENU_HOME/$name.tmp"; fi
     mv -f "$MENU_HOME/$name.tmp" "$MENU_HOME/$name"
     chmod 755 "$MENU_HOME/$name"
 done
 ln -sfn "$MENU_HOME/menu.py" /usr/local/bin/warp-menu
-say "Interactive manager installed. Run: sudo warp-menu"
+ln -sfn "$MENU_HOME/warp-protocol.sh" /usr/local/bin/warp-protocol
+say "Interactive manager and WARP tunnel protocol test installed. Run: sudo warp-menu"
