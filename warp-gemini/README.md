@@ -125,3 +125,28 @@ sudo docker compose up -d --no-deps --force-recreate marzban-node
 ```
 
 This requires the master to reconnect and interrupts active user connections. The WARP local proxy and saved rules remain available for future reactivation.
+
+
+## Optional forced IPv4 egress for Gemini
+
+The Cloudflare WARP SOCKS5 server may choose an IPv6 egress address when it receives a **domain name**. Disabling IPv6 on the Ubuntu host does not change the egress family selected by WARP.
+
+The local node's Xray 25.3.6 accepts `targetStrategy=UseIPv4` on a SOCKS outbound but in live testing that setting alone still resulted in IPv6 egress. The proven route is:
+
+```text
+Gemini domain -> Xray Freedom (ForceIPv4) -> Xray SOCKS5 -> Cloudflare WARP -> destination
+```
+
+To control this, run `sudo warp-menu` and use **12** to toggle forced IPv4 egress. Use **13** to enable domain Sniffing for an existing Trojan inbound on port 2053. Use **9** to apply saved changes; **this recreates the node and temporarily disconnects all its clients**. Option 11 shows the live effective settings after reconnection.
+
+You can compare WARP egress families **without Xray changes**:
+
+```bash
+# SOCKS server resolves the hostname; IPv6 egress is possible.
+curl -fsS --socks5-hostname 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace | grep -E '^(ip|loc|warp)='
+
+# Local DNS resolves an IPv4 destination before SOCKS.
+curl -4 -fsS --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace | grep -E '^(ip|loc|warp)='
+```
+
+The two IPs may vary with Cloudflare's routing. The system's default route and other client traffic remain unchanged. Google's country and abuse checks can still block Gemini even with an IPv4 egress; live authenticated chat must be tested.
