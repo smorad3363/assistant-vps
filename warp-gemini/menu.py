@@ -90,6 +90,9 @@ def status():
     print("Compose override:", "present" if OVERRIDE.is_file() else "not installed")
     print("Routing enabled:", init()["enabled"])
     print("Saved domains:", len(init()["domains"]))
+    print("Selected Gemini backend port:", init()["port"])
+    if Path("/opt/warp-gemini/wgcf-isolated/wireproxy.conf").is_file():
+        wgcf_status()
     print("IPv4-only Gemini routing:", init().get("ipv4_only", True))
     print("Sniffing on Trojan 2053:", init().get("sniff_2053", False))
     if COMPOSE.exists():
@@ -122,6 +125,12 @@ def live():
                 print("\n== LIVE XRAY ROUTING ==")
                 print("Xray PID:", folder.name)
                 print("WARP outbound:", "active" if outbound else "disabled")
+                sock = next((x for x in cfg.get("outbounds", []) if x.get("tag") in ("warp-gemini-socks", "warp-gemini")), None)
+                servers = sock.get("settings", {}).get("servers", []) if sock else []
+                live_port = servers[0].get("port") if servers else None
+                print("Live WARP SOCKS5 port:", live_port)
+                print("Saved backend matches live:", settings.get("port", 40000) == live_port)
+
                 print("Live IPv4-only via Freedom:", bool(outbound and outbound.get("protocol") == "freedom" and outbound.get("settings", {}).get("domainStrategy") == "ForceIPv4"))
                 inbound2053 = next((x for x in cfg.get("inbounds", []) if "2053" in str(x.get("port","")).split(",")), None)
                 print("Live Sniffing 2053:", bool(inbound2053 and inbound2053.get("sniffing", {}).get("enabled")))
@@ -311,33 +320,59 @@ def apply():
     print("Container recreation submitted. Marzban master must reconnect the node.")
     print("Check node status and test a VPN client after reconnecting.")
 
-def protocol_wireguard():
-    p = "/usr/local/bin/warp-protocol"
-    if not Path(p).is_file():
-        print("Missing warp-protocol. Re-run the permanent installer to update the menu.")
+def wgcf_status():
+    print("\n== Isolated WGCF WireProxy ==")
+    print("Service:", run(["systemctl", "is-active", "warp-gemini-wgcf-proxy.service"], capture=True).strip())
+    try:
+        raw = run(["curl", "-4fsS", "--socks5", "127.0.0.1:40001", "--connect-timeout", "5", "--max-time", "15",
+                   TRACE], timeout=19, capture=True)
+        values = {k: v for k, v in (line.split("=", 1) for line in raw.splitlines() if "=" in line)
+                  if k in ("ip", "loc", "warp", "colo")}
+        print("WireGuard SOCKS5:", values)
+        print("Healthy:", values.get("warp") in ("on", "plus") and ":" not in values.get("ip", ""))
+    except Exception as exc:
+        print("WireGuard SOCKS5 unavailable:", exc)
+    print("Selected Gemini backend:", init()["port"])
+
+def wgcf_install():
+    installer = "/usr/local/bin/wgcf-wireproxy-install"
+    if not Path(installer).is_file():
+        print("Installer is missing. Re-run the permanent install command.")
         return
-    print("Switching only the WARP local proxy transport to WireGuard.")
-    print("Xray/Marzban and the system default route will NOT be restarted.")
-    print("WARP-proxied requests may pause briefly during reconnect.")
-    ans = input("Type WIREGUARD to proceed: ").strip()
-    if ans != "WIREGUARD":
+    print("Installs separate WGCF + WireProxy on 127.0.0.1:40001.")
+    print("Does NOT change the host default route, Docker, Xray or Marzban.")
+    choice = input("Type INSTALL to continue: ").strip()
+    if choice != "INSTALL":
+        return
+    subprocess.run([installer, "install"], check=False)
+
+def backend_switch():
+    d = init()
+    print("Current Gemini SOCKS5 backend:", d["port"])
+    print("1) Official Cloudflare WARP MASQUE (port 40000)")
+    print("2) Isolated WGCF WireProxy (port 40001)")
+    choice = input("Choose 1/2: ").strip()
+    if choice not in ("1", "2"):
         print("Cancelled.")
         return
-    subprocess.run([p, "wireguard"], check=False)
-
-def protocol_restore():
-    p = "/usr/local/bin/warp-protocol"
-    if not Path(p).is_file():
-        print("Missing warp-protocol. Re-run the permanent installer.")
+    port = 40000 if choice == "1" else 40001
+    try:
+        output = run(["curl", "-4fsS", "--socks5", f"127.0.0.1:{port}",
+                      "--connect-timeout", "5", "--max-time", "15", TRACE],
+                     timeout=19, capture=True)
+        if "warp=on" not in output and "warp=plus" not in output:
+            print("Backend is not healthy. No changes saved.")
+            return
+    except Exception as exc:
+        print("Backend unreachable; no changes saved.", exc)
         return
-    subprocess.run([p, "restore"], check=False)
-
-def protocol_status():
-    p = "/usr/local/bin/warp-protocol"
-    if not Path(p).is_file():
-        print("Missing warp-protocol. Re-run the permanent installer.")
+    if d["port"] == port:
+        print("Already selected. Check live routing using option 11.")
         return
-    subprocess.run([p, "status"], check=False)
+    d["port"] = port
+    save(d)
+    print("Backend preference saved:", port)
+    print("IMPORTANT: Use option 9 to apply (temporarily disconnects node clients).")
 
 def diagnose():
     print("== Memory ==")
@@ -355,7 +390,7 @@ def main():
     if os.geteuid() != 0:
         sys.exit("Run sudo warp-menu")
     if len(sys.argv) > 1:
-        actions = {"status": status, "domains": show, "test": tests, "diagnose": diagnose, "integrate": install_integration, "live": live}
+        actions = {"status": status, "domains": show, "test": tests, "diagnose": diagnose, "integrate": install_integration, "live": live, "wgcf-status": wgcf_status}
         action = actions.get(sys.argv[1])
         if action:
             action()
@@ -378,9 +413,9 @@ def main():
 11) Verify live Xray routing and domain rules
 12) Toggle IPv4-only destinations through WARP
 13) Toggle domain Sniffing for Trojan 2053
-14) Test WARP over WireGuard instead of MASQUE
-15) Restore previous WARP tunnel protocol
-16) Compare current WARP tunnel protocol and exit IP
+14) Install/check isolated WGCF WireProxy
+15) Choose Gemini WARP backend (40000 or 40001)
+16) Show isolated WireGuard proxy status/IP
  0) Exit
 =====================================""")
         choice = input("Choose: ").strip()
@@ -390,7 +425,7 @@ def main():
                 "5": status, "6": rotate, "7": tests, "8": install_integration,
                 "9": apply, "10": diagnose, "11": live,
                 "12": toggle_ipv4, "13": toggle_sniff_2053,
-                "14": protocol_wireguard, "15": protocol_restore, "16": protocol_status,
+                "14": wgcf_install, "15": backend_switch, "16": wgcf_status,
             }
             if choice == "0":
                 return
