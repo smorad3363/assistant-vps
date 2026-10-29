@@ -12,10 +12,10 @@ die() { printf '[warp-protocol] ERROR: %s\n' "$*" >&2; exit 1; }
 warp() { timeout 30 warp-cli --accept-tos "$@"; }
 mode() {
   local current
-  current="$(warp tunnel protocol get 2>&1)" || { log "$current"; return 1; }
-  if grep -qi 'WireGuard' <<<"$current"; then printf 'WireGuard\n'
-  elif grep -qi 'MASQUE' <<<"$current"; then printf 'MASQUE\n'
-  else log "$current"; return 1
+  current="$(warp settings 2>&1 | grep -m1 'WARP tunnel protocol:' || true)"
+  if grep -q 'WireGuard' <<<"$current"; then printf 'WireGuard\n'
+  elif grep -q 'MASQUE' <<<"$current"; then printf 'MASQUE\n'
+  else log "Unable to determine protocol from warp-cli settings: $current"; return 1
   fi
 }
 v4trace() { curl -4fsS --socks5 "127.0.0.1:$PORT" --connect-timeout 5 --max-time 18 "$TRACE"; }
