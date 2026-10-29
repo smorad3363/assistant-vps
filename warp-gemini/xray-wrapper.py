@@ -70,6 +70,28 @@ def transform(cfg, settings):
     # Marzban Node inserts API_INBOUND routing at position zero.
     # Preserve it so its TLS API is never accidentally captured by WARP.
     idx = 1 if rules and "API_INBOUND" in rules[0].get("inboundTag", []) else 0
+    if settings.get("google_2053_full_route", False):
+        # A/B test: only clients on the Trojan 2053 inbound use a single
+        # WARP egress for Google, including Gemini authentication / assets.
+        tags = [
+            inbound.get("tag") for inbound in cfg.get("inbounds", [])
+            if inbound.get("tag") and inbound.get("protocol") == "trojan"
+            and "2053" in [p.strip() for p in str(inbound.get("port", "")).split(",")]
+        ]
+        if not tags:
+            raise ValueError("Google 2053 test requested but no Trojan inbound exists on port 2053")
+        rules.insert(idx, {
+            "type": "field",
+            "inboundTag": tags,
+            "domain": [
+                "domain:google.com",
+                "domain:googleapis.com",
+                "domain:googleusercontent.com",
+                "domain:gstatic.com"
+            ],
+            "outboundTag": DEFAULT_TAG
+        })
+        idx += 1
     rules.insert(idx, rule)
     return cfg
 
