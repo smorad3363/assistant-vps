@@ -109,15 +109,16 @@ say "No Xray/Marzban configuration was changed. Use the documented SOCKS outboun
 # Install/update the operator menu. This does not enable Xray overlay or restart containers.
 MENU_HOME="/opt/warp-gemini"
 mkdir -p "$MENU_HOME"
-for name in menu.py xray-wrapper.py wgcf-wireproxy-install.sh; do
+for name in menu.py xray-wrapper.py wgcf-wireproxy-install.sh health.py health-install.sh; do
     curl -fsSL --connect-timeout 8 --max-time 30 \
         "https://github.com/smorad3363/assistant-vps/raw/refs/heads/master/warp-gemini/$name" \
         -o "$MENU_HOME/$name.tmp"
-    if [ "$name" = "menu.py" ]; then python3 -m py_compile "$MENU_HOME/$name.tmp"; fi
-    if [ "$name" = "wgcf-wireproxy-install.sh" ]; then bash -n "$MENU_HOME/$name.tmp"; fi
+    if [ "$name" = "menu.py" ] || [ "$name" = "health.py" ]; then python3 -m py_compile "$MENU_HOME/$name.tmp"; fi
+    if [ "$name" = "wgcf-wireproxy-install.sh" ] || [ "$name" = "health-install.sh" ]; then bash -n "$MENU_HOME/$name.tmp"; fi
     mv -f "$MENU_HOME/$name.tmp" "$MENU_HOME/$name"
     chmod 755 "$MENU_HOME/$name"
 done
 ln -sfn "$MENU_HOME/menu.py" /usr/local/bin/warp-menu
 ln -sfn "$MENU_HOME/wgcf-wireproxy-install.sh" /usr/local/bin/wgcf-wireproxy-install
-say "Interactive manager and isolated WGCF installer installed. Run: sudo warp-menu"
+bash "$MENU_HOME/health-install.sh"
+say "Interactive manager, isolated WGCF installer and read-only health monitor installed. Run: sudo warp-menu"
