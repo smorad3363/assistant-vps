@@ -23,19 +23,45 @@ def transform(cfg, settings):
         raise ValueError("invalid WARP SOCKS5 port")
     if not isinstance(cfg.get("outbounds"), list):
         raise ValueError("Xray config lacks outbounds")
-    if any(o.get("tag") == DEFAULT_TAG for o in cfg["outbounds"]):
-        raise ValueError("outbound tag warp-gemini already used")
+    if any(o.get("tag") in (DEFAULT_TAG, DEFAULT_TAG + "-socks") for o in cfg["outbounds"]):
+        raise ValueError("WARP outbound tag collision")
     rules = cfg.setdefault("routing", {}).setdefault("rules", [])
     if not isinstance(rules, list):
         raise ValueError("Xray routing.rules is not a list")
     for entry in domains:
         if not isinstance(entry, str) or not entry.startswith(("domain:", "full:")):
             raise ValueError("invalid domain entry: " + str(entry))
-    cfg["outbounds"].append({
-        "tag": DEFAULT_TAG,
-        "protocol": "socks",
-        "settings": {"servers": [{"address": "127.0.0.1", "port": port}]}
-    })
+    # A plain SOCKS outbound lets the SOCKS server select IPv6 for a hostname.
+    # On Xray 25.3.x, targetStrategy alone does not reliably constrain this.
+    # Freedom with ForceIPv4 resolves A records first, then chains to SOCKS5.
+    if settings.get("ipv4_only", True):
+        cfg["outbounds"].append({
+            "tag": DEFAULT_TAG,
+            "protocol": "freedom",
+            "settings": {"domainStrategy": "ForceIPv4"},
+            "proxySettings": {"tag": DEFAULT_TAG + "-socks"}
+        })
+        cfg["outbounds"].append({
+            "tag": DEFAULT_TAG + "-socks",
+            "protocol": "socks",
+            "settings": {"servers": [{"address": "127.0.0.1", "port": port}]}
+        })
+    else:
+        cfg["outbounds"].append({
+            "tag": DEFAULT_TAG,
+            "protocol": "socks",
+            "settings": {"servers": [{"address": "127.0.0.1", "port": port}]}
+        })
+
+    if settings.get("sniff_2053", False):
+        for inbound in cfg.get("inbounds", []):
+            ports = [p.strip() for p in str(inbound.get("port", "")).split(",")]
+            if "2053" in ports and inbound.get("protocol") == "trojan":
+                sniff = inbound.get("sniffing") or {}
+                sniff["enabled"] = True
+                sniff["destOverride"] = ["http", "tls"]
+                inbound["sniffing"] = sniff
+
     rule = {
         "type": "field",
         "domain": domains,
