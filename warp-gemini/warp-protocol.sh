@@ -59,6 +59,9 @@ command -v flock >/dev/null || die 'flock is required.'
 exec 9>"$LOCK"
 flock -n 9 || die 'Another WARP protocol operation is in progress.'
 ACTION="${1:-status}"
+if [[ "$ACTION" == wireguard ]]; then
+  die "Official WARP Local Proxy supports MASQUE only. Use the isolated WGCF WireProxy helper and menu options 14-16 instead."
+fi
 if [[ "$ACTION" == status ]]; then show; exit 0; fi
 [[ "$ACTION" == wireguard || "$ACTION" == masque || "$ACTION" == restore ]] || die 'Usage: warp-protocol [status|wireguard|masque|restore]'
 MODELINE="$(warp settings 2>&1 | grep -m1 'Mode:' || true)"
