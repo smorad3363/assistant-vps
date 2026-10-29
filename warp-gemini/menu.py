@@ -95,6 +95,7 @@ def status():
         wgcf_status()
     print("IPv4-only Gemini routing:", init().get("ipv4_only", True))
     print("Sniffing on Trojan 2053:", init().get("sniff_2053", False))
+    print("Google/Gemini 2053 test enabled:", init().get("google_2053_full_route", False))
     if COMPOSE.exists():
         print("Node:", run(["docker", "ps", "--filter", "name=^/master$", "--format", "{{.Status}}"], capture=True).strip() or "not running")
     live()
@@ -136,6 +137,12 @@ def live():
                 print("Live Sniffing 2053:", bool(inbound2053 and inbound2053.get("sniffing", {}).get("enabled")))
                 if outbound and settings.get("ipv4_only", True) != (outbound.get("protocol") == "freedom"):
                     print("NOTE: Saved IPv4 preference not yet applied. Use option 9.")
+                test_rule = next((x for x in cfg.get("routing", {}).get("rules", [])
+                    if x.get("outboundTag") == "warp-gemini" and x.get("inboundTag") and
+                    "domain:google.com" in x.get("domain", [])), None)
+                print("Live Google full-route scoped test:", "2053 only" if test_rule else "off")
+                if settings.get("google_2053_full_route", False) != bool(test_rule):
+                    print("NOTE: Saved 2053 test differs from live. Apply via option 9.")
                 print("Current live domain rules:")
                 for x in active:
                     print("  -", x)
@@ -154,6 +161,7 @@ def show():
     print(f"\nEnabled: {d['enabled']} | SOCKS port: {d['port']} | domains: {len(d['domains'])}")
     print("IPv4-only WARP destinations:", d.get("ipv4_only", True))
     print("Sniffing on Trojan 2053:", d.get("sniff_2053", False))
+    print("Google/Gemini single egress on 2053:", d.get("google_2053_full_route", False))
     print("Applied only after node recreation/restart; edits on disk do NOT change running Xray.")
     for i, item in enumerate(d["domains"], 1):
         print(f" {i:2}. {item}")
@@ -204,6 +212,14 @@ def enabled():
     save(d)
     print("Overlay routing enabled:", d["enabled"])
     print("Apply routing to activate.")
+
+def toggle_google_2053():
+    d = init()
+    d["google_2053_full_route"] = not d.get("google_2053_full_route", False)
+    save(d)
+    print("2053 test: route Google auth + Gemini via one WARP egress:", d["google_2053_full_route"])
+    print("Port 2096 and all other inbounds are unchanged.")
+    print("Saved. Use option 9 to apply (recreates Marzban Node).")
 
 def toggle_ipv4():
     d = init()
@@ -416,6 +432,7 @@ def main():
 14) Install/check isolated WGCF WireProxy
 15) Choose Gemini WARP backend (40000 or 40001)
 16) Show isolated WireGuard proxy status/IP
+17) Toggle single-egress Google/Gemini test for port 2053 only
  0) Exit
 =====================================""")
         choice = input("Choose: ").strip()
@@ -426,6 +443,7 @@ def main():
                 "9": apply, "10": diagnose, "11": live,
                 "12": toggle_ipv4, "13": toggle_sniff_2053,
                 "14": wgcf_install, "15": backend_switch, "16": wgcf_status,
+                "17": toggle_google_2053,
             }
             if choice == "0":
                 return
