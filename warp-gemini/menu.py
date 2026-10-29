@@ -311,6 +311,34 @@ def apply():
     print("Container recreation submitted. Marzban master must reconnect the node.")
     print("Check node status and test a VPN client after reconnecting.")
 
+def protocol_wireguard():
+    p = "/usr/local/bin/warp-protocol"
+    if not Path(p).is_file():
+        print("Missing warp-protocol. Re-run the permanent installer to update the menu.")
+        return
+    print("Switching only the WARP local proxy transport to WireGuard.")
+    print("Xray/Marzban and the system default route will NOT be restarted.")
+    print("WARP-proxied requests may pause briefly during reconnect.")
+    ans = input("Type WIREGUARD to proceed: ").strip()
+    if ans != "WIREGUARD":
+        print("Cancelled.")
+        return
+    subprocess.run([p, "wireguard"], check=False)
+
+def protocol_restore():
+    p = "/usr/local/bin/warp-protocol"
+    if not Path(p).is_file():
+        print("Missing warp-protocol. Re-run the permanent installer.")
+        return
+    subprocess.run([p, "restore"], check=False)
+
+def protocol_status():
+    p = "/usr/local/bin/warp-protocol"
+    if not Path(p).is_file():
+        print("Missing warp-protocol. Re-run the permanent installer.")
+        return
+    subprocess.run([p, "status"], check=False)
+
 def diagnose():
     print("== Memory ==")
     run(["free", "-h"])
@@ -350,6 +378,9 @@ def main():
 11) Verify live Xray routing and domain rules
 12) Toggle IPv4-only destinations through WARP
 13) Toggle domain Sniffing for Trojan 2053
+14) Test WARP over WireGuard instead of MASQUE
+15) Restore previous WARP tunnel protocol
+16) Compare current WARP tunnel protocol and exit IP
  0) Exit
 =====================================""")
         choice = input("Choose: ").strip()
@@ -359,6 +390,7 @@ def main():
                 "5": status, "6": rotate, "7": tests, "8": install_integration,
                 "9": apply, "10": diagnose, "11": live,
                 "12": toggle_ipv4, "13": toggle_sniff_2053,
+                "14": protocol_wireguard, "15": protocol_restore, "16": protocol_status,
             }
             if choice == "0":
                 return
