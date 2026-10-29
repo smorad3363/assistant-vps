@@ -190,3 +190,27 @@ This project offers a controlled **A/B test limited to the Trojan inbound on por
 The more narrowly targeted original Gemini routing rules remain for the other inbounds. Menu option 11 verifies the live 2053 rule after the master reconnects and starts Xray. **To roll back**, toggle option 17 OFF and apply with option 9. The feature is disabled by default on fresh installs, since redirecting Google search and login traffic for a whole inbound can impact other users.
 
 A matching route does not mean a verified authenticated Gemini chat; the user must try actually sending a chat message. If Google still complains about unusual traffic, **do not keep rotating or stacking WARP IPs**: investigate automated requests from clients, complete any available CAPTCHA, allow rate-limits to expire and consider a clean dedicated egress with appropriate provider policy. See Google's guidance at https://support.google.com/websearch/answer/86640
+
+## Gemini network health monitor (October 2026)
+
+The permanent installer now also installs a **read-only** server-side health monitor. It does not restart WARP, rotate identities, change Gemini routing, recreate the Marzban Node, or edit the firewall.
+
+The `warp-gemini-health.timer` runs about every 20 minutes. It compares the server's direct IPv4, the official WARP SOCKS5 port 40000, and the isolated WGCF/WireProxy SOCKS5 port 40001. It records IPv4 exit IP, Cloudflare country, `warp=on`, public Gemini HTTP status, a Google `/sorry/` redirect, explicit HTTP 403/429 and visible country/unusual-traffic phrases when present.
+
+Run:
+
+```bash
+sudo warp-menu
+# Option 18: check health now
+# Option 19: view last health check
+
+sudo warp-health check
+sudo warp-health report
+systemctl status warp-gemini-health.timer
+```
+
+Logs and state are limited to `/var/lib/warp-gemini/health.json`, `history.jsonl` (event/change-only, capped and rotated), and an optional `history.previous.jsonl`. No credentials, account data, or Gemini chat contents are captured.
+
+**Critical distinction:** Anonymous `gemini.google.com/app` page availability does not prove that Gemini is available to a signed-in user; Google's country/account checks can fail after HTTP 200. Only a real signed-in chat test validates the user's experience. Do not run aggressive automatic WARP IP rotation based on these probes: the two available transports on the tested node both exit at the same Cloudflare IPv4 and indiscriminate switching can disrupt VPN clients or change their Google session IP.
+
+On the tested node, the separate **Google full-route A/B test** is already enabled **only for Trojan port 2053**; port 2096 retains the narrower domain rules. Compare the two VPN profiles during actual signed-in Gemini testing. This A/B rule can be managed with menu option 17 (requires option 9 to apply; that briefly interrupts clients).
