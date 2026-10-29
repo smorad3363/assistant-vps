@@ -213,8 +213,8 @@ def toggle_sniff_2053():
 def rotate():
     print("\nWARP IP is assigned by Cloudflare. Reconnect cannot guarantee a new IP/country.")
     try:
-        before = trace(True)
-        print("Before:", before)
+        before = trace(True, ipv4=True)
+        print("IPv4 Before:", before)
     except Exception as e:
         print("Before: unavailable:", e)
     ans = input("Disconnect and reconnect only WARP? (yes/no): ").strip().lower()
@@ -224,9 +224,9 @@ def rotate():
     run(["warp-cli", "--accept-tos", "connect"], timeout=20)
     for i in range(15):
         try:
-            after = trace(True)
+            after = trace(True, ipv4=True)
             if after.get("warp") in ("on", "plus"):
-                print("After:", after)
+                print("IPv4 After:", after)
                 return
         except Exception:
             pass
@@ -240,15 +240,19 @@ def tests():
         ("Gemini API reachability (404 may be normal)", "https://generativelanguage.googleapis.com/"),
     ]:
         print("\n", name, url)
-        for proxy in (False, True):
+        for label in ("DIRECT IPv4", "WARP default", "WARP IPv4"):
             cmd = ["curl", "-sSL", "-o", "/dev/null", "-w", "%{http_code} / %{time_total}s",
                    "--connect-timeout", "5", "--max-time", "18"]
-            if proxy:
+            if label == "WARP default":
                 cmd += ["--socks5-hostname", "127.0.0.1:40000"]
+            elif label == "WARP IPv4":
+                cmd += ["-4", "--socks5", "127.0.0.1:40000"]
+            else:
+                cmd += ["-4"]
             try:
-                print("WARP:  " if proxy else "DIRECT:", run(cmd + [url], timeout=22, capture=True).strip())
+                print(label + ":", run(cmd + [url], timeout=22, capture=True).strip())
             except Exception as exc:
-                print("ERROR:", exc)
+                print(label, "ERROR:", exc)
     print("\nHTTP success does not prove authenticated Gemini chats will work.")
 
 def install_integration():
