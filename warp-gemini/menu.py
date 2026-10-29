@@ -15,7 +15,7 @@ CONFIG = Path("/var/lib/master/warp-gemini.json")
 COMPOSE = Path("/opt/master/docker-compose.yml")
 OVERRIDE = Path("/opt/master/docker-compose.override.yml")
 WRAPPER = HERE / "xray-wrapper.py"
-RAW_WRAPPER = "https://raw.githubusercontent.com/smorad3363/assistant-vps/master/warp-gemini/xray-wrapper.py"
+RAW_WRAPPER = "https://github.com/smorad3363/assistant-vps/raw/refs/heads/master/warp-gemini/xray-wrapper.py"
 DEFAULTS = [
     "domain:gemini.google.com",
     "domain:aistudio.google.com",
@@ -36,7 +36,7 @@ def init():
         if isinstance(data.get("domains"), list) and isinstance(data.get("port"), int):
             return data
         raise RuntimeError("Invalid config file; refusing overwrite: " + str(CONFIG))
-    data = {"enabled": True, "port": 40000, "domains": DEFAULTS}
+    data = {"enabled": True, "port": 40000, "ipv4_only": True, "sniff_2053": False, "domains": DEFAULTS}
     save(data, initial=True)
     return data
 
@@ -63,11 +63,14 @@ def domain(value):
         raise ValueError("Invalid hostname label")
     return v
 
-def trace(proxy=False):
+def trace(proxy=False, ipv4=False):
     args = ["curl", "-fsS", "--connect-timeout", "5", "--max-time", "15"]
     if proxy:
-        args += ["--socks5-hostname", "127.0.0.1:40000"]
-    if not proxy:
+        if ipv4:
+            args += ["-4", "--socks5", "127.0.0.1:40000"]
+        else:
+            args += ["--socks5-hostname", "127.0.0.1:40000"]
+    else:
         args.append("-4")
     args += [TRACE]
     r = run(args, timeout=19, capture=True)
@@ -76,9 +79,9 @@ def trace(proxy=False):
 def status():
     print("\n== WARP ==")
     print(run(["warp-cli", "--accept-tos", "status"], capture=True).strip())
-    for label, use_proxy in [("DIRECT", False), ("WARP SOCKS5", True)]:
+    for label, use_proxy, ipv4 in [("DIRECT IPv4", False, True), ("WARP default", True, False), ("WARP IPv4", True, True)]:
         try:
-            values = trace(use_proxy)
+            values = trace(use_proxy, ipv4)
             print(f"{label}: IP={values.get('ip','?')} Location={values.get('loc','?')} Colo={values.get('colo','?')} warp={values.get('warp','?')}")
         except Exception as e:
             print(f"{label}: FAILED ({e})")
@@ -87,6 +90,8 @@ def status():
     print("Compose override:", "present" if OVERRIDE.is_file() else "not installed")
     print("Routing enabled:", init()["enabled"])
     print("Saved domains:", len(init()["domains"]))
+    print("IPv4-only Gemini routing:", init().get("ipv4_only", True))
+    print("Sniffing on Trojan 2053:", init().get("sniff_2053", False))
     if COMPOSE.exists():
         print("Node:", run(["docker", "ps", "--filter", "name=^/master$", "--format", "{{.Status}}"], capture=True).strip() or "not running")
     live()
@@ -117,6 +122,11 @@ def live():
                 print("\n== LIVE XRAY ROUTING ==")
                 print("Xray PID:", folder.name)
                 print("WARP outbound:", "active" if outbound else "disabled")
+                print("Live IPv4-only via Freedom:", bool(outbound and outbound.get("protocol") == "freedom" and outbound.get("settings", {}).get("domainStrategy") == "ForceIPv4"))
+                inbound2053 = next((x for x in cfg.get("inbounds", []) if "2053" in str(x.get("port","")).split(",")), None)
+                print("Live Sniffing 2053:", bool(inbound2053 and inbound2053.get("sniffing", {}).get("enabled")))
+                if outbound and settings.get("ipv4_only", True) != (outbound.get("protocol") == "freedom"):
+                    print("NOTE: Saved IPv4 preference not yet applied. Use option 9.")
                 print("Current live domain rules:")
                 for x in active:
                     print("  -", x)
@@ -133,6 +143,8 @@ def live():
 def show():
     d = init()
     print(f"\nEnabled: {d['enabled']} | SOCKS port: {d['port']} | domains: {len(d['domains'])}")
+    print("IPv4-only WARP destinations:", d.get("ipv4_only", True))
+    print("Sniffing on Trojan 2053:", d.get("sniff_2053", False))
     print("Applied only after node recreation/restart; edits on disk do NOT change running Xray.")
     for i, item in enumerate(d["domains"], 1):
         print(f" {i:2}. {item}")
@@ -183,6 +195,20 @@ def enabled():
     save(d)
     print("Overlay routing enabled:", d["enabled"])
     print("Apply routing to activate.")
+
+def toggle_ipv4():
+    d = init()
+    d["ipv4_only"] = not d.get("ipv4_only", True)
+    save(d)
+    print("IPv4-only destinations:", d["ipv4_only"])
+    print("Saved. Apply routing (option 9) to activate.")
+
+def toggle_sniff_2053():
+    d = init()
+    d["sniff_2053"] = not d.get("sniff_2053", False)
+    save(d)
+    print("Trojan 2053 Sniffing:", d["sniff_2053"])
+    print("Saved. Apply routing (option 9) to activate.")
 
 def rotate():
     print("\nWARP IP is assigned by Cloudflare. Reconnect cannot guarantee a new IP/country.")
@@ -318,6 +344,8 @@ def main():
  9) Apply routing changes (brief node interruption)
 10) Diagnostics
 11) Verify live Xray routing and domain rules
+12) Toggle IPv4-only destinations through WARP
+13) Toggle domain Sniffing for Trojan 2053
  0) Exit
 =====================================""")
         choice = input("Choose: ").strip()
@@ -326,6 +354,7 @@ def main():
                 "1": show, "2": add, "3": remove, "4": enabled,
                 "5": status, "6": rotate, "7": tests, "8": install_integration,
                 "9": apply, "10": diagnose, "11": live,
+                "12": toggle_ipv4, "13": toggle_sniff_2053,
             }
             if choice == "0":
                 return
