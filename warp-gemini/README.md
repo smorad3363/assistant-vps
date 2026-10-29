@@ -175,3 +175,18 @@ WGCF setup is also available via the permanent GitHub file: `sudo wgcf-wireproxy
 **Important limitation:** On the tested node both independent methods returned the same Cloudflare IPv4 exit, `104.28.193.116`. A different WireGuard transport does not guarantee a different exit IP, an allowed country or Gemini account eligibility. Only a genuine authenticated chat confirms that Gemini works.
 
 Rollback to official MASQUE is available via menu option 15 (select 40000), then apply with option 9. Never use the old global WGCF route-changing installer on the production Marzban/GRE node.
+
+## Optional single-egress Google session test on Trojan 2053
+
+If Gemini displays Google's unusual-traffic page, the existing five Gemini-specific domain rules may route `gemini.google.com` via WARP while related `accounts.google.com` and `www.google.com` use the direct server IP. This is a **possible** source of inconsistent sessions, not proven to be the cause of Google's rate limit.
+
+This project offers a controlled **A/B test limited to the Trojan inbound on port 2053**, leaving port 2096 and other inbounds on their existing routes. Menu **option 17** toggles the experiment; **option 9** applies it and temporarily disconnects all Marzban Node clients while the container is recreated. The tested domain groups on only 2053 are:
+
+- `domain:google.com`
+- `domain:googleapis.com`
+- `domain:googleusercontent.com`
+- `domain:gstatic.com`
+
+The more narrowly targeted original Gemini routing rules remain for the other inbounds. Menu option 11 verifies the live 2053 rule after the master reconnects and starts Xray. **To roll back**, toggle option 17 OFF and apply with option 9. The feature is disabled by default on fresh installs, since redirecting Google search and login traffic for a whole inbound can impact other users.
+
+A matching route does not mean a verified authenticated Gemini chat; the user must try actually sending a chat message. If Google still complains about unusual traffic, **do not keep rotating or stacking WARP IPs**: investigate automated requests from clients, complete any available CAPTCHA, allow rate-limits to expire and consider a clean dedicated egress with appropriate provider policy. See Google's guidance at https://support.google.com/websearch/answer/86640
