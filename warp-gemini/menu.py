@@ -125,7 +125,7 @@ def live():
                 print("\n== LIVE XRAY ROUTING ==")
                 print("Xray PID:", folder.name)
                 print("WARP outbound:", "active" if outbound else "disabled")
-                sock = next((x for x in cfg.get("outbounds", []) if x.get("tag") in ("warp-gemini-socks", "warp-gemini")), None)
+                sock = next((x for x in cfg.get("outbounds", []) if x.get("tag") == "warp-gemini-socks" or (x.get("tag") == "warp-gemini" and x.get("protocol") == "socks")), None)
                 servers = sock.get("settings", {}).get("servers", []) if sock else []
                 live_port = servers[0].get("port") if servers else None
                 print("Live WARP SOCKS5 port:", live_port)
