@@ -403,7 +403,7 @@ def health_report():
         print("Health monitor not installed. Re-run the permanent installer.")
         return
     subprocess.run([p, "report"], check=False)
-    print("\\nHealth timer:", run(["systemctl", "is-active", "warp-gemini-health.timer"], capture=True).strip())
+    print("\nHealth timer:", run(["systemctl", "is-active", "warp-gemini-health.timer"], capture=True).strip())
     print("Read-only monitoring: does not rotate WARP IP or change Xray.")
 
 def diagnose():
