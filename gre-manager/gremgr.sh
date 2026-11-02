@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 BASE_DIR="/etc/gremgr"
 TUN_DIR="$BASE_DIR/tunnels"
 FWD_DIR="$BASE_DIR/forwards"
@@ -582,6 +582,7 @@ main_menu() {
     echo "3) Tunnels"
     echo "4) Port Forward"
     echo "5) Status / Logs"
+    echo "6) Iran / Foreign setup wizard"
     echo "0) Exit"
     read -r -p "Select: " c
     case "$c" in
@@ -590,12 +591,14 @@ main_menu() {
       3) manage_tunnels ;;
       4) port_forward_menu ;;
       5) status_logs ;;
+      6) /usr/local/sbin/gremgr-pair wizard ;;
       0) exit 0 ;;
     esac
   done
 }
 
 case "${1:-}" in
+  --wizard) exec /usr/local/sbin/gremgr-pair wizard ;;
   --restore) restore_all ;;
   --install) install_service ;;
   --version) echo "$VERSION" ;;

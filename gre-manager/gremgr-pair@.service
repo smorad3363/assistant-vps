@@ -1,0 +1,16 @@
+[Unit]
+Description=GRE pair %i with role-aware TCP/UDP forwarding
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gremgr-pair up %i
+ExecStop=/usr/local/sbin/gremgr-pair down %i
+ExecStopPost=/usr/local/sbin/gremgr-pair down %i
+RemainAfterExit=yes
+TimeoutStartSec=90
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

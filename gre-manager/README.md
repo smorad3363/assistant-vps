@@ -1,29 +1,96 @@
-# GRE Manager
+# GRE Manager 0.2.0
 
-Minimal interactive GRE tunnel manager for Linux.
+Role-aware interactive GRE setup for Linux with IPv4, root access and systemd.
 
-## Install / Update
+## Permanent installation / update command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre.sh | sudo bash
+```
+
+The original permanent entry point continues to work unchanged:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-manager/install.sh | sudo bash
 ```
 
-Then run:
+Run on **both** servers. The wizard reads `/dev/tty`, so prompts work when the
+installer is piped to Bash. Application downloads are pinned to one commit and
+verified against SHA256 values embedded in the installer. Updates preserve all
+existing configuration, pair profiles, backups and traffic-history files.
+The installer does not restart active tunnels merely to update application files.
+
+## Questions
+
+1. Role: `1` Iran, `2` Foreign.
+2. Local GRE IPv4, detected by default. On a server with several IPs this may be
+   different from the service IP.
+3. Other server's **GRE endpoint** IPv4. Enter complementary endpoint addresses
+   on the two servers; the wizard prints exactly what to enter on the other side.
+4. Iran listen IP, or Foreign local service/destination IP.
+5. **Iran only:** `all` or comma-separated ports, optionally `input:output`.
+
+Examples:
+
+- `all`: all TCP and UDP ports, unchanged, **except Iran input port 22**.
+- `80,443,2096`: the same three TCP and UDP ports on the foreign service.
+- `443,8080:80,2053:2096`: preserve 443, forward Iran 8080 to Foreign 80, and
+  forward Iran 2053 to Foreign 2096.
+
+Foreign never forwards its public input back to Iran. It accepts traffic arriving
+inside this pair's GRE interface and delivers it to the selected local service IP.
+Mappings happen once, on Iran. There is no duplicated mapping list to synchronize.
+Input 22 cannot be included in a specific-port list and stays on the Iran server;
+an explicit mapping such as `2222:22` intentionally targets Foreign SSH.
+Services must already listen on the Foreign service IP or on all addresses.
+GRE requires protocol 47 connectivity; this tool cannot bypass an upstream GRE block.
+Directly assigned local IPv4 endpoints are supported; upstream NAT is not inferred.
+
+### Current Iran / Finland pair
+
+The earlier `/etc/gre-ir-fi.conf` deployment is recognized, with its saved GRE
+endpoints and service IP as defaults. Matching setup migrates that pair only after
+all answers validate, retains the old files, and rolls back the old service if
+local activation fails. Run the wizard on **both ends** to complete migration;
+expect a brief interruption while the second end is configured.
+For this deployment GRE uses `94.184.22.49` and `65.109.240.226`, while the Foreign
+service IP remains `2.29.39.22`. The migration does not change that service IP.
+Unrelated existing port forwards cause an explicit conflict instead of being
+silently overwritten. Multiple saved pairs work when their Iran input ports do
+not overlap; `all` consumes that Iran listen IP's complete non-SSH port space.
+
+## Management
 
 ```bash
-gremgr
+sudo gremgr --wizard
+sudo gremgr-pair list
+sudo gremgr-pair status PAIR_ID
+sudo systemctl restart gremgr-pair@PAIR_ID.service
+sudo systemctl disable --now gremgr-pair@PAIR_ID.service
 ```
 
-## Menu
+Saved profiles live in `/etc/gremgr/pairs/`; edit backups live in its `backups/`
+subdirectory. Program-install backups live in `/etc/gremgr/backups/`.
+Each pair has its own boot-enabled systemd service, keyed GRE interface,
+private /30, scoped firewall rules, Iran SNAT and TCP MSS adjustment.
+Repeated activation is idempotent. Stop removes only the exact rules of that pair.
+A failed configuration edit restores the previous profile and active service.
+No blanket firewall flush, default-route replacement, IPv6 change or VPN service
+restart is performed. Existing tracked sessions can retain their old mapping until
+reconnection; the tool does not flush unrelated conntrack state.
 
-- Test GRE: creates a temporary GRE tunnel, waits for the peer, tests ping/MTU, and always cleans up on exit/Ctrl+C.
-- Add Tunnel: auto-detects WAN interface/IP, creates a persistent GRE tunnel, and enables restore after reboot.
-- Tunnels: status, manual restart, edit, enable/disable, delete.
-- Port Forward: TCP/UDP forwarding to the peer tunnel IP.
-- Status / Logs: tunnel state, current-boot systemd restore log, and manager log.
+`gremgr` retains the original tunnel/forward menus and adds option 6 for this wizard.
+Legacy menu-created tunnels are kept separate from the new pair profiles.
 
-## Notes
+## Validation
 
-Run the same tool on both servers. For a new tunnel, enter the other server's public IP on each side.
+```bash
+python3 -m unittest discover -s gre-manager -p test_pair.py -v
+sudo unshare --mount --net --fork bash gre-manager/test-netns.sh
+```
 
-The script does not require entering the local public IP or interface; it detects them automatically. Multiple tunnels are supported.
+The network lab refuses the host network namespace. Its private mount/network
+namespaces contain three hosts with DROP policies and real keyed GRE. It checks
+TCP and UDP mappings, all-port mode, port 65535, a destination bound to a separate
+service IP, local SSH, repeated restore and exact-rule cleanup with an unrelated
+baseline rule retained. Completed successfully on Ubuntu 24.04, 2026-11-02.
