@@ -1,4 +1,4 @@
-# oort Manager V2 — Tunnel Edition (`2.1.0-rc.8`)
+# oort Manager V2 — Tunnel Edition (`2.1.0-rc.9`)
 
 oort Manager V2 has its own binary (`portmanager2`), configuration, firewall
 chains, SQLite accounting database and optional services. It does not alter
@@ -330,8 +330,9 @@ restores the terminal and removes only its own ephemeral counter rules.
 - **No more false “0 traffic” assumption:** autodetect TCP/UDP IPv4 local sockets
   with bounded, owned, temporary mangle counters when V2/V1 lack per-port
   accounting; always show real aggregate interface traffic separately.
-- 10m / 1h / 8h / 24h time-weighted per-port averages, sorted from highest
-  observed 10-minute utilization. History is retained for up to 24 hours **of
+- 10m / 1h / 8h / 24h time-weighted per-port averages. Live rows are sorted by
+  current download + upload rate, highest first, on every refresh; historical
+  averages break ties only. History is retained for up to 24 hours **of
   actual collected samples**, not fabricated while viewer is closed.
 - Select a displayed port after Ctrl+C to apply/edit/remove an always-on or
   hourly timed limit; choose ALL for a **single aggregate IPv4 limit** over

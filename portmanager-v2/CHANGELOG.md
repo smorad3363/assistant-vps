@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.0-rc.9 — 2026-11-02
+### Fixed
+- Sort live ports by current combined download and upload rate, descending, before the top-row limit and pagination. Historical averages break ties only.
+- Label the live table's descending combined-rate order; keep daily byte-volume reports unchanged.
+
 ## 2.1.0-rc.8 — 2026-11-02
 ### Fixed
 - Discover active IPv4 DNAT ports through conntrack when all-port GRE forwarding has no local listening sockets or explicit destination-port list.

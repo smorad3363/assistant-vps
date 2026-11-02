@@ -296,9 +296,13 @@ def frame(labels, rates, histories, timestamp, top=20, active_only=True,
             "avg1m_down_mbps": minute["down_mbps"],
             "coverage_1m_seconds": minute["coverage_seconds"],
         })
-    result.sort(key=lambda x: (-((x["avg10m_up_mbps"] or 0) +
-                                      (x["avg10m_down_mbps"] or 0)),
-                               -(x["now_up_mbps"] + x["now_down_mbps"]), x["listen_port"] or 0))
+    # Rank the displayed live rates first, before applying the top/page cap.
+    # Historical averages only break ties, so a previously busy idle port
+    # cannot stay above a currently busy port.
+    result.sort(key=lambda x: (-(x["now_up_mbps"] + x["now_down_mbps"]),
+                               -((x["avg10m_up_mbps"] or 0) +
+                                 (x["avg10m_down_mbps"] or 0)),
+                               x["listen_port"] or 0, x["protocol"], x["tunnel_id"]))
     return {"timestamp_utc": timestamp, "window_seconds": WINDOW,
             "rows": result[:top], "active_rows": len(result),
             "refresh_is_read_only": True,

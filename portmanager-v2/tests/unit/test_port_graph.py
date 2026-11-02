@@ -15,6 +15,24 @@ TID = "aaaacccc-1111-4444-8888-0123456789ab"
 
 
 class PortGraphTests(unittest.TestCase):
+    def test_live_combined_rate_wins_over_old_average_before_top_limit(self):
+        labels = {(TID, "tcp", p): str(p) for p in (443, 8086, 2053)}
+        histories = {
+            (TID, "tcp", 443): [(100, 60, 500.0, 500.0)],
+            (TID, "tcp", 8086): [(100, 60, 1.0, 1.0)],
+            (TID, "tcp", 2053): [(100, 60, 10.0, 10.0)],
+        }
+        rates = {(TID, "tcp", 443): {"up": 0, "down": 0},
+                 (TID, "tcp", 8086): {"up": 60, "down": 70},
+                 (TID, "tcp", 2053): {"up": 0, "down": 120}}
+        first = port_graph.frame(labels, rates, histories, 100, top=2,
+                                 active_only=False)
+        self.assertEqual([r["listen_port"] for r in first["rows"]], [8086, 2053])
+        rates[(TID, "tcp", 2053)] = {"up": 200, "down": 0}
+        second = port_graph.frame(labels, rates, histories, 100, top=2,
+                                  active_only=False)
+        self.assertEqual([r["listen_port"] for r in second["rows"]], [2053, 8086])
+
     def test_single_snapshot_decodes_distinct_original_ports(self):
         raw = """
 * mangle

@@ -385,7 +385,7 @@ class LiveScreen:
         self.offset = page * self.page_size
         visible = rows[self.offset:self.offset + self.page_size]
 
-        self._write(10, 1, "╭─ PORTS " + "─" * max(0, width - 11) + "╮", 1)
+        self._write(10, 1, "╭─ PORTS · ↓+↑ DESC " + "─" * max(0, width - 22) + "╮", 1)
         self._write(10, max(28, width - 28),
                     f"{len(rows)} ports  ·  page {page + 1}/{pages}", 3)
 
