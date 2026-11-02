@@ -237,7 +237,7 @@ def saved_auto_labels(db, timestamp):
              "WHERE tunnel_id=? AND sample_end >= ? UNION "
              "SELECT DISTINCT protocol,listen_port FROM port_live_minutes "
              "WHERE tunnel_id=? AND bucket_end >= ?")
-    return {("auto", proto, port): "Local service (history)"
+    return {("auto", proto, port): "Service / forwarded (history)"
             for proto, port in db.execute(query, ("auto", cutoff, "auto", cutoff))}
 
 
@@ -356,7 +356,7 @@ def render(data, requested, effective, rules):
     if not data["rows"]:
         count = data.get("auto_discovered_ports", 0)
         if count:
-            print(c("93", f"  Detected {count} local TCP/UDP ports; "
+            print(c("93", f"  Detected {count} service/forwarded TCP/UDP ports; "
                          "waiting for attributed IPv4 traffic..."))
         else:
             print(c("93", "  No per-port counters. Interface traffic above is still real."))
@@ -442,7 +442,7 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                 monitored_ports = (history_ports if history_active else
                                    session.ports if use_auto else [])
                 if use_auto:
-                    labels.update({("auto", proto, port): "Local service"
+                    labels.update({("auto", proto, port): "Service / forwarded"
                                    for proto, port in monitored_ports})
                     if monitored_ports or history_active:
                         t0 = time.monotonic()
@@ -587,7 +587,7 @@ def watch(refresh=5, tunnel=None, top=20, active_only=True,
                             try:
                                 history_ports = history_collector.active_ports()
                                 monitored_ports = history_ports
-                                labels.update({("auto", proto, port): "Local service"
+                                labels.update({("auto", proto, port): "Service / forwarded"
                                                for proto, port in history_ports})
                             except PM2Error:
                                 pass

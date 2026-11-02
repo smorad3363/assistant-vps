@@ -210,6 +210,9 @@ def _select_ports(existing_monitored=()):
             if (rule.get("target") not in ("DNAT", "REDIRECT") or
                     proto not in ("tcp", "udp")):
                 continue
+            if _negated_port(rule):
+                # '! --dport 22' means every OTHER port, not port 22.
+                continue
             # iptables multiport uses comma-separated --dports. Each port
             # needs its own ORIGINAL-destination mangle counter; a NAT table
             # counter records only initial connection packets, not data volume.
@@ -233,9 +236,42 @@ def _select_ports(existing_monitored=()):
     except PM2Error:
         all_listeners = set(local)
     candidates = list(dict.fromkeys(forwarded + local))
-    existing_alive = set(forwarded) | all_listeners
+    existing_alive = set(forwarded) | all_listeners | set(local)
+    if not error:
+        # An idle forwarded service has no listener on this host. Keep its
+        # counters while its NAT selector still covers it, avoiding resets
+        # of all persistent counters whenever its last connection closes.
+        existing_alive.update(p for p in existing_monitored
+                              if any(_forwards_port(r, *p) for r in rules))
     preferred = [p for p in sorted(existing_monitored) if p in existing_alive]
     return set((preferred + [p for p in candidates if p not in preferred])[:MAX_PORTS])
+
+
+def _negated_port(rule):
+    args = rule.get("argv", [])
+    return any(i and args[i - 1] == "!" for i, arg in enumerate(args)
+               if arg in ("--dport", "--dports", "--destination-port",
+                          "--destination-ports"))
+
+
+def _forwards_port(rule, proto, port):
+    if (rule.get("target") not in ("DNAT", "REDIRECT") or
+            rule.get("protocol") not in (proto, "any", "all")):
+        return False
+    spec = str(rule.get("port", "ALL"))
+    if spec == "ALL":
+        return True
+    intervals = []
+    try:
+        for part in spec.split(","):
+            ends = [int(x) for x in part.split(":")]
+            if len(ends) not in (1, 2) or not 1 <= ends[0] <= ends[-1] <= 65535:
+                return False
+            intervals.append((ends[0], ends[-1]))
+    except ValueError:
+        return False
+    matched = any(lo <= port <= hi for lo, hi in intervals)
+    return not matched if _negated_port(rule) else matched
 
 
 def collect(timestamp=None):

@@ -1,4 +1,4 @@
-# oort Manager V2 — Tunnel Edition (`2.1.0-rc.5`)
+# oort Manager V2 — Tunnel Edition (`2.1.0-rc.8`)
 
 oort Manager V2 has its own binary (`portmanager2`), configuration, firewall
 chains, SQLite accounting database and optional services. It does not alter
@@ -20,6 +20,19 @@ curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/por
 
 `sudo bash v1` is not valid for piped script arguments. Use `-s -- v1`.
 See [version router guide](docs/RELEASE-ROUTER.fa.md).
+
+### Monitoring existing GRE and all-port forwarding
+
+Active IPv4 forwarded ports are discovered from `conntrack -L --dst-nat`,
+including all-ports-except-SSH rules and services listening only on the remote
+GRE endpoint. Install the optional `conntrack` package for this discovery;
+local listener monitoring continues to work without it. Discovery runs once
+per background sample (normally one minute), with at most 64 persistent port
+counters. A live-only viewer is bounded to 24 ports. Byte totals come from
+counter-only mangle rules, not NAT connection counters. Original incoming
+ports are retained across port remapping. Existing NAT/GRE rules are untouched.
+Idle discovered ports remain monitored while their NAT selector covers them.
+Earlier unobserved traffic cannot be reconstructed after an update.
 
 ### Keyboard input compatibility
 

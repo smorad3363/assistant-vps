@@ -1,8 +1,8 @@
-"""Temporary, exact-owner, IPv4 per-socket-port accounting for V1-style viewer.
+"""Temporary, exact-owner, IPv4 per-port accounting for V1-style viewer.
 
 No DNAT, ACCEPT, DROP, tc or system service. Counter-only rules in two
 exclusively named mangle chains, with exact matching owner hooks. Select at
-most 24 listening ports, prioritizing established connections. All changes
+most 24 listener/forwarded ports, prioritizing established connections. All changes
 are removed on exit; a subsequent viewer can validate and reclaim stale
 rules after a hard kill. Never flush global tables or touch V1 chains.
 """
@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 from .discovery import run
@@ -91,8 +92,35 @@ def parse_established(text):
     return counts
 
 
+def parse_forwarded(text):
+    """Rank ORIGINAL ports from IPv4 DNAT conntrack tuples, not reply ports.
+
+    All-port GRE forwarding has no local listening socket or explicit port
+    list. Conntrack discovers its active ports; byte totals still come only
+    from our counter-only mangle rules, never NAT connection counters.
+    """
+    counts = Counter()
+    for line in text.splitlines():
+        fields = line.split()
+        if not fields or fields[0] not in ("tcp", "udp"):
+            continue
+        values = {}
+        for field in fields:
+            if "=" in field:
+                key, value = field.split("=", 1)
+                values.setdefault(key, []).append(value)
+        try:
+            dst, source = values["dst"][0], values["src"][1]
+            port, reply_port = int(values["dport"][0]), int(values["sport"][1])
+        except (KeyError, IndexError, ValueError):
+            continue
+        if 1 <= port <= 65535 and (dst != source or port != reply_port):
+            counts[(fields[0], port)] += 1
+    return counts
+
+
 def discover(existing=(), limit=MAX_PORTS):
-    """Return up to the requested bounded number of IPv4 listener ports."""
+    """Return bounded IPv4 listener and active forwarded ORIGINAL ports."""
     if type(limit) is not int or not 1 <= limit <= 128:
         raise PM2Error("E_VALIDATION", "Listener discovery limit must be 1..128")
     existing = set(existing)
@@ -101,8 +129,13 @@ def discover(existing=(), limit=MAX_PORTS):
         busy = parse_established(run(["ss", "-H", "-tn", "state", "established"], timeout=12))
     except PM2Error:
         busy = {}
-    ports = [key for key in listeners if key not in existing]
-    ports.sort(key=lambda p: (-busy.get(p[1], 0), p[1], p[0]))
+    try:
+        forwarded = parse_forwarded(run(
+            ["conntrack", "-L", "-f", "ipv4", "--dst-nat"], timeout=12))
+    except PM2Error:
+        forwarded = {}  # Optional tool; local listeners still work.
+    ports = [key for key in listeners | set(forwarded) if key not in existing]
+    ports.sort(key=lambda p: (-(busy.get(p[1], 0) + forwarded.get(p, 0)), p[1], p[0]))
     return ports[:limit]
 
 

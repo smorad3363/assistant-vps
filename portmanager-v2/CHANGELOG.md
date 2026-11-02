@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0-rc.8 — 2026-11-02
+### Fixed
+- Discover active IPv4 DNAT ports through conntrack when all-port GRE forwarding has no local listening sockets or explicit destination-port list.
+- Attribute remapped connections to their original incoming port, including UDP, and exclude outbound-only SNAT connections.
+- Keep idle forwarded port counters while their NAT selector remains installed; do not mistake negated excluded ports for forwarded ports.
+- Preserve existing forwarding rules and historical measurements; newly discovered traffic is counted only after monitoring starts.
+
 ## 2.1.0-rc.7 — 2026-10-22
 ### Fixed
 - Allow upgrades when an exact owner-verified oneshot restore service has previously failed, without changing NAT rules, resetting systemd failure state, or claiming restore health.
