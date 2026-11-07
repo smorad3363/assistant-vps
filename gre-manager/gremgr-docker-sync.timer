@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep GRE-to-Docker WireGuard UDP mapping valid after Docker changes
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=gremgr-docker-sync.service
+
+[Install]
+WantedBy=timers.target
