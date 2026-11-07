@@ -3,7 +3,7 @@ set -Eeuo pipefail
 [[ ${EUID:-$(id -u)} == 0 ]] || { echo 'Run with sudo/root.' >&2; exit 1; }
 
 # Keep configuration and histories outside application files.
-SOURCE_REV="cace6de2e417246540e4b209753f7ade06994d65"
+SOURCE_REV="f5636bc0468319131b540ec75e22f94a7e72d825"
 RAW="https://raw.githubusercontent.com/smorad3363/assistant-vps/$SOURCE_REV/gre-manager"
 for command_name in ip iptables ping python3 sha256sum curl systemctl modprobe sysctl flock; do
   if ! command -v "$command_name" >/dev/null; then
@@ -26,22 +26,24 @@ exec 9>/run/lock/gremgr-install.lock
 flock -x 9
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-for file in gremgr.sh pair.py gremgr-pair@.service; do
+for file in gremgr.sh pair.py gremgr-pair@.service gremgr-docker-sync.service gremgr-docker-sync.timer; do
   curl -fsSL --retry 2 --connect-timeout 10 --max-time 90 "$RAW/$file" -o "$work/$file"
 done
 (cd "$work" && sha256sum -c <<'SUMS'
 c9700fbec098f13cdc0a94e280ea7c1985603fcb1775722493b6200df7cf7d2a  gremgr.sh
-fc293d89fd3b1257f3d98144b97b1e8e1bcc56939016454852070788b69f2ca5  pair.py
+af10871f32e50c65b3e5873295e08bd46ec9cc1895392d57222512391425b295  pair.py
 e443deb74e913d519bfb0cc430cf5149eb60984b2f136e792e85d73234b0388b  gremgr-pair@.service
+f8f5c2ee1df2acc9cf7b203e2d90f7e72aafb9d919a2b3060623f3de1383b32c  gremgr-docker-sync.service
+9e2540abaa0d77aa6db77a0e2085149f90be7e0c97298dfc7ca5e50622f4cdd4  gremgr-docker-sync.timer
 SUMS
 )
 bash -n "$work/gremgr.sh"
 python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$work/pair.py"
 backup="/etc/gremgr/backups/install-$(date +%Y%m%d-%H%M%S)-$$"
 install -d -m 700 "$backup"
-targets=(/usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-pair@.service)
-files=(gremgr.sh pair.py gremgr-pair@.service)
-modes=(755 755 644)
+targets=(/usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-pair@.service /etc/systemd/system/gremgr-docker-sync.service /etc/systemd/system/gremgr-docker-sync.timer)
+files=(gremgr.sh pair.py gremgr-pair@.service gremgr-docker-sync.service gremgr-docker-sync.timer)
+modes=(755 755 644 644 644)
 for i in "${!targets[@]}"; do
   [[ ! -e ${targets[$i]} ]] || cp -a "${targets[$i]}" "$backup/${files[$i]}"
 done
@@ -63,6 +65,8 @@ for i in "${!targets[@]}"; do
   mv -f "${targets[$i]}.new" "${targets[$i]}"
 done
 systemctl daemon-reload
+systemctl enable --now gremgr-docker-sync.timer
+/usr/local/sbin/gremgr-pair docker-sync-all
 trap - ERR
 flock -u 9
 exec 9>&-
