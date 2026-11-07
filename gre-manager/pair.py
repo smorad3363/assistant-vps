@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 ROOT = Path(os.environ.get("GRE_PAIR_CONFIG_DIR", "/etc/gremgr/pairs"))
 BIN = "/usr/local/sbin/gremgr-pair"
 
@@ -229,7 +229,7 @@ def ask(label, default=""):
 
 def status(c):
     print(f"{c['id']} {c['role']} | {c['outer_local']} -> {c['outer_peer']} | service {c['service_ip']}")
-    print("TCP+UDP ports:", c["ports"], "| Iran input port 22 always stays local.")
+    print("TCP+UDP ports:", c["ports"], "| GRE MTU:", c["mtu"], "| Iran input port 22 always stays local.")
     result = run("ping", "-n", "-I", c["tunnel"], "-c", "3", "-W", "2", c["peer_tun"], check=False)
     print(result.stdout.strip() or result.stderr.strip())
     print("GRE peer: VERIFIED" if result.returncode == 0 else "GRE peer: NOT VERIFIED (configure/check the other server)")
@@ -306,9 +306,13 @@ def configure():
     else:
         print("Foreign receives tunneled traffic only. Select ports/mappings on Iran.")
         ports = "all"
+    mtu_text = ask("GRE MTU (safe default 1400, range 576..1476)", str(previous["mtu"] if previous else 1400))
+    if not re.fullmatch(r"[0-9]{3,4}", mtu_text):
+        raise ValueError("GRE MTU must be a number.")
+    mtu = int(mtu_text)
     cfg = dict(id=identity, tunnel=tunnel, role=role, outer_local=local, outer_peer=peer,
                service_ip=service, wan=interfaces[local], local_tun=inside, peer_tun=remote,
-               key=key, mtu=previous["mtu"] if previous else 1400, ports=ports)
+               key=key, mtu=mtu, ports=ports)
     validate(cfg)
     migrating = legacy if legacy and all(cfg[k] == legacy[k] for k in ("role", "outer_local", "outer_peer", "service_ip")) else None
     conflicts(cfg, migrating)
@@ -361,6 +365,59 @@ def configure():
     status(cfg)
 
 
+def set_mtu(identity, value):
+    """Change one saved pair's MTU and MSS without restarting the GRE interface."""
+    if not re.fullmatch(r"[0-9]{3,4}", value):
+        raise ValueError("GRE MTU must be an integer (576..1476).")
+    current = load(identity)
+    updated = dict(current, mtu=int(value))
+    validate(updated)
+    if updated["mtu"] == current["mtu"]:
+        print("MTU unchanged:", value)
+        return
+    dev = run("ip", "-j", "-d", "link", "show", current["tunnel"], check=False)
+    live = dev.returncode == 0
+    if live and not owned_device(current, dev):
+        raise ValueError("Refusing to modify an interface not owned by this GRE pair.")
+    old_mss = [(table, chain, args) for table, chain, args in rules(current) if table == "mangle"]
+    new_mss = [(table, chain, args) for table, chain, args in rules(updated) if table == "mangle"]
+
+    def add_mss(items):
+        for table, chain, args in items:
+            prefix = ["iptables", "-w", "10", "-t", table]
+            if run(*prefix, "-C", chain, *args, check=False).returncode != 0:
+                run(*prefix, "-I", chain, "1", *args)
+
+    def remove_mss(items):
+        for table, chain, args in items:
+            prefix = ["iptables", "-w", "10", "-t", table]
+            while run(*prefix, "-C", chain, *args, check=False).returncode == 0:
+                run(*prefix, "-D", chain, *args)
+
+    # Backup first; the original pair profile remains unchanged until all live steps pass.
+    backup = ROOT / "backups" / (identity + "-pre-mtu-" + str(time.time_ns()) + ".json")
+    save(backup, current)
+    path = ROOT / (identity + ".json")
+    try:
+        if live:
+            add_mss(new_mss)
+            run("ip", "link", "set", "dev", current["tunnel"], "mtu", updated["mtu"])
+            remove_mss(old_mss)
+        save(path, updated)
+    except BaseException:
+        if live:
+            with contextlib.suppress(Exception):
+                add_mss(old_mss)
+            with contextlib.suppress(Exception):
+                run("ip", "link", "set", "dev", current["tunnel"], "mtu", current["mtu"])
+            with contextlib.suppress(Exception):
+                remove_mss(new_mss)
+        save(path, current)
+        raise
+    print("MTU updated without restarting GRE:", current["mtu"], "->", updated["mtu"])
+    print("Previous profile backup:", backup)
+
+
 def main():
     if os.geteuid() != 0:
         raise ValueError("Run with sudo/root.")
@@ -393,8 +450,16 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 sync_docker_wireguard(load(identity))
         return
+    if len(args) == 3 and args[0] == "set-mtu":
+        identity = args[1]
+        if not re.fullmatch(r"[0-9a-f]{10}", identity):
+            raise ValueError("Invalid pair ID.")
+        with open(ROOT / (identity + ".lock"), "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            set_mtu(identity, args[2])
+        return
     if len(args) != 2 or args[0] not in ("up", "down", "status", "docker-sync"):
-        raise ValueError("Usage: gremgr-pair [wizard|list|up ID|down ID|status ID]")
+        raise ValueError("Usage: gremgr-pair [wizard|list|set-mtu ID VALUE|up ID|down ID|status ID]")
     identity = args[1]
     # Per-pair locks serialize boot, manual recovery and timer operations.
     if not re.fullmatch(r"[0-9a-f]{10}", identity):
