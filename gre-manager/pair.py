@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 ROOT = Path(os.environ.get("GRE_PAIR_CONFIG_DIR", "/etc/gremgr/pairs"))
 BIN = "/usr/local/sbin/gremgr-pair"
 
@@ -130,6 +130,47 @@ def change_rules(c, up):
                 exists = run(*prefix, "-C", chain, *args, check=False).returncode == 0
 
 
+def docker_wireguard_rule(c):
+    """Narrow bridge between GRE ingress and Docker's published WG UDP port."""
+    if c["role"] != "foreign":
+        return None
+    return [
+        "-i", c["tunnel"], "-s", c["peer_tun"] + "/32",
+        "-d", c["local_tun"] + "/32", "-p", "udp", "--dport", "51820",
+        "-m", "comment", "--comment", "gmp:" + c["id"] + ":docker-wg",
+        "-j", "DOCKER",
+    ]
+
+
+def sync_docker_wireguard(c, enable=True):
+    """Restore the Docker DNAT path; never alter other ports or Docker rules."""
+    args = docker_wireguard_rule(c)
+    if args is None:
+        return
+    prefix = ("iptables", "-w", "10", "-t", "nat")
+    published = run(*prefix, "-S", "DOCKER", check=False)
+    # Docker may start after GRE; the periodic sync retries harmlessly.
+    if published.returncode != 0:
+        return
+    active = any(
+        "-p udp" in line and "--dport 51820" in line
+        and "-j DNAT" in line and "--to-destination " in line
+        for line in published.stdout.splitlines()
+    )
+    present = run(*prefix, "-C", "PREROUTING", *args, check=False).returncode == 0
+    if not enable or not active:
+        if present:
+            run(*prefix, "-D", "PREROUTING", *args)
+        return
+    rules_now = run(*prefix, "-S", "PREROUTING").stdout.splitlines()
+    first = next((line for line in rules_now if line.startswith("-A PREROUTING ")), "")
+    if present and ("gmp:" + c["id"] + ":docker-wg") in first:
+        return
+    if present:
+        run(*prefix, "-D", "PREROUTING", *args)
+    run(*prefix, "-I", "PREROUTING", "1", *args)
+
+
 def owned_device(c, device):
     details = json.loads(device.stdout)[0].get("linkinfo", {})
     data = details.get("info_data", {})
@@ -154,9 +195,11 @@ def up(c):
     if c["role"] == "iran":
         run("sysctl", "-qw", "net.ipv4.ip_forward=1")
     change_rules(c, True)
+    sync_docker_wireguard(c)
 
 
 def down(c):
+    sync_docker_wireguard(c, False)
     change_rules(c, False)
     device = run("ip", "-j", "-d", "link", "show", c["tunnel"], check=False)
     if device.returncode == 0:
@@ -265,7 +308,7 @@ def configure():
         ports = "all"
     cfg = dict(id=identity, tunnel=tunnel, role=role, outer_local=local, outer_peer=peer,
                service_ip=service, wan=interfaces[local], local_tun=inside, peer_tun=remote,
-               key=key, mtu=1400, ports=ports)
+               key=key, mtu=previous["mtu"] if previous else 1400, ports=ports)
     validate(cfg)
     migrating = legacy if legacy and all(cfg[k] == legacy[k] for k in ("role", "outer_local", "outer_peer", "service_ip")) else None
     conflicts(cfg, migrating)
@@ -343,7 +386,14 @@ def main():
             c = load(path.stem)
             print(c["id"], c["role"], c["outer_local"], "->", c["outer_peer"], "ports:", c["ports"])
         return
-    if len(args) != 2 or args[0] not in ("up", "down", "status"):
+    if args == ["docker-sync-all"]:
+        for path in sorted(ROOT.glob("*.json")):
+            identity = path.stem
+            with open(ROOT / (identity + ".lock"), "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                sync_docker_wireguard(load(identity))
+        return
+    if len(args) != 2 or args[0] not in ("up", "down", "status", "docker-sync"):
         raise ValueError("Usage: gremgr-pair [wizard|list|up ID|down ID|status ID]")
     identity = args[1]
     # Per-pair locks serialize boot, manual recovery and timer operations.
@@ -354,7 +404,10 @@ def main():
         c = load(identity)
         if args[0] == "status":
             sys.exit(status(c))
-        (up if args[0] == "up" else down)(c)
+        if args[0] == "docker-sync":
+            sync_docker_wireguard(c)
+        else:
+            (up if args[0] == "up" else down)(c)
 
 
 if __name__ == "__main__":

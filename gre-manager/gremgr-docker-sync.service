@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh Docker WireGuard routing for active GRE pairs
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gremgr-pair docker-sync-all
+TimeoutStartSec=60
