@@ -57,7 +57,7 @@ class PairTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             pair.save(root / (identity + ".json"), old)
-            answers = iter(["1", "192.0.2.1", "192.0.2.2", "192.0.2.1", "8080:80"])
+            answers = iter(["1", "192.0.2.1", "192.0.2.2", "192.0.2.1", "8080:80", "1400"])
             with patch.object(pair, "ROOT", root), patch.object(pair, "legacy_config", return_value=None), patch.object(pair, "run", side_effect=fake_run), patch.object(pair, "down"), patch.object(pair, "ask", side_effect=lambda *a: next(answers)):
                 with self.assertRaises(subprocess.CalledProcessError):
                     pair.configure()

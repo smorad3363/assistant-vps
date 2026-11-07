@@ -1,4 +1,4 @@
-# GRE Manager 0.2.1
+# GRE Manager 0.2.2
 
 Role-aware interactive GRE setup for Linux with IPv4, root access and systemd.
 
@@ -74,6 +74,29 @@ subdirectory. Program-install backups live in `/etc/gremgr/backups/`.
 Each pair has its own boot-enabled systemd service, keyed GRE interface,
 private /30, scoped firewall rules, Iran SNAT and TCP MSS adjustment.
 Repeated activation is idempotent. Stop removes only the exact rules of that pair.
+
+### Conservative MTU on unreliable links
+
+New GRE pairs use MTU **1400** (conservative, not the largest possible value).
+The wizard now asks for GRE MTU explicitly and retains the saved value by default.
+On a variable path, do not raise GRE MTU to the largest one-off successful ping.
+A smaller GRE MTU leaves more headroom for underlay variability, but may increase
+fragmentation of large UDP datagrams; check packet loss and fragmentation counters.
+WireGuard `wg0` MTU (commonly 1280) and existing client MTUs are independent.
+
+Change an existing pair safely on **both** endpoints, without restarting GRE,
+touching ports or changing WireGuard clients:
+
+```bash
+sudo gremgr-pair set-mtu PAIR_ID 1400
+sudo gremgr-pair status PAIR_ID
+```
+
+`set-mtu` changes only the owned GRE interface MTU, its saved profile and, on
+Iran, the corresponding TCP MSS rules. It keeps a timestamped backup in
+`/etc/gremgr/pairs/backups/` and rolls back the live changes on failure.
+The saved MTU survives reboot and subsequent GRE Manager upgrades. Existing
+pairs are **not** automatically changed during an installer update.
 
 ### Docker WireGuard behind GRE
 
