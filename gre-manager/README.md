@@ -1,4 +1,4 @@
-# GRE Manager 0.2.0
+# GRE Manager 0.2.1
 
 Role-aware interactive GRE setup for Linux with IPv4, root access and systemd.
 
@@ -74,6 +74,26 @@ subdirectory. Program-install backups live in `/etc/gremgr/backups/`.
 Each pair has its own boot-enabled systemd service, keyed GRE interface,
 private /30, scoped firewall rules, Iran SNAT and TCP MSS adjustment.
 Repeated activation is idempotent. Stop removes only the exact rules of that pair.
+
+### Docker WireGuard behind GRE
+
+On a Foreign GRE endpoint, when Docker publishes UDP/51820, GRE Manager
+installs a narrowly scoped jump to Docker's DNAT chain **before** its broad
+GRE receive rule. This avoids the UDP userland-proxy path under heavy load.
+A lightweight timer rechecks the rule after Docker/Compose starts or rewrites
+its firewall chains; it does not restart Docker, WireGuard, or GRE.
+No public port or unrelated Docker firewall rule is modified. Existing GRE
+pairs keep their saved MTU (for example, 1420) when reconfigured. Fresh pairs
+default to 1400, not 1280; `wg0`/client MTU is separate and is not changed.
+
+Manual refresh and inspection:
+
+```bash
+sudo gremgr-pair docker-sync-all
+sudo systemctl status gremgr-docker-sync.timer
+sudo iptables -t nat -S PREROUTING | grep docker-wg
+```
+
 A failed configuration edit restores the previous profile and active service.
 No blanket firewall flush, default-route replacement, IPv6 change or VPN service
 restart is performed. Existing tracked sessions can retain their old mapping until
