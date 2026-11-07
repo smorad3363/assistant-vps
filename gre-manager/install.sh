@@ -3,7 +3,7 @@ set -Eeuo pipefail
 [[ ${EUID:-$(id -u)} == 0 ]] || { echo 'Run with sudo/root.' >&2; exit 1; }
 
 # Keep configuration and histories outside application files.
-SOURCE_REV="f5636bc0468319131b540ec75e22f94a7e72d825"
+SOURCE_REV="c3e1f40706d24567d35feb751b7de0969b270fc6"
 RAW="https://raw.githubusercontent.com/smorad3363/assistant-vps/$SOURCE_REV/gre-manager"
 for command_name in ip iptables ping python3 sha256sum curl systemctl modprobe sysctl flock; do
   if ! command -v "$command_name" >/dev/null; then
@@ -31,7 +31,7 @@ for file in gremgr.sh pair.py gremgr-pair@.service gremgr-docker-sync.service gr
 done
 (cd "$work" && sha256sum -c <<'SUMS'
 c9700fbec098f13cdc0a94e280ea7c1985603fcb1775722493b6200df7cf7d2a  gremgr.sh
-af10871f32e50c65b3e5873295e08bd46ec9cc1895392d57222512391425b295  pair.py
+0dd5c0ebcfbb19ea44044bbb52273ad4886987c1fcc4ff20180bc4d2bc385ae6  pair.py
 e443deb74e913d519bfb0cc430cf5149eb60984b2f136e792e85d73234b0388b  gremgr-pair@.service
 f8f5c2ee1df2acc9cf7b203e2d90f7e72aafb9d919a2b3060623f3de1383b32c  gremgr-docker-sync.service
 9e2540abaa0d77aa6db77a0e2085149f90be7e0c97298dfc7ca5e50622f4cdd4  gremgr-docker-sync.timer
