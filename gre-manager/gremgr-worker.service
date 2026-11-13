@@ -1,0 +1,33 @@
+[Unit]
+Description=GRE Manager network control and telemetry
+Wants=network-online.target
+After=network-online.target
+Before=gremgr-web.service
+
+[Service]
+Type=simple
+User=root
+Group=gremgr
+WorkingDirectory=/opt/gremgr/current
+ExecStart=/usr/bin/python3 -m panel.worker
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=gremgr
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/gremgr /var/lib/gremgr /run /etc/systemd/system
+ProtectHome=read-only
+ProtectKernelModules=no
+ProtectKernelTunables=no
+TimeoutStopSec=180
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=multi-user.target

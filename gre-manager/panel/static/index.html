@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111616"><meta name="color-scheme" content="dark">
+  <title>مدیریت تونل · GRE Manager</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 7-1 1a4.2 4.2 0 0 1-6-6l4-4a4.2 4.2 0 0 1 6 0m2 1 1-1a4.2 4.2 0 0 1 6 6l-4 4a4.2 4.2 0 0 1-6 0"/></symbol>
+<symbol id="i-route" viewBox="0 0 24 24"><circle cx="5" cy="5" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 5h9a4 4 0 0 1 0 8H8a3 3 0 0 0 0 6h9"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6m8 4v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M19 12H5m6-6-6 6 6 6"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24"><path d="m15 4 5 5M4 20l5-1L21 7a2.8 2.8 0 0 0-4-4L5 15Z"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+<symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v9m-6-7a9 9 0 1 0 12 0"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></symbol>
+<symbol id="i-up" viewBox="0 0 24 24"><path d="M12 16V4m-5 5 5-5 5 5M5 17v4h14v-4"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 3v17h17M7 15l4-5 4 2 5-7"/></symbol>
+<symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.1M7 17.5h.1m5-11h5m-5 11h5"/></symbol>
+<symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 4H4v16h5m6-12 4 4-4 4m-6-4h10"/></symbol>
+<symbol id="i-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+</defs></svg>
+
+<main id="login-view" class="login-view" hidden>
+  <form id="login-form" class="login-box">
+    <div class="brand-mark"><svg class="icon"><use href="#i-route"/></svg></div>
+    <p class="eyebrow" dir="ltr">GRE MANAGER</p><h1>مدیریت اتصال‌ها</h1><p class="muted">برای ورود به پنل، اطلاعات حساب را وارد کن.</p>
+    <label>نام کاربری<input name="username" dir="ltr" autocomplete="username" required autofocus></label>
+    <label>رمز عبور<input name="password" type="password" dir="ltr" autocomplete="current-password" required></label>
+    <p class="form-error" id="login-error" role="alert"></p><button class="button primary full" type="submit">ورود به پنل<svg class="icon"><use href="#i-arrow"/></svg></button>
+    <p class="login-foot">کنترل ساده، اتصال مطمئن</p>
+  </form>
+</main>
+
+<div id="app" class="app" hidden>
+  <header class="topbar"><div class="brand"><div class="brand-mark"><svg class="icon"><use href="#i-route"/></svg></div><div><strong dir="ltr">GRE Manager</strong><span>مدیریت اتصال‌ها</span></div></div>
+    <div class="top-actions"><span id="sync-state" class="sync-state"><i class="dot"></i><span>در حال دریافت اطلاعات</span></span><button id="refresh" class="icon-button" aria-label="تازه‌سازی"><svg class="icon"><use href="#i-refresh"/></svg></button><span class="divider"></span><button id="logout" class="icon-button" aria-label="خروج از حساب"><svg class="icon"><use href="#i-logout"/></svg></button></div>
+  </header>
+  <nav class="tabs" aria-label="بخش‌های پنل">
+    <a href="#gre" data-page="gre"><svg class="icon"><use href="#i-link"/></svg><span>GRE</span><span class="tab-count" id="gre-count">۰</span></a>
+    <a href="#direct" data-page="direct"><svg class="icon"><use href="#i-route"/></svg><span>IPTables</span><span class="tab-count" id="direct-count">۰</span></a>
+    <a href="#settings" data-page="settings"><svg class="icon"><use href="#i-settings"/></svg><span>تنظیمات</span></a>
+  </nav>
+  <div id="recovery-alert" class="notice warning" role="status" hidden>بازگردانی یک تغییر ناتمام در حال انجام است. اتصال‌های قبلی حفظ می‌شوند.</div>
+  <main>
+    <section id="connections-page" aria-labelledby="page-title">
+      <div class="page-heading"><div><p id="page-eyebrow" class="eyebrow">اتصال بین دو سرور</p><h1 id="page-title">تونل‌های GRE</h1><p id="page-description" class="muted">وضعیت مسیرها و ترافیک، در یک نگاه.</p></div><button id="add-connection" class="button primary"><svg class="icon"><use href="#i-plus"/></svg><span>افزودن GRE</span></button></div>
+      <div class="metrics">
+        <article class="metric"><div class="metric-label">اتصال‌های فعال<svg class="icon"><use href="#i-link"/></svg></div><div class="metric-value" id="metric-active">—</div><span class="metric-caption" id="metric-total">—</span></article>
+        <article class="metric"><div class="metric-label">دریافت از خارج<svg class="icon"><use href="#i-down"/></svg></div><div class="metric-value" dir="ltr"><span id="metric-down">—</span><small>Mbps</small></div><span class="metric-caption">سرعت لحظه‌ای</span></article>
+        <article class="metric"><div class="metric-label">ارسال به خارج<svg class="icon"><use href="#i-up"/></svg></div><div class="metric-value" dir="ltr"><span id="metric-up">—</span><small>Mbps</small></div><span class="metric-caption">سرعت لحظه‌ای</span></article>
+        <article class="metric"><div class="metric-label">مصرف امروز<svg class="icon"><use href="#i-chart"/></svg></div><div class="metric-value" dir="ltr" id="metric-usage">—</div><span class="metric-caption">مجموع ارسال و دریافت</span></article>
+      </div>
+      <div class="section-heading"><h2 id="list-title">اتصال‌ها</h2><span class="muted small">پورت‌های مدیریت همیشه محفوظ‌اند</span></div>
+      <div id="connection-list" class="connection-list" aria-live="off"></div>
+      <section class="chart-panel" aria-labelledby="chart-title"><div class="section-heading"><div><h2 id="chart-title">ترافیک ۲۴ ساعت گذشته</h2><p class="muted small">حجم مصرف در هر دقیقه</p></div><div class="legend"><span><i class="swatch down"></i>دریافت</span><span><i class="swatch up"></i>ارسال</span></div></div><div id="traffic-chart" class="traffic-chart"></div></section>
+      <section class="events-panel"><div class="section-heading"><h2>آخرین رویدادها</h2><span class="muted small">خطاها و تغییرات مهم</span></div><div id="events-list"></div></section>
+    </section>
+
+    <section id="settings-page" hidden aria-labelledby="settings-title">
+      <div class="page-heading"><div><p class="eyebrow">تنظیمات مشترک</p><h1 id="settings-title">پنل، سرورها و پشتیبان</h1><p class="muted">تنظیم هر اتصال، در صفحه همان اتصال قرار دارد.</p></div><span class="version-chip" id="version"></span></div>
+      <div class="settings-grid">
+        <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-settings"/></svg><h2>تنظیمات عمومی</h2></div><form id="settings-form"><div class="form-grid">
+          <label>پورت ورود پنل<input name="port" type="number" min="1024" max="65535" dir="ltr" required></label>
+          <label>نام کاربری پنل<input name="username" dir="ltr" autocomplete="username" required></label>
+          <label>پورت‌های SSH<input name="ssh_ports" dir="ltr" placeholder="22,6111"></label>
+          <label>پورت‌های محفوظ دیگر<input name="reserved_ports" dir="ltr" placeholder="2096,8443"></label>
+          <label>حد بالای MTU خودکار<input name="mtu" type="number" min="576" max="1476" dir="ltr"></label>
+          <label>نگهداری جزئیات آمار · روز<input name="retention_days" type="number" min="1" max="365" dir="ltr"></label>
+          <label>تعداد بکاپ‌های نگهداری‌شده<input name="backup_keep" type="number" min="1" max="30" dir="ltr"></label>
+          <label>دامنه ورود پنل · اختیاری<input name="hostname" dir="ltr" placeholder="panel.example.com"></label>
+        </div><label class="switch-line"><input name="watchdog" type="checkbox" role="switch"><span><strong>بررسی و بازیابی خودکار GRE</strong><small>پس از سه بررسی ناموفق؛ با حفظ سرویس‌های دیگر</small></span></label><p class="form-error" role="alert"></p><button type="submit" class="button primary">ذخیره تنظیمات</button></form></section>
+        <div class="settings-stack">
+          <section class="panel"><div class="section-heading"><div class="panel-title"><svg class="icon"><use href="#i-server"/></svg><h2>سرورهای خارج</h2></div><button class="button compact secondary" data-action="add-server"><svg class="icon"><use href="#i-plus"/></svg>افزودن</button></div><p class="muted small">برای ساخت خودکار GRE. انتقال مستقیم به SSH نیاز ندارد.</p><div id="server-list" class="server-list"></div></section>
+          <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-shield"/></svg><h2>ورود و ارتباط امن</h2></div><p class="muted">ارتباط پنل با HTTPS برقرار می‌شود. گواهی معتبر خودت را می‌توانی جایگزین کنی.</p><div class="button-row"><button class="button secondary" data-action="password">تغییر رمز عبور</button><button class="button secondary" data-action="tls">گواهی HTTPS</button></div></section>
+          <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-refresh"/></svg><h2>به‌روزرسانی برنامه</h2></div><p class="muted small">نسخه جدید پس از بررسی فایل‌ها نصب می‌شود. تنظیمات و سابقه مصرف حفظ می‌شوند.</p><button class="button secondary" data-action="update">بررسی و نصب نسخه جدید</button></section>
+        </div>
+        <section class="panel wide"><div class="section-heading"><div><h2>بکاپ و بازیابی</h2><p class="muted small">تنظیمات و آمار؛ کلیدهای خصوصی SSH و رمز ورود داخل بکاپ قرار نمی‌گیرند.</p></div><div class="button-row"><button class="button secondary" data-action="restore"><svg class="icon"><use href="#i-up"/></svg>بازیابی</button><button class="button primary" data-action="backup"><svg class="icon"><use href="#i-plus"/></svg>ساخت بکاپ</button></div></div><div id="backup-list" class="backup-list"></div><input id="backup-file" type="file" accept=".zip,application/zip" hidden></section>
+      </div>
+    </section>
+  </main>
+  <footer><span dir="ltr">GRE Manager</span><span>زمان‌ها بر اساس تهران نمایش داده می‌شوند</span><span id="footer-sample">—</span></footer>
+</div>
+
+<dialog id="connection-dialog" class="sheet"><form id="connection-form"><div class="dialog-heading"><div><p class="eyebrow" id="connection-kicker">اتصال جدید</p><h2 id="connection-title">افزودن GRE</h2></div><button type="button" class="icon-button" data-close aria-label="بستن"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="dialog-body">
+  <input name="id" type="hidden"><input name="kind" type="hidden">
+  <div class="form-grid"><label>نام اتصال<input name="name" maxlength="80" placeholder="مثلاً آلمان ۱"></label><label>IP ورودی ایران<select name="listen_ip" dir="ltr" required></select></label></div>
+  <div class="gre-only"><label>سرور خارج<div class="input-action"><select name="server_id" required></select><button type="button" class="icon-button bordered" data-action="add-server" aria-label="افزودن سرور خارج"><svg class="icon"><use href="#i-plus"/></svg></button></div></label></div>
+  <label><span id="target-label">IP یا دامنه مقصد</span><input name="target_host" dir="ltr" autocomplete="off" placeholder="203.0.113.10 یا server.example.com" required></label>
+  <fieldset class="port-selector"><legend>پورت‌های ورودی</legend><label><input name="port_mode" type="radio" value="all" checked>همه پورت‌ها</label><label><input name="port_mode" type="radio" value="selected">پورت‌های انتخابی</label></fieldset>
+  <div class="form-grid" id="port-inputs" hidden><label>پورت‌ها یا بازه<input name="ports" dir="ltr" placeholder="443,1000,51820-51821"></label><label>پورت مقصد · اختیاری<input name="target_port" type="number" min="1" max="65535" dir="ltr" placeholder="همان پورت ورودی"></label></div>
+  <fieldset class="protocol-selector"><legend>پروتکل</legend><label><input name="proto_tcp" type="checkbox" checked><span dir="ltr">TCP</span></label><label><input name="proto_udp" type="checkbox" checked><span dir="ltr">UDP</span></label></fieldset>
+  <div class="form-grid"><label>سقف ارسال به خارج · Mbps<input name="upload_mbps" type="number" min="0" max="100000" step="0.001" dir="ltr" placeholder="0"></label><label>سقف دریافت از خارج · Mbps<input name="download_mbps" type="number" min="0" max="100000" step="0.001" dir="ltr" placeholder="0"></label></div><p class="field-hint">صفر یعنی نامحدود. سقف اتصال بین همه پورت‌های آن مشترک است.</p>
+  <details class="advanced"><summary>جزئیات اتصال<svg class="icon"><use href="#i-chevron"/></svg></summary><div class="advanced-body">
+    <div class="gre-only form-grid"><label>انتخاب MTU<select name="mtu_mode"><option value="auto">خودکار با حاشیه اطمینان</option><option value="manual">دستی</option></select></label><label>MTU<input name="mtu" type="number" min="576" max="1476" dir="ltr"></label><label>IP مبدأ GRE<select name="outer_local" dir="ltr"></select></label><label>IP سرویس روی خارج<input name="service_ip" dir="ltr" placeholder="پیش‌فرض: IP سرور خارج"></label></div>
+    <label>پورت‌های مستثنا<input name="exclude_ports" dir="ltr" placeholder="مثلاً 8080,2096"></label>
+    <label>نگاشت پورت‌های جداگانه<input name="port_map" dir="ltr" placeholder="8080:80,8443:443"></label>
+    <label>پورت‌های دارای آمار جداگانه<input name="monitor_ports" dir="ltr" placeholder="443,1000,51821"></label><p class="field-hint">فهرست‌های کوچک خودکار تفکیک می‌شوند. در حالت «همه» و بازه‌های بزرگ، پورت‌های موردنظر را اینجا وارد کن.</p>
+    <div class="section-heading"><h3>سقف سرعت یک پورت</h3><button type="button" class="button compact secondary" id="add-port-limit">افزودن پورت</button></div><div id="port-limit-rows"></div>
+  </div></details>
+  <p class="notice subtle" id="protected-hint">پورت‌های ورود پنل و SSH از انتقال کنار گذاشته می‌شوند.</p><p class="form-error" role="alert"></p>
+  </div><div class="dialog-footer"><button type="button" class="button secondary" data-close>انصراف</button><button type="submit" class="button primary">ذخیره و اعمال</button></div></form></dialog>
+
+<dialog id="server-dialog" class="sheet narrow"><form id="server-form"><div class="dialog-heading"><div><p class="eyebrow">راه‌اندازی خودکار خارج</p><h2>اتصال سرور</h2></div><button type="button" class="icon-button" data-close aria-label="بستن"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="dialog-body"><label>نام سرور<input name="name" maxlength="80" placeholder="مثلاً آلمان"></label><label>IP یا دامنه SSH<input name="host" dir="ltr" autocomplete="off" required></label><div class="form-grid"><label>پورت SSH<input name="port" type="number" min="1" max="65535" value="22" dir="ltr" required></label><label>نام کاربری<input name="username" value="root" dir="ltr" autocomplete="off" required></label></div><label>رمز SSH<input name="password" type="password" dir="ltr" autocomplete="off"></label><details class="advanced"><summary>ورود با کلید خصوصی<svg class="icon"><use href="#i-chevron"/></svg></summary><label class="advanced-body">کلید خصوصی SSH<textarea name="private_key" rows="5" dir="ltr" autocomplete="off" spellcheck="false"></textarea></label></details><p class="field-hint">رمز برای همین راه‌اندازی استفاده می‌شود. اتصال‌های بعدی با یک کلید اختصاصی محدود انجام می‌شوند. کاربر باید root یا دارای sudo بدون رمز باشد.</p><p class="form-error" role="alert"></p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close>انصراف</button><button type="submit" class="button primary">اتصال و آماده‌سازی</button></div></form></dialog>
+
+<dialog id="confirm-dialog" class="confirm-dialog"><form method="dialog"><div class="dialog-body"><h2 id="confirm-title">تأیید عملیات</h2><p id="confirm-text" class="muted"></p></div><div class="dialog-footer"><button class="button secondary" value="cancel">انصراف</button><button id="confirm-submit" class="button danger" value="ok">تأیید</button></div></form></dialog>
+
+<dialog id="password-dialog" class="sheet narrow"><form id="password-form"><div class="dialog-heading"><h2>تغییر رمز ورود</h2><button type="button" class="icon-button" data-close aria-label="بستن"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="dialog-body"><label>رمز فعلی<input name="current" type="password" dir="ltr" autocomplete="current-password" required></label><label>رمز جدید<input name="password" type="password" dir="ltr" minlength="12" maxlength="256" autocomplete="new-password" required></label><p class="field-hint">حداقل ۱۲ کاراکتر. پس از تغییر، دوباره وارد پنل می‌شوی.</p><p class="form-error" role="alert"></p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close>انصراف</button><button type="submit" class="button primary">تغییر رمز</button></div></form></dialog>
+
+<dialog id="tls-dialog" class="sheet narrow"><form id="tls-form"><div class="dialog-heading"><h2>گواهی HTTPS</h2><button type="button" class="icon-button" data-close aria-label="بستن"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="dialog-body"><label>فایل گواهی و زنجیره · PEM<input name="certificate" type="file" accept=".pem,.crt,.cer" required></label><label>فایل کلید خصوصی · PEM<input name="key" type="file" accept=".pem,.key" required></label><p class="field-hint">گواهی و کلید بررسی می‌شوند؛ سپس ارتباط پنل تازه می‌شود.</p><p class="form-error" role="alert"></p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close>انصراف</button><button type="submit" class="button primary">ثبت گواهی</button></div></form></dialog>
+
+<div id="job-status" class="job-status" role="status" hidden><div class="job-icon"><svg class="icon"><use href="#i-refresh"/></svg></div><div><strong id="job-title">در حال اعمال تغییرات</strong><span id="job-message">لطفاً صبر کن</span><progress id="job-progress" value="0" max="100"></progress></div><button id="job-dismiss" class="icon-button" aria-label="بستن پیام" hidden><svg class="icon"><use href="#i-close"/></svg></button></div>
+<div id="toast" class="toast" role="status" hidden></div>
+</body></html>

@@ -1,4 +1,20 @@
-# GRE Link Tool
+# VPS Network Tools
+
+## GRE Manager web panel
+
+GRE and direct TCP/UDP forwarding, managed through a compact Persian web panel.
+Includes automatic SSH peer setup, protected management ports, speed limits,
+SQLite telemetry, backups and noninteractive updates.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre.sh | sudo bash
+```
+
+Install on Iran; manage the foreign GRE endpoint from the panel. See
+[the panel guide](gre-manager/PANEL.md). Existing standalone tools below remain
+available independently.
+
+## GRE Link Tool
 
 Persistent GRE setup, bidirectional iperf3 testing, editable tunnel settings, automatic self-update, and a systemd watchdog with automatic tunnel repair.
 
@@ -62,3 +78,4 @@ The report is saved as:
 Send that single file for troubleshooting. It includes the saved GRE settings, service/watchdog state, systemd unit definitions, the last 24 hours of relevant journals, generated helper scripts, interfaces and counters, routes, neighbor/socket state, public and tunnel ping tests, MTR, public/GRE PMTU matrices, relevant sysctls and GRE modules, iptables/nftables state, NIC offload information when available, relevant kernel messages, a short GRE/ICMP header-only packet probe, and recent GRE Link Tool logs.
 
 The collector intentionally avoids shell history, full environment dumps, passwords, tokens, SSH/WireGuard private keys, and full packet payloads. The report does contain network addresses, ports, routes, and firewall details, so keep it within a trusted support context.
+

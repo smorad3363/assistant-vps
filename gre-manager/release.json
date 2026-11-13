@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "version": "1.0.0",
+  "revision": "WORKTREE",
+  "files": {
+    "gremgr-docker-sync.service": "b9bb2ce1a34a9b5339a3024dff40a74401f7f37e9df724694fd6afa9f09a24df",
+    "gremgr-docker-sync.timer": "0f0a54d7e60e81413b917b583bd008affaa6c08eac527db9b478338da8c7c9d7",
+    "gremgr-pair@.service": "836b1b66d713077a1a3f31d949fec904e3a3bccb5a7784fa5e81c6d8717c7696",
+    "gremgr-web.service": "3c85549f067c2bf82016fdcdf7f221d88c4f644437742d93aa4da2f0fb2ca263",
+    "gremgr-worker.service": "f64a2aad82642c88215fc154aaa17cf97cb3e4023efe7b78b065e09bf2a2a80d",
+    "gremgr.sh": "e5c9cc46a7e06a6300eddbce15108b553f1ba8d79601b3618c39fedb0cc4342e",
+    "install.sh": "2e99da0d2f985f60548f4c7adf8d34bd7258b8d7805fc5d572fb4992b7add8d6",
+    "legacy-restore.sh": "a2d40a8eb9a2afc875e1789e22e39d19fcc1a7c7d58f5dac1b667b8054fe71d5",
+    "pair.py": "3ecc0ccd12b192bd8630d07c8d3e6410ff4b76e9a8a30afc700a9459eeb9099f",
+    "panel/__init__.py": "c5c5af417161a257deae147bd1b548a013f615700a68a1394a439413fbe20de4",
+    "panel/agent.py": "0f76c2a67f02ea80538f23b51a79398dc020149c1847faa4f9293a14ce32122f",
+    "panel/cli.py": "5d9403e2da3d9c59f4fa4b1b76bba8bc534f32dc44e6057338bcf9c43dd71873",
+    "panel/controller.py": "81a05d33e5be8fc5b45bbaf474d55e5428468bf49987586f696121e8b40d6156",
+    "panel/demo.py": "cb7b154b8137ec79c67aff0f4d49a6871bd572d174da751276acfd799e2d6201",
+    "panel/engine.py": "4dd3065be46c5720fad1bb0be1e1a8817320eed2b7985a5eff016b41c218aed3",
+    "panel/model.py": "48348b58ec45fe2f72f08da0d9adc54f81b057d5c684f36b8993e4d506927ca1",
+    "panel/remote.py": "1bcd6b85472d1fe29f14405e88e3ef0cf14a63978d57eb0098e44054ed6b5aa5",
+    "panel/static/app.js": "1050d8b6bf0d9851bbac757de0c240c115a4b4d62e17586079f7acf578331f7e",
+    "panel/static/favicon.svg": "c9c1421e8344aafc6d61c94b694ab51ed17505b1b3f779ef26a6d8b77efda5b1",
+    "panel/static/index.html": "81faed076009ef377b26b130d3442f43e8906e39d26a8e35b181dcfb14a51b0f",
+    "panel/static/style.css": "230f9935173b5eb5dca9594a58df64ac0f191c613c8b76c8580febeb7b6ff79a",
+    "panel/store.py": "544b9db4d0fe962ae8f6f6621511ed1773898ceb249b4a3429ff32736469767c",
+    "panel/web.py": "5de4d2df482f397acfc732b053b3f98e1bb160b22f22f7326ebf99178485720e",
+    "panel/worker.py": "0c18b75f39f2b1d6016902ca56093f688f8fc0c39d7fd762fc00ac3779c1846d"
+  }
+}

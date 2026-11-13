@@ -1,0 +1,69 @@
+name: GRE Manager web panel
+on:
+  push:
+    branches: [master]
+    paths: ['gre-manager/**', 'gre.sh', '.github/workflows/gremgr-panel.yml']
+  pull_request:
+    paths: ['gre-manager/**', 'gre.sh', '.github/workflows/gremgr-panel.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gremgr-panel-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend-network:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and regression tests
+        run: |
+          bash -n gre.sh gre-manager/install.sh gre-manager/gremgr.sh gre-manager/legacy-restore.sh gre-manager/tests/network_lab.sh
+          python3 -m compileall -q gre-manager/panel
+          PYTHONPATH=gre-manager python3 -m unittest discover -s gre-manager/tests -p 'test_*.py' -v
+          python3 -m unittest discover -s gre-manager -p 'test_pair.py' -v
+          python3 -m unittest discover -s gre-manager -p 'test_mtu.py' -v
+          python3 -m unittest discover -s gre-manager -p 'test_docker_wireguard.py' -v
+      - name: Install network test dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod sshpass
+      - name: Real kernel TCP and UDP in isolated namespaces
+        run: |
+          sudo mkdir -p /run/netns
+          sudo unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
+      - name: Full noninteractive install and update on disposable runner
+        run: |
+          python3 gre-manager/build-release.py WORKTREE
+          sudo bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
+          sudo systemctl is-active gremgr-worker.service gremgr-web.service
+          sudo gremgr --version | grep -Fx 1.0.0
+          sudo bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
+          curl -kfSs https://127.0.0.1:8787/ | grep -F GRE
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Browser dependencies
+        run: |
+          pip install playwright==1.58.0
+          playwright install --with-deps chromium
+      - name: Browser acceptance
+        run: |
+          cd gre-manager
+          python3 -m panel.demo --seed --port 8877 > /tmp/gremgr-demo.log 2>&1 &
+          trap 'kill $!' EXIT
+          for i in {1..20}; do curl -fsS http://127.0.0.1:8877/ >/dev/null && break || sleep 1; done
+          python3 tests/browser_test.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: panel-browser-screenshots
+          path: gre-manager/test-output/

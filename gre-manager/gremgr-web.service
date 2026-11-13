@@ -1,0 +1,33 @@
+[Unit]
+Description=GRE Manager HTTPS interface
+Requires=gremgr-worker.service
+After=gremgr-worker.service
+
+[Service]
+Type=simple
+User=gremgr
+Group=gremgr
+WorkingDirectory=/opt/gremgr/current
+ExecStart=/usr/bin/python3 -m panel.web
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=multi-user.target
