@@ -30,7 +30,7 @@ jobs:
           python3 -m unittest discover -s gre-manager -p 'test_mtu.py' -v
           python3 -m unittest discover -s gre-manager -p 'test_docker_wireguard.py' -v
       - name: Install network test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod sshpass
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod sshpass conntrack
       - name: Real kernel TCP and UDP in isolated namespaces
         run: |
           sudo mkdir -p /run/netns
@@ -43,6 +43,10 @@ jobs:
           sudo gremgr --version | grep -Fx 1.0.0
           sudo bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
           curl -kfSs https://127.0.0.1:8787/ | grep -F GRE
+      - name: Real SSH provisioning and peer recovery
+        run: |
+          sudo apt-get install -y -qq openssh-server
+          sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/ssh_lab.py
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

@@ -15,8 +15,8 @@ import uuid
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
 
-CHAINS = {"nat": ["GMP_PRE", "GMP_POST"], "filter": ["GMP_FWD", "GMP_INPUT", "GMP_COUNT"], "mangle": ["GMP_MSS"]}
-HOOKS = [("nat", "PREROUTING", "GMP_PRE"), ("nat", "POSTROUTING", "GMP_POST"),
+CHAINS = {"nat": ["GMP_PRE", "GMP_POST", "GMP_LOCAL"], "filter": ["GMP_FWD", "GMP_INPUT", "GMP_COUNT"], "mangle": ["GMP_MSS"]}
+HOOKS = [("nat", "PREROUTING", "GMP_PRE"), ("nat", "POSTROUTING", "GMP_POST"), ("nat", "INPUT", "GMP_LOCAL"),
          ("filter", "FORWARD", "GMP_FWD"), ("filter", "INPUT", "GMP_INPUT"), ("mangle", "FORWARD", "GMP_MSS")]
 
 
@@ -124,6 +124,13 @@ def build_rules(config, interfaces, docker_udp=False):
                 add("nat", "GMP_PRE", *incoming, "-j", "DNAT", "--to-destination", c["service_ip"])
                 add("filter", "GMP_INPUT", "-i", t, "-s", peer, "-d", c["service_ip"], "-p", proto,
                     "-m", "conntrack", "--ctstate", "DNAT", "-j", "ACCEPT")
+                if proto == "udp" and c["service_ip"] in interfaces:
+                    # A wildcard-bound UDP application can otherwise select the
+                    # GRE address as reply source, missing the local DNAT tuple.
+                    # Local-input SNAT makes the reply choose the service address;
+                    # conntrack then reverses both translations back through GRE.
+                    add("nat", "GMP_LOCAL", "-i", t, "-s", peer, "-d", c["service_ip"], "-p", "udp",
+                        "-m", "conntrack", "--ctstate", "DNAT", "-j", "SNAT", "--to-source", c["service_ip"])
                 add("filter", "GMP_FWD", "-i", t, "-s", peer, "-p", proto, "-m", "conntrack", "--ctstate", "DNAT", "-j", "ACCEPT")
                 add("filter", "GMP_FWD", "-o", t, "-d", peer, "-p", proto, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
                 if c["service_ip"] not in interfaces:

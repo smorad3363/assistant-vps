@@ -20,12 +20,16 @@ with sync_playwright() as p:
     page.locator("#app").wait_for(state="visible")
     assert page.locator(".connection").count()==2
     page.screenshot(path=str(out/"gre-desktop.png"),full_page=True)
+    if os.environ.get("CI"):
+        import base64
+        print('PANEL_DESKTOP_PREVIEW='+base64.b64encode(page.screenshot(type='jpeg',quality=65)).decode())
     page.locator("#add-connection").click()
     page.locator("#connection-dialog").wait_for(state="visible")
     page.locator("#connection-form [name=name]").fill("Browser test")
     page.locator("#connection-form [name=server_id]").select_option(index=1)
     page.locator("#connection-form [name=target_host]").fill("203.0.113.90")
     page.locator("#connection-form [name=listen_ip]").select_option("192.0.2.11")
+    page.locator("#connection-form details.advanced > summary").click()
     page.locator("#connection-form [name=outer_local]").select_option("192.0.2.11")
     page.locator("#connection-form [value=selected]").check()
     page.locator("#connection-form [name=ports]").fill("9999")
@@ -56,6 +60,9 @@ with sync_playwright() as p:
             page.locator(f'[data-page={tab}]').click()
             assert not page.evaluate('document.documentElement.scrollWidth>window.innerWidth'),(width,tab)
             page.screenshot(path=str(out/f'{tab}-{width}.png'),full_page=True)
+            if os.environ.get("CI") and width==390 and tab=='gre':
+                import base64
+                print('PANEL_MOBILE_PREVIEW='+base64.b64encode(page.screenshot(type='jpeg',quality=70)).decode())
         page.locator('[data-page=gre]').click()
         page.locator('#add-connection').click()
         assert not page.evaluate('document.querySelector("#connection-dialog").scrollWidth>window.innerWidth')

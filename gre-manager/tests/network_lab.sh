@@ -5,7 +5,22 @@ set -Eeuo pipefail
 [[ $(readlink /proc/self/ns/net) != $(readlink /proc/1/ns/net) ]] || { echo 'Refusing host network namespace'; exit 77; }
 mount --make-rprivate /
 lab=$(mktemp -d)
-trap 'ip netns del gm-ir 2>/dev/null || true; ip netns del gm-fo 2>/dev/null || true; ip netns del gm-client 2>/dev/null || true; rm -rf "$lab"' EXIT
+cleanup() {
+  local result=$?
+  if ((result)); then
+    for role in ir fo; do
+      echo "Network failure diagnostics: $role"
+      ip netns exec "gm-$role" iptables-save -c || true
+      ip netns exec "gm-$role" ip -4 route || true
+      ip netns exec "gm-$role" conntrack -L 2>/dev/null | tail -25 || true
+    done
+  fi
+  ip netns del gm-ir 2>/dev/null || true
+  ip netns del gm-fo 2>/dev/null || true
+  ip netns del gm-client 2>/dev/null || true
+  rm -rf "$lab"
+}
+trap cleanup EXIT
 mkdir -p "$lab/netns"
 mount --bind "$lab/netns" /run/netns
 export PYTHONPATH
