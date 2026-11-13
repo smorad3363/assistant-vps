@@ -427,16 +427,7 @@ def main():
         print(VERSION)
         return
     if not args or args == ["wizard"]:
-        if not sys.stdin.isatty():
-            with open("/dev/tty") as tty:
-                sys.stdin = tty
-                with open(ROOT / ".lock", "a") as lock:
-                    fcntl.flock(lock, fcntl.LOCK_EX)
-                    configure()
-        else:
-            with open(ROOT / ".lock", "a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                configure()
+        print("Interactive setup has moved to the GRE Manager web panel. Run: gremgr")
         return
     if args == ["list"]:
         for path in sorted(ROOT.glob("*.json")):
@@ -482,3 +473,4 @@ if __name__ == "__main__":
         details = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
         print("ERROR:", details, file=sys.stderr)
         sys.exit(1)
+
