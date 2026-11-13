@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.0.0",
-  "revision": "WORKTREE",
+  "revision": "0b6de7e4feee446f82aa513dcabeed20385b20e6",
   "files": {
     "gremgr-docker-sync.service": "f8f5c2ee1df2acc9cf7b203e2d90f7e72aafb9d919a2b3060623f3de1383b32c",
     "gremgr-docker-sync.timer": "9e2540abaa0d77aa6db77a0e2085149f90be7e0c97298dfc7ca5e50622f4cdd4",
