@@ -70,6 +70,7 @@ with sync_playwright() as p:
         page.locator('#add-connection').click()
         assert not page.evaluate('document.querySelector("#connection-dialog").scrollWidth>window.innerWidth')
         page.locator('#connection-dialog [data-close]').first.click()
+        page.locator('#connection-dialog').wait_for(state='hidden')
     page.emulate_media(reduced_motion='reduce')
     page.locator('#add-connection').click()
     assert page.locator('#connection-dialog').is_visible()

@@ -189,7 +189,7 @@ function renderChart(ids) {
   for(const p of selected){const x=grouped.get(p.at)||{at:p.at,up:0,down:0};x.up+=p.up;x.down+=p.down;grouped.set(p.at,x);}
   const points=[...grouped.values()].sort((a,b)=>a.at-b.at);
   if(points.length<2){target.innerHTML='<div class="chart-empty">پس از ثبت نمونه‌های مصرف، نمودار اینجا نمایش داده می‌شود.</div>';return;}
-  const W=1000,H=160,left=65,right=12,top=8,bottom=26,max=Math.max(1024,...points.map(x=>Math.max(x.up,x.down)));
+  const W=Math.max(320,target.clientWidth),H=160,left=65,right=12,top=8,bottom=26,max=Math.max(1024,...points.map(x=>Math.max(x.up,x.down)));
   const start=Date.now()/1000-86400,end=Date.now()/1000;
   const x=t=>left+(t-start)/(end-start)*(W-left-right),y=n=>top+(1-n/max)*(H-top-bottom);
   const line=key=>points.map((p,i)=>(i?'L':'M')+x(p.at).toFixed(1)+','+y(p[key]).toFixed(1)).join(' ');
@@ -349,5 +349,7 @@ $('#backup-file').addEventListener('change',async e=>{
   }catch(error){showToast(failText(error));}finally{e.target.value='';}
 });
 window.addEventListener('hashchange',navigate);navigate();refresh();
+let chartResizeFrame;
+window.addEventListener('resize',()=>{cancelAnimationFrame(chartResizeFrame);chartResizeFrame=requestAnimationFrame(()=>{if(state&&page!=='settings')renderChart();});});
 setInterval(()=>{if(!document.hidden)refresh(true);},5000);
 const saved=sessionStorage.getItem('gremgr_job');if(saved){activeJob=saved;setTimeout(()=>pollJob(saved),1000);}
