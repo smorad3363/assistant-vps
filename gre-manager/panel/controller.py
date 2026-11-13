@@ -133,6 +133,7 @@ class Controller:
                 journal["remote"].append({"server": server_id, "transaction": reply["transaction"]})
                 atomic_json(self.pending, journal)
             progress(50, "Applying scoped network rules")
+            self.collect()
             self.engine.apply(self.combined(updated), self.combined(previous))
             progress(65, "Checking GRE and MTU")
             for c in updated["connections"]:
@@ -188,6 +189,8 @@ class Controller:
                 self.remote.call(servers[server_id], {"action": "commit", "transaction": reply["transaction"]})
             except Exception:
                 ok = False
+        with contextlib.suppress(Exception):
+            self.collect()
         self.engine.apply(self.combined(old), self.combined(new))
         self.store.save(old)
         if ok:
@@ -383,6 +386,9 @@ class Controller:
                     found = db.execute("SELECT type FROM sqlite_master WHERE name=?", (table,)).fetchone()
                     if not found or found[0] != "table":
                         raise PanelError("Invalid telemetry table.")
+                    keys = "identity,port" if table == "totals" else "at,identity,port"
+                    if db.execute("SELECT 1 FROM " + table + " GROUP BY " + keys + " HAVING COUNT(*)>1 LIMIT 1").fetchone():
+                        raise PanelError("Duplicate telemetry records in backup.")
                     for index, row in enumerate(db.execute("SELECT " + columns + " FROM " + table)):
                         if index > 2000000 or not re.fullmatch(r"[0-9a-f]{10}", str(row[0])) or not re.fullmatch(r"all|[0-9]{1,5}", str(row[1])) or any(not isinstance(n, int) or not 0 <= n <= 2**63-1 for n in row[2:]):
                             raise PanelError("Invalid telemetry data.")
@@ -514,6 +520,7 @@ class Controller:
                     if cfg["settings"]["watchdog"] and self.failures[c["id"]] == 3:
                         with open(self.paths.etc / "network.lock", "a") as lock:
                             fcntl.flock(lock, fcntl.LOCK_EX)
+                            self.collect()
                             self.engine.apply(self.combined(cfg), self.combined(cfg))
                         self.store.event("warning", "Owned GRE state refreshed after three failed checks; VPN services were not restarted.")
             if now - self.last_backup > 86400:

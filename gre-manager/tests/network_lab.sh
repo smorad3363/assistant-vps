@@ -129,7 +129,32 @@ new=json.loads(json.dumps(old));new['connections'][0]['upload_mbps']=2;new['conn
 new['connections'][0]['port_limits']={'51821':{'up':1,'down':1}}
 engine.apply(new,old)
 print('Counters and kernel bandwidth rules verified')
-engine.apply(dict(old,connections=[]),new)
+(paths.etc/'lab-limited.json').write_text(json.dumps(new))
+PY
+ip netns exec gm-client python3 - <<'PY'
+import socket,threading,time
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(.15)
+s.bind(('0.0.0.0',0))
+received=0;stop=threading.Event()
+def read():
+ global received
+ while not stop.is_set():
+  try: data,_=s.recvfrom(65535);received+=len(data)
+  except socket.timeout: pass
+reader=threading.Thread(target=read);reader.start()
+payload=b'x'*1024;started=time.monotonic()
+while time.monotonic()-started<3:
+ s.sendto(payload,('192.0.2.10',51821));time.sleep(.0005)
+time.sleep(.2);stop.set();reader.join();s.close()
+assert 20000<received<700000,('1 Mbps port cap not respected',received)
+print('Measured UDP cap: received bytes over 3 seconds:',received)
+PY
+ip netns exec gm-ir python3 - "$lab/ir" <<'PY'
+from panel.engine import Engine
+from panel.store import Paths
+import json,sys
+paths=Paths(sys.argv[1]);old=json.loads((paths.etc/'lab-limited.json').read_text())
+Engine(paths).apply(dict(old,connections=[]),old)
 PY
 ip netns exec gm-client python3 "$lab/client.py" 22 IRAN
 ip netns exec gm-ir iptables-save | grep -F BASELINE-SSH

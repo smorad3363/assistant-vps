@@ -90,7 +90,6 @@ class Store:
                 CREATE TABLE IF NOT EXISTS cursors(identity TEXT NOT NULL,port TEXT NOT NULL,epoch TEXT NOT NULL,up INTEGER NOT NULL,down INTEGER NOT NULL,at REAL NOT NULL,PRIMARY KEY(identity,port));
                 CREATE INDEX IF NOT EXISTS sample_time ON samples(at);
             """)
-            db.execute("UPDATE jobs SET status='interrupted',message='Service restarted before the operation completed.' WHERE status IN ('queued','running')")
         os.chmod(self.paths.db, 0o600)
 
     @contextlib.contextmanager
@@ -111,6 +110,10 @@ class Store:
             raise PanelError("Unsupported configuration schema.")
         data["settings"] = dict(DEFAULTS, **data["settings"])
         return data
+
+    def interrupt_jobs(self):
+        with self.database() as db:
+            db.execute("UPDATE jobs SET status='interrupted',message='Service restarted before the operation completed.' WHERE status IN ('queued','running')")
 
     def save(self, data):
         atomic_json(self.paths.config, data)

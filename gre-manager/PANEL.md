@@ -58,7 +58,7 @@ applications are not changed.
 Upload/download caps are aggregate **per direction per connection**, in decimal
 Mbps; zero means unlimited. Optional per-port caps are applied in addition to the
 connection cap. The first implementation uses scoped kernel byte-rate policing
-with short bursts, not a user-space traffic proxy and not a replacement of the
+with approximately one second of burst allowance, not a user-space traffic proxy or a replacement of the
 host qdisc. Excess traffic is dropped; UDP senders must tolerate the configured
 cap. Rate limiting never applies to unrelated ports, SSH or panel traffic.
 

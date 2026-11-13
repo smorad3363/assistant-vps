@@ -268,6 +268,13 @@ async function pollJob(identity){
       $('#job-title').textContent=job.status==='done'?'تغییرات انجام شد':'عملیات کامل نشد';
       $('#job-status').classList.toggle('failed',job.status!=='done');
       $('#job-message').textContent=job.status==='done'?'تنظیمات ثبت شد.':failText({error:job.message,code:job.result?.code});
+      $('.job-debug',$('#job-status'))?.remove();
+      if(job.status!=='done'){
+        const debug=document.createElement('details');debug.className='job-debug';
+        const summary=document.createElement('summary');summary.textContent='جزئیات خطا';
+        const pre=document.createElement('pre');pre.dir='ltr';pre.textContent=job.message;
+        debug.append(summary,pre);$('#job-message').after(debug);
+      }
       await refresh(true);
       if(job.result?.server){fillServers(job.result.server);const s=state.servers.find(x=>x.id===job.result.server);if(s&&$('#connection-dialog').open)$('#connection-form').elements.target_host.value=s.host;}
       if(job.result?.reconnect){const url=new URL(location.href);url.port=job.result.port;$('#job-message').replaceChildren(document.createTextNode('برای تأیید ورود، پورت جدید را باز کن: '));const a=document.createElement('a');a.href=url.href;a.textContent='ورود به پنل';a.className='button compact secondary';$('#job-message').append(a);}
@@ -342,5 +349,5 @@ $('#backup-file').addEventListener('change',async e=>{
   }catch(error){showToast(failText(error));}finally{e.target.value='';}
 });
 window.addEventListener('hashchange',navigate);navigate();refresh();
-setInterval(()=>{if(!document.hidden&&state)refresh(true);},5000);
+setInterval(()=>{if(!document.hidden)refresh(true);},5000);
 const saved=sessionStorage.getItem('gremgr_job');if(saved){activeJob=saved;setTimeout(()=>pollJob(saved),1000);}

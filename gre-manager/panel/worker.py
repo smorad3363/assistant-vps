@@ -36,6 +36,7 @@ def main():
     if os.geteuid() != 0:
         raise SystemExit("The network worker requires root.")
     controller = Controller()
+    controller.store.interrupt_jobs()
     controller.adopt()
     with open(controller.paths.etc / "network.lock", "a") as lock:
         import fcntl

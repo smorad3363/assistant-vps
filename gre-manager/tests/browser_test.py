@@ -74,7 +74,7 @@ with sync_playwright() as p:
     page.locator('#add-connection').click()
     assert page.locator('#connection-dialog').is_visible()
     page.keyboard.press('Escape')
-    assert not page.locator('#connection-dialog').is_visible()
+    page.locator('#connection-dialog').wait_for(state='hidden')
     assert not failures,failures
     print(json.dumps({'result':'PASS','console_errors':failures,'viewports':[375,390,768,1440],'flows':['login','create','edit','delete','settings','keyboard escape','reduced motion']}))
     browser.close()

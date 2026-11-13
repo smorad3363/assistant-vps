@@ -24,6 +24,7 @@ jobs:
       - name: Syntax and regression tests
         run: |
           bash -n gre.sh gre-manager/install.sh gre-manager/gremgr.sh gre-manager/legacy-restore.sh gre-manager/tests/network_lab.sh
+          python3 gre-manager/build-release.py --check
           python3 -m compileall -q gre-manager/panel
           PYTHONPATH=gre-manager python3 -m unittest discover -s gre-manager/tests -p 'test_*.py' -v
           python3 -m unittest discover -s gre-manager -p 'test_pair.py' -v
@@ -43,6 +44,9 @@ jobs:
           sudo gremgr --version | grep -Fx 1.0.0
           sudo bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
           curl -kfSs https://127.0.0.1:8787/ | grep -F GRE
+          sudo systemctl kill --kill-who=main --signal=SIGKILL gremgr-worker.service
+          for i in {1..30}; do curl -kfSs https://127.0.0.1:8787/ >/dev/null 2>&1 && break || sleep 1; done
+          sudo systemctl is-active gremgr-worker.service gremgr-web.service
       - name: Real SSH provisioning and peer recovery
         run: |
           sudo apt-get install -y -qq openssh-server

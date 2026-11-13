@@ -1,6 +1,6 @@
 [Unit]
 Description=GRE Manager network control and telemetry
-Wants=network-online.target
+Wants=network-online.target gremgr-web.service
 After=network-online.target
 Before=gremgr-web.service
 
