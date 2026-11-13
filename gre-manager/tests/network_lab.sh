@@ -142,12 +142,17 @@ def read():
   try: data,_=s.recvfrom(65535);received+=len(data)
   except socket.timeout: pass
 reader=threading.Thread(target=read);reader.start()
-payload=b'x'*1024;started=time.monotonic()
-while time.monotonic()-started<3:
+payload=b'x'*1024;started=time.monotonic();baseline=None
+# Drain the kernel's initial token-bucket allowance before measuring the
+# steady per-port cap. A missing 1 Mbps rule would leave the 2 Mbps aggregate
+# cap and fail the upper bound even though that aggregate rule still works.
+while time.monotonic()-started<7:
+ if baseline is None and time.monotonic()-started>=3: baseline=received
  s.sendto(payload,('192.0.2.10',51821));time.sleep(.0005)
 time.sleep(.2);stop.set();reader.join();s.close()
-assert 20000<received<700000,('1 Mbps port cap not respected',received)
-print('Measured UDP cap: received bytes over 3 seconds:',received)
+steady_bytes=received-baseline
+assert 200000<steady_bytes<600000,('1 Mbps steady port cap not respected',steady_bytes)
+print('Measured UDP cap: steady bytes over 4 seconds:',steady_bytes)
 PY
 ip netns exec gm-ir python3 - "$lab/ir" <<'PY'
 from panel.engine import Engine
