@@ -221,7 +221,7 @@ def validate_conflicts(items, settings):
         raise PanelError("Use at most 128 connections.")
     for index, a in enumerate(active):
         for b in active[index + 1:]:
-            if a["kind"] == b["kind"] == "gre" and (a["listen_ip"], a["resolved_ip"]) == (b["listen_ip"], b["resolved_ip"]):
+            if a["kind"] == b["kind"] == "gre" and (a.get("outer_local", a["listen_ip"]), a["resolved_ip"]) == (b.get("outer_local", b["listen_ip"]), b["resolved_ip"]):
                 raise PanelError("Edit the existing GRE connection to this server.", "overlap")
             if a["listen_ip"] != b["listen_ip"] or not set(a["protocols"]) & set(b["protocols"]):
                 continue

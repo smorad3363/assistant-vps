@@ -46,9 +46,11 @@ with sync_playwright() as p:
     page.locator("#confirm-submit").click()
     page.get_by_text("Browser edited",exact=True).wait_for(state="detached")
     page.locator('[data-page=direct]').click()
+    page.locator('[data-page=direct][aria-current=page]').wait_for()
     assert page.locator("#page-title").inner_text()=="انتقال مستقیم"
     page.screenshot(path=str(out/"direct-desktop.png"),full_page=True)
     page.locator('[data-page=settings]').click()
+    page.locator('#settings-page').wait_for(state='visible')
     page.screenshot(path=str(out/"settings-desktop.png"),full_page=True)
     page.locator('#settings-form [name=retention_days]').fill('14')
     page.locator('#settings-form button[type=submit]').click()
@@ -58,6 +60,7 @@ with sync_playwright() as p:
         page.set_viewport_size({"width":width,"height":844})
         for tab in ('gre','direct','settings'):
             page.locator(f'[data-page={tab}]').click()
+            page.locator(f'[data-page={tab}][aria-current=page]').wait_for()
             assert not page.evaluate('document.documentElement.scrollWidth>window.innerWidth'),(width,tab)
             page.screenshot(path=str(out/f'{tab}-{width}.png'),full_page=True)
             if os.environ.get("CI") and width==390 and tab=='gre':

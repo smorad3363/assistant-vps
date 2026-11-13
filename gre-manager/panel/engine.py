@@ -101,10 +101,12 @@ def build_rules(config, interfaces, docker_udp=False):
             return
         # Byte-rate policing is confined to this flow. No host qdisc is replaced.
         per_second = max(1000, int(speed * 1000000 / 8))
-        burst = max(16384, min(100000000, per_second // 5))
+        # xt_hashlimit requires a byte burst at least as large as one second's
+        # rate. Keep it explicit in bytes and never replace the host qdisc.
+        burst = max(2048, per_second)
         rate_name = f"gm{identity}{direction[0]}{port}"[:30]
         add("filter", "GMP_FWD", *base, "-m", "hashlimit", "--hashlimit-above", f"{per_second}b/s",
-            "--hashlimit-burst", str(burst), "--hashlimit-name", rate_name, "--hashlimit-htable-expire", "1000",
+            "--hashlimit-burst", str(burst) + "b", "--hashlimit-name", rate_name, "--hashlimit-htable-expire", "1000",
             "-j", "DROP")
 
     for c in config["connections"]:

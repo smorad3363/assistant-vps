@@ -20,7 +20,7 @@ import uuid
 from . import __version__
 from .agent import read_peers
 from .engine import Engine, discovered_ssh_ports, gre_for, run
-from .model import PanelError, connection, settings_update, validate_conflicts
+from .model import PanelError, connection, resolve, settings_update, validate_conflicts
 from .remote import Remote, server_metadata
 from .store import Store, atomic_json, check_password
 
@@ -36,6 +36,7 @@ class Controller:
         self.rates, self.health, self.failures = {}, {}, {}
         self.last_sample, self.last_probe, self.last_backup = 0, 0, 0
         self.pending = self.paths.etc / "pending.json"
+        self.stats_cache, self.stats_cached_at = None, 0
 
     def adopt(self):
         """Import saved Iran pair profiles without touching live interfaces."""
@@ -81,7 +82,7 @@ class Controller:
             try:
                 with self.lock, open(self.paths.etc / "network.lock", "a") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
-                    if self.pending.exists():
+                    if self.pending.exists() and operation not in ("server.connect", "backup.create", "connection.probe"):
                         raise PanelError("A previous change is being recovered. Wait for recovery to finish.", "recovering")
                     result = self.operation(operation, payload, lambda p, m: self.store.job(identity, "running", p, m))
                 self.store.job(identity, "done", 100, "Completed", result)
@@ -150,6 +151,7 @@ class Controller:
             self.engine.apply(self.combined(updated), self.combined(updated))
             self.engine.retire_legacy(self.combined(updated))
             self.store.save(updated)
+            self.stats_cache = None
             journal["updated"], journal["phase"] = updated, "commit"
             atomic_json(self.pending, journal)
             progress(85, "Committing both endpoints")
@@ -199,8 +201,39 @@ class Controller:
         cfg = self.store.config()
         if operation == "server.connect":
             progress(20, "Checking SSH host keys and credentials")
-            server = self.remote.connect(payload)
-            cfg["servers"].append(server)
+            identity = str(payload.get("id", ""))
+            previous = next((x for x in cfg["servers"] if x["id"] == identity), None)
+            if identity and previous is None:
+                raise PanelError("Foreign server not found.", "not_found")
+            credentials = {key: payload[key] for key in ("host", "port", "username", "name", "password", "private_key") if key in payload}
+            if resolve(credentials.get("host", "")) in self.engine.interfaces():
+                raise PanelError("The foreign server must be a different host.", "loop")
+            if previous and (self.paths.ssh / (identity + ".pub")).is_file():
+                credentials["_revoke_key"] = (self.paths.ssh / (identity + ".pub")).read_text()
+            server = self.remote.connect(credentials)
+            if previous:
+                temporary = server["id"]
+                for suffix in ("", ".pub", ".known"):
+                    source = self.paths.ssh / (temporary + suffix)
+                    if source.exists():
+                        os.replace(source, self.paths.ssh / (identity + suffix))
+                server["id"] = identity
+                cfg["servers"] = [server if x["id"] == identity else x for x in cfg["servers"]]
+                if self.pending.exists():
+                    journal = json.loads(self.pending.read_text())
+                    for key in ("previous", "updated"):
+                        journal[key]["servers"] = [server if x["id"] == identity else x for x in journal[key]["servers"]]
+                    atomic_json(self.pending, journal)
+            else:
+                cfg["servers"].append(server)
+            for c in cfg["connections"]:
+                if c["kind"] != "gre" or c.get("server_id") or not c.get("legacy_pair"):
+                    continue
+                if c["resolved_ip"] not in server.get("addresses", [server["resolved_ip"]]):
+                    continue
+                profile = next((p for p in server.get("service_profiles", []) if p["gre_id"] == gre_for(c)["id"]), None)
+                if profile:
+                    c["service_ip"], c["server_id"] = profile["service_ip"], server["id"]
             self.store.save(cfg)
             self.store.event("success", "Foreign server connected with a restricted management key.")
             return {"server": server["id"]}
@@ -236,6 +269,8 @@ class Controller:
         if operation == "settings.save":
             previous = copy.deepcopy(cfg["settings"])
             cfg["settings"] = settings_update(previous, payload)
+            with contextlib.suppress(PanelError):
+                cfg["settings"]["ssh_ports"] = sorted(set(cfg["settings"]["ssh_ports"] + discovered_ssh_ports()))
             if cfg["settings"]["port"] != previous["port"]:
                 with socket.socket() as probe:
                     try:
@@ -388,6 +423,9 @@ class Controller:
 
     def state(self, session):
         cfg = self.store.config()
+        if self.stats_cache is None or time.time() - self.stats_cached_at >= 30:
+            self.stats_cache = self.store.stats()
+            self.stats_cached_at = time.time()
         for c in cfg["connections"]:
             c["rate"] = self.rates.get((c["id"], "all"), {"up": 0, "down": 0})
             c["health"] = self.health.get(c["id"])
@@ -400,7 +438,7 @@ class Controller:
         except PanelError:
             addresses = {}
         return dict(cfg, version=__version__, csrf=session["csrf"], addresses=addresses,
-                    stats=self.store.stats(), events=self.store.events(), sampled_at=self.last_sample,
+                    stats=self.stats_cache, events=self.store.events(), sampled_at=self.last_sample,
                     recovering=self.pending.exists(), backups=[p.name for p in sorted(self.paths.backups.glob("backup-*.zip"), reverse=True)])
 
     def request(self, route, payload, token=None, csrf=None, peer="local"):

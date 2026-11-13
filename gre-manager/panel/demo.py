@@ -49,6 +49,13 @@ class LocalBackend:
         except Exception as error: return {"ok": False, "error": str(error), "code": getattr(error, "code", "system"), "field": getattr(error, "field", None)}
 
 
+class DemoController(Controller):
+    def schedule_web_restart(self): pass
+    def operation(self, operation, payload, progress):
+        if operation == "update": return {"scheduled": True}
+        return super().operation(operation, payload, progress)
+
+
 def seed(store, controller):
     cfg = store.config()
     server = controller.remote.connect({"name": "آلمان · فرانکفورت", "host": "de.example.com"})
@@ -82,7 +89,7 @@ def main():
     paths = Paths(home)
     store = Store(paths)
     store.set_password(os.environ.get("GRE_PANEL_PASSWORD", "Demo-Panel-2026!"))
-    controller = Controller(store, DemoEngine(), DemoRemote(paths))
+    controller = DemoController(store, DemoEngine(), DemoRemote(paths))
     if args.seed and not store.config()["connections"]: seed(store, controller)
     controller.collect()
     def sample():

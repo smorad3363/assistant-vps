@@ -134,7 +134,7 @@ class Store:
             if row and row["failures"] >= 8 and now - row["last"] < 300:
                 raise PanelError("Too many login attempts. Try again in five minutes.", "rate_limit")
             good = check_password(password, self.secret("password") or "")
-            good = hmac.compare_digest(str(username), self.config()["settings"]["username"]) and good
+            good = hmac.compare_digest(str(username).encode(), self.config()["settings"]["username"].encode()) and good
             if not good:
                 failures = row["failures"] + 1 if row and now - row["last"] < 300 else 1
                 db.execute("INSERT OR REPLACE INTO attempts VALUES(?,?,?)", (peer, failures, now))
@@ -152,7 +152,7 @@ class Store:
             row = db.execute("SELECT * FROM sessions WHERE token=? AND expires>?", (digest, time.time())).fetchone()
         if not row:
             raise PanelError("Please sign in.", "auth")
-        if csrf is not None and not hmac.compare_digest(str(csrf), row["csrf"]):
+        if csrf is not None and not hmac.compare_digest(str(csrf).encode(), row["csrf"].encode()):
             raise PanelError("The request token expired. Reload the page.", "csrf")
         return dict(row)
 
@@ -203,12 +203,22 @@ class Store:
         with self.database() as db:
             totals = [dict(x) for x in db.execute("SELECT * FROM totals WHERE 1=1" + clauses, args)]
             # Times are stored in UTC; the browser labels them in the configured zone.
-            points = [dict(x) for x in db.execute("SELECT at,SUM(up) AS up,SUM(down) AS down FROM samples WHERE port='all' AND at>=?" + clauses + " GROUP BY at ORDER BY at", [now - hours * 3600] + args)]
-            series = [dict(x) for x in db.execute("SELECT at,identity,up,down FROM samples WHERE port='all' AND at>=?" + clauses + " ORDER BY at", [now - hours * 3600] + args)]
+            points = [dict(x) for x in db.execute("SELECT (at/300)*300 AS at,SUM(up) AS up,SUM(down) AS down FROM samples WHERE port='all' AND at>=?" + clauses + " GROUP BY (at/300) ORDER BY at", [now - hours * 3600] + args)]
+            series = [dict(x) for x in db.execute("SELECT (at/300)*300 AS at,identity,SUM(up) AS up,SUM(down) AS down FROM samples WHERE port='all' AND at>=?" + clauses + " GROUP BY (at/300),identity ORDER BY at", [now - hours * 3600] + args)]
             from datetime import datetime
             from zoneinfo import ZoneInfo
             midnight = datetime.fromtimestamp(now, ZoneInfo("Asia/Tehran")).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
             by_day = [dict(x) for x in db.execute("SELECT identity,SUM(up) AS up,SUM(down) AS down FROM samples WHERE port='all' AND at>=?" + clauses + " GROUP BY identity", [midnight] + args)]
+        if identity is None:
+            from collections import defaultdict
+            kinds = {c["id"]: c["kind"] for c in self.config()["connections"]}
+            grouped = defaultdict(lambda: [0, 0])
+            for row in series:
+                kind = kinds.get(row["identity"])
+                if kind:
+                    grouped[(row["at"], kind)][0] += row["up"]
+                    grouped[(row["at"], kind)][1] += row["down"]
+            series = [dict(at=at, kind=kind, up=values[0], down=values[1]) for (at, kind), values in sorted(grouped.items())]
         return {"totals": totals, "points": points, "series": series, "today": by_day}
 
     def prune(self):

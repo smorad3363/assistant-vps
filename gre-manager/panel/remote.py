@@ -26,13 +26,17 @@ def server_metadata(data):
             "fingerprints": [str(x)[:128] for x in data.get("fingerprints", [])[:10]]}
 
 BOOTSTRAP = r'''
-import base64,json,os,pathlib,subprocess,sys
+import base64,fcntl,json,os,pathlib,subprocess,sys,tempfile
 if os.geteuid()!=0: raise SystemExit("Root or passwordless sudo is required for initial setup.")
 payload=json.load(sys.stdin)
+pathlib.Path('/etc/gremgr').mkdir(parents=True,exist_ok=True,mode=0o700)
+network_lock=open('/etc/gremgr/network.lock','a');fcntl.flock(network_lock,fcntl.LOCK_EX)
 base=pathlib.Path('/opt/gremgr-peer/panel');base.mkdir(parents=True,exist_ok=True,mode=0o755)
 for name,content in payload['files'].items():
  if name not in ('__init__.py','model.py','store.py','engine.py','agent.py'): raise SystemExit('Invalid package')
- p=base/name;p.write_bytes(base64.b64decode(content));p.chmod(0o644)
+ p=base/name
+ with tempfile.NamedTemporaryFile(dir=base,delete=False) as staged: staged.write(base64.b64decode(content));temporary=pathlib.Path(staged.name)
+ temporary.chmod(0o644);temporary.replace(p)
 wrapper=pathlib.Path('/usr/local/sbin/gremgr-peer')
 wrapper.write_text('#!/bin/sh\ncd /opt/gremgr-peer\nexec /usr/bin/python3 -m panel.agent "$@"\n');wrapper.chmod(0o755)
 user=payload['username']
@@ -83,7 +87,7 @@ class Remote:
         known.write_text("\n".join(lines) + "\n")
         os.chmod(known, 0o600)
         key = self.paths.ssh / server["id"]
-        run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key)
+        run("ssh-keygen", "-q", "-t", "ed25519", "-C", "gremgr:" + server["id"], "-N", "", "-f", key)
         fingerprints = []
         for line in lines:
             parts = line.split()
@@ -94,7 +98,7 @@ class Remote:
         bundle = {}
         for name in ("__init__.py", "model.py", "store.py", "engine.py", "agent.py"):
             bundle[name] = base64.b64encode((Path(__file__).parent / name).read_bytes()).decode()
-        content = json.dumps({"files": bundle, "username": user, "public_key": key.with_suffix(".pub").read_text()})
+        content = json.dumps({"files": bundle, "username": user, "public_key": key.with_suffix(".pub").read_text(), "revoke_key": data.get("_revoke_key", "")})
         try:
             with tempfile.TemporaryDirectory(dir=self.paths.ssh) as temporary:
                 initial_key = Path(temporary) / "initial"
@@ -123,7 +127,11 @@ class Remote:
                     result = run(*options[:-1], "-o", "BatchMode=yes", options[-1], command, input=content, check=False, timeout=90)
                 if result.returncode:
                     raise PanelError("SSH setup failed. Check the credentials and root/passwordless sudo access.", "ssh")
-            self.call(server, {"action": "status"})
+            status = self.call(server, {"action": "status"})
+            server["addresses"] = [address(x) for x in status.get("addresses", {})][:128]
+            server["service_profiles"] = [{"gre_id": str(x["gre_id"]), "service_ip": address(x["service_ip"]), "mtu": integer(x["mtu"], 576, 1476, "mtu")} for x in status.get("pair_profiles", [])[:128]]
+            if data.get("_revoke_key"):
+                self.call(server, {"action": "revoke-key", "username": user, "key": data["_revoke_key"]})
         except Exception:
             for path in (key, key.with_suffix(".pub"), known):
                 path.unlink(missing_ok=True)
@@ -137,14 +145,14 @@ class Remote:
             raise PanelError("Reconnect this foreign server; its private key is not present.", "ssh_key")
         args = self._options(server, key)
         result = run(*args[:-1], "-o", "BatchMode=yes", args[-1], input=json.dumps(request), check=False, timeout=timeout)
-        if result.returncode:
-            raise PanelError("The foreign SSH operation failed. Its previous configuration is retained or rolled back automatically.", "ssh")
         try:
             response = json.loads(result.stdout)
         except ValueError:
-            raise PanelError("The foreign helper returned an invalid response.", "ssh")
+            raise PanelError("The foreign SSH operation failed. Check SSH availability and the saved host key.", "ssh")
         if not response.get("ok"):
             raise PanelError(response.get("error", "The foreign setup failed."), response.get("code", "ssh"))
+        if result.returncode:
+            raise PanelError("The foreign helper exited unsuccessfully.", "ssh")
         return response.get("result", {})
 
     def prepare(self, server, connection, remove=False):

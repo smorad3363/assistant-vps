@@ -184,7 +184,7 @@ function detailsFor(c) {
 function renderChart(ids) {
   const target=$('#traffic-chart');
   // State also includes per-connection points so the two pages never mix traffic.
-  const selected=state.stats.series?.filter(x=>ids.has(x.identity)) || [];
+  const selected=state.stats.series?.filter(x=>x.kind===page) || [];
   const grouped=new Map();
   for(const p of selected){const x=grouped.get(p.at)||{at:p.at,up:0,down:0};x.up+=p.up;x.down+=p.down;grouped.set(p.at,x);}
   const points=[...grouped.values()].sort((a,b)=>a.at-b.at);
@@ -195,7 +195,7 @@ function renderChart(ids) {
   const line=key=>points.map((p,i)=>(i?'L':'M')+x(p.at).toFixed(1)+','+y(p[key]).toFixed(1)).join(' ');
   const ticks=[0,.5,1].map(f=>`<line x1="${left}" x2="${W-right}" y1="${y(max*f)}" y2="${y(max*f)}" stroke="#2b3830" stroke-dasharray="3 5"/><text x="${left-9}" y="${y(max*f)+3}" text-anchor="end">${esc(bytes(max*f))}</text>`).join('');
   const times=[0,.25,.5,.75,1].map(f=>`<text x="${x(start+(end-start)*f)}" y="${H-2}" text-anchor="${f===0?'start':f===1?'end':'middle'}">${esc(when(start+(end-start)*f))}</text>`).join('');
-  target.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="نمودار حجم ارسال و دریافت در ۲۴ ساعت گذشته؛ واحد بایت در دقیقه" preserveAspectRatio="none">${ticks}<path d="${line('down')}" fill="none" stroke="#9ce0c4" stroke-width="1.8" vector-effect="non-scaling-stroke"/><path d="${line('up')}" fill="none" stroke="#9baed1" stroke-width="1.5" vector-effect="non-scaling-stroke"/>${times}</svg>`;
+  target.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="نمودار حجم ارسال و دریافت در ۲۴ ساعت گذشته؛ واحد بایت در هر پنج دقیقه" preserveAspectRatio="none">${ticks}<path d="${line('down')}" fill="none" stroke="#9ce0c4" stroke-width="1.8" vector-effect="non-scaling-stroke"/><path d="${line('up')}" fill="none" stroke="#9baed1" stroke-width="1.5" vector-effect="non-scaling-stroke"/>${times}</svg>`;
 }
 function renderEvents() {
   $('#events-list').innerHTML=state.events.length?state.events.slice(0,5).map(x=>`<div class="event ${esc(x.kind)}"><i class="dot"></i><span class="event-message">${esc(eventText(x.message))}</span><time>${when(x.at)}</time></div>`).join(''):'<p class="empty-line">رویداد تازه‌ای ثبت نشده است.</p>';
@@ -203,7 +203,7 @@ function renderEvents() {
 function renderSettings() {
   const form=$('#settings-form');
   if(!form.dataset.dirty && !form.contains(document.activeElement))for(const [key,value]of Object.entries(state.settings)){const el=form.elements[key];if(!el)continue;if(el.type==='checkbox')el.checked=value;else el.value=Array.isArray(value)?value.join(','):value;}
-  $('#server-list').innerHTML=state.servers.length?state.servers.map(s=>`<div class="server-item" data-server="${s.id}"><div class="connection-avatar">${icon('server')}</div><div class="server-info"><strong>${esc(s.name)}</strong><small dir="ltr">${esc(s.host)}:${esc(s.port)} · ${esc(s.username)}</small><span class="status ${s.key_ready?'':'warning'}"><i></i>${s.key_ready?'کلید مدیریت آماده است':'نیاز به اتصال مجدد'}</span><details><summary>اثر انگشت سرور</summary><bdi dir="ltr">${(s.fingerprints||[]).map(esc).join('<br>')}</bdi></details></div><button class="icon-button" data-action="delete-server" aria-label="حذف سرور ${esc(s.name)}">${icon('trash')}</button></div>`).join(''):'<p class="empty-line">سروری برای مدیریت GRE اضافه نشده است.</p>';
+  $('#server-list').innerHTML=state.servers.length?state.servers.map(s=>`<div class="server-item" data-server="${s.id}"><div class="connection-avatar">${icon('server')}</div><div class="server-info"><strong>${esc(s.name)}</strong><small dir="ltr">${esc(s.host)}:${esc(s.port)} · ${esc(s.username)}</small><span class="status ${s.key_ready?'':'warning'}"><i></i>${s.key_ready?'کلید مدیریت آماده است':'نیاز به اتصال مجدد'}</span><details><summary>اثر انگشت سرور</summary><bdi dir="ltr">${(s.fingerprints||[]).map(esc).join('<br>')}</bdi></details></div><button class="icon-button" data-action="edit-server" aria-label="ویرایش اتصال سرور ${esc(s.name)}">${icon('edit')}</button><button class="icon-button" data-action="delete-server" aria-label="حذف سرور ${esc(s.name)}">${icon('trash')}</button></div>`).join(''):'<p class="empty-line">سروری برای مدیریت GRE اضافه نشده است.</p>';
   $('#backup-list').innerHTML=state.backups.length?state.backups.map(name=>`<div class="backup-row"><code dir="ltr">${esc(name)}</code><a class="button compact secondary" href="/api/backup.download?filename=${encodeURIComponent(name)}" download>${icon('down')}دانلود</a></div>`).join(''):'<p class="empty-line">بکاپ‌ها پس از اولین ثبت یا پشتیبان‌گیری روزانه اینجا نمایش داده می‌شوند.</p>';
 }
 
@@ -316,7 +316,8 @@ document.addEventListener('click',async e=>{
     case 'probe':await runJob('connection.probe',{id:c.id});break;
     case 'toggle':if(!c.enabled||await confirmAction('توقف اتصال',`اتصال «${c.name}» متوقف شود؟ تنظیمات و آمار آن باقی می‌مانند.`,'توقف'))await runJob('connection.toggle',{id:c.id});break;
     case 'delete':if(await confirmAction('حذف اتصال',`اتصال «${c.name}» و قوانین متعلق به آن حذف شوند؟`,'حذف اتصال'))await runJob('connection.delete',{id:c.id});break;
-    case 'add-server':$('#server-form').reset();$('.form-error',$('#server-form')).textContent='';$('#server-dialog').showModal();break;
+    case 'add-server':$('#server-form').reset();$('#server-dialog h2').textContent='اتصال سرور';$('.form-error',$('#server-form')).textContent='';$('#server-dialog').showModal();break;
+    case 'edit-server':{const server=state.servers.find(s=>s.id===action.closest('[data-server]').dataset.server);const form=$('#server-form');form.reset();for(const key of ['id','name','host','port','username'])form.elements[key].value=server[key];$('#server-dialog h2').textContent='ویرایش اتصال SSH';$('.form-error',form).textContent='';$('#server-dialog').showModal();break;}
     case 'delete-server':{const id=action.closest('[data-server]').dataset.server;if(await confirmAction('حذف سرور','سرور از فهرست مدیریت حذف شود؟ ابتدا اتصال‌های وابسته باید حذف یا منتقل شوند.','حذف'))await runJob('server.delete',{id});break;}
     case 'remove-limit':action.closest('.port-limit-row').remove();break;
     case 'backup':await runJob('backup.create',{});break;
@@ -332,7 +333,12 @@ $('#backup-file').addEventListener('change',async e=>{
     if(file.size>32*1024*1024)throw new Error('backup');
     const data=new Uint8Array(await file.arrayBuffer());let text='';for(let i=0;i<data.length;i+=8192)text+=String.fromCharCode(...data.subarray(i,i+8192));const content=btoa(text);
     const preview=await api('backup.preview',{content});
-    if(await confirmAction('بازیابی بکاپ',`${fa.format(preview.connections)} اتصال و ${fa.format(preview.servers)} سرور بازیابی می‌شوند. IPهای ورودی فایل: ${preview.addresses.join('، ')}. این IPها باید روی همین سرور فعال باشند. تنظیمات فعلی پیش از اعمال بکاپ گرفته می‌شوند.`,'بازیابی',false))await runJob('backup.restore',{content});
+    const decision=confirmAction('بازیابی بکاپ',`${fa.format(preview.connections)} اتصال و ${fa.format(preview.servers)} سرور بازیابی می‌شوند. IP ورودی هر اتصال را با این سرور تطبیق بده. از تنظیمات فعلی بکاپ گرفته می‌شود.`,'بازیابی',false);
+    const mapping=document.createElement('div');mapping.id='restore-addresses';
+    mapping.innerHTML=preview.addresses.map(ip=>`<label>IP ورودی <bdi dir="ltr">${esc(ip)}</bdi><select data-source-ip="${esc(ip)}" dir="ltr">${Object.keys(state.addresses).map(local=>`<option value="${esc(local)}" ${local===ip?'selected':''}>${esc(local)}</option>`).join('')}</select></label>`).join('');
+    $('#confirm-text').after(mapping);
+    const accepted=await decision,address_map=Object.fromEntries($$('select',mapping).map(x=>[x.dataset.sourceIp,x.value]));mapping.remove();
+    if(accepted)await runJob('backup.restore',{content,address_map});
   }catch(error){showToast(failText(error));}finally{e.target.value='';}
 });
 window.addEventListener('hashchange',navigate);navigate();refresh();

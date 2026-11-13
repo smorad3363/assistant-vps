@@ -66,7 +66,31 @@ def action(paths, request, engine=None):
     peers = read_peers(paths)
     operation = request.get("action")
     if operation == "status":
-        return {"version": "1.0.0", "addresses": engine.interfaces(), "peers": len(peers)}
+        return {"version": "1.0.0", "addresses": engine.interfaces(), "peers": len(peers),
+                "pair_profiles": [{"gre_id": x["gre"]["id"], "service_ip": x["service_ip"], "mtu": x["gre"]["mtu"]} for x in peers]}
+    if operation == "revoke-key":
+        import pwd
+        import tempfile
+        username = str(request.get("username", ""))
+        parts = str(request.get("key", "")).split()
+        if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username) or len(parts) < 2 or len(parts[1]) > 4096:
+            raise PanelError("Invalid management public key.")
+        path = Path(pwd.getpwnam(username).pw_dir) / ".ssh" / "authorized_keys"
+        content = path.read_text()
+        filtered = "".join(line + "\n" for line in content.splitlines() if not (parts[1] in line and "gremgr-peer" in line and "command=" in line))
+        stat = path.stat()
+        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".gremgr-key-")
+        try:
+            os.fchmod(fd, 0o600)
+            os.fchown(fd, stat.st_uid, stat.st_gid)
+            with os.fdopen(fd, "w") as out:
+                out.write(filtered)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+        return {"revoked": True}
     if operation == "prepare":
         changes = request.get("changes", [{"peer": request.get("peer"), "remove": request.get("remove", False)}])
         if not isinstance(changes, list) or not 1 <= len(changes) <= 128:
