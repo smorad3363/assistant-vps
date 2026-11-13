@@ -154,7 +154,7 @@ function renderConnections(items) {
   for (const c of items) {
     let row = $(`.connection[data-id="${c.id}"]`, list);
     if (!row) {row=document.createElement('article');row.className='connection';row.dataset.id=c.id;list.append(row);}
-    if (row.contains(document.activeElement)) continue;
+    const focusAction = row.contains(document.activeElement) ? document.activeElement.dataset.action : null;
     row.classList.toggle('paused',!c.enabled);
     const [style,status] = statusFor(c), total = totalFor(c.id);
     row.innerHTML = `<div class="connection-row"><div class="connection-title"><div class="connection-avatar">${icon(c.kind==='gre'?'link':'route')}</div><div><h3 class="connection-name">${esc(c.name)}</h3><div class="connection-meta"><span class="status ${style}"><i></i>${status}</span>${c.kind==='gre'?`<code dir="ltr">MTU ${esc(c.mtu)}</code>`:`<code dir="ltr">${c.protocols.map(x=>x.toUpperCase()).join(' + ')}</code>`}</div></div></div>
@@ -164,6 +164,7 @@ function renderConnections(items) {
       <div class="usage-cell"><span class="data-label">مصرف کل</span><span class="data-value" dir="ltr">${bytes(total.up+total.down)}</span></div>
       <div class="row-actions"><button class="icon-button probe-button" data-action="probe" aria-label="تست اتصال ${esc(c.name)}" title="تست اتصال">${icon('refresh')}</button><button class="icon-button" data-action="edit" aria-label="ویرایش ${esc(c.name)}" title="ویرایش">${icon('edit')}</button><button class="icon-button" data-action="toggle" aria-label="${c.enabled?'توقف':'راه‌اندازی'} ${esc(c.name)}" title="${c.enabled?'توقف':'راه‌اندازی'}">${icon('power')}</button><button class="icon-button delete" data-action="delete" aria-label="حذف ${esc(c.name)}" title="حذف">${icon('trash')}</button><button class="icon-button expand-button" data-action="expand" aria-label="جزئیات ${esc(c.name)}" aria-expanded="${expanded.has(c.id)}">${icon('chevron')}</button></div></div>
       <div class="connection-details" ${expanded.has(c.id)?'':'hidden'}>${detailsFor(c)}</div>`;
+    if (focusAction) row.querySelector(`[data-action="${focusAction}"]`)?.focus({preventScroll:true});
   }
 }
 

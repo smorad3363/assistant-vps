@@ -125,12 +125,11 @@ def build_rules(config, interfaces, docker_udp=False):
                 add("filter", "GMP_INPUT", "-i", t, "-s", peer, "-d", c["service_ip"], "-p", proto,
                     "-m", "conntrack", "--ctstate", "DNAT", "-j", "ACCEPT")
                 if proto == "udp" and c["service_ip"] in interfaces:
-                    # A wildcard-bound UDP application can otherwise select the
-                    # GRE address as reply source, missing the local DNAT tuple.
-                    # Local-input SNAT makes the reply choose the service address;
-                    # conntrack then reverses both translations back through GRE.
+                    # The owned GRE local route prefers the service IP below.
+                    # INPUT SNAT to that GRE address lets wildcard UDP replies
+                    # select the service source and match the tracked DNAT tuple.
                     add("nat", "GMP_LOCAL", "-i", t, "-s", peer, "-d", c["service_ip"], "-p", "udp",
-                        "-m", "conntrack", "--ctstate", "DNAT", "-j", "SNAT", "--to-source", c["service_ip"])
+                        "-m", "conntrack", "--ctstate", "DNAT", "-j", "SNAT", "--to-source", g["local_tun"])
                 add("filter", "GMP_FWD", "-i", t, "-s", peer, "-p", proto, "-m", "conntrack", "--ctstate", "DNAT", "-j", "ACCEPT")
                 add("filter", "GMP_FWD", "-o", t, "-d", peer, "-p", proto, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
                 if c["service_ip"] not in interfaces:
@@ -284,6 +283,7 @@ class Engine:
         try:
             for g in self.gre_devices(config):
                 self.ensure_gre(g, interfaces)
+            self.sync_reply_routes(config, interfaces)
             if any(x.get("enabled", True) for x in config["connections"]):
                 self.run("sysctl", "-qw", "net.ipv4.ip_forward=1")
             self.restore_owned(build_rules(config, interfaces, self.docker_udp()))
@@ -291,6 +291,7 @@ class Engine:
             with contextlib.suppress(Exception):
                 for g in old_gre.values():
                     self.ensure_gre(g, interfaces)
+                self.sync_reply_routes(previous, interfaces)
                 self.restore_owned(build_rules(previous, interfaces, self.docker_udp()))
             for g in self.gre_devices(config):
                 if g["tunnel"] not in old_gre:
@@ -300,6 +301,17 @@ class Engine:
         for name, g in old_gre.items():
             if name not in wanted:
                 self.remove_gre(g)
+
+    def sync_reply_routes(self, config, interfaces):
+        for c in config["connections"]:
+            if c["kind"] != "peer" or not c.get("enabled", True):
+                continue
+            g = c["gre"]
+            source = c["service_ip"] if c["service_ip"] in interfaces else g["local_tun"]
+            # Changes only the host route created for our own GRE address.
+            # Public service-address routes and the default route are untouched.
+            self.run("ip", "route", "replace", "local", g["local_tun"] + "/32", "dev", g["tunnel"],
+                     "table", "local", "src", source, "proto", "kernel")
 
     @staticmethod
     def gre_devices(config):

@@ -80,7 +80,8 @@ chmod 755 "$release/gremgr.sh" "$release/legacy-restore.sh" "$release/install.sh
 cp "$work/release.json" "$release/release.json"
 backup="/etc/gremgr/backups/install-$(date +%Y%m%d-%H%M%S)-$$"
 install -d -m 700 "$backup"
-old_release=$(readlink -f /opt/gremgr/current 2>/dev/null || true)
+old_release=""
+if [[ -e /opt/gremgr/current ]]; then old_release=$(readlink -f /opt/gremgr/current); fi
 for target in /usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-worker.service /etc/systemd/system/gremgr-web.service; do
   [[ ! -e "$target" ]] || cp -aL "$target" "$backup/$(basename "$target")"
 done
