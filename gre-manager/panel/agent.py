@@ -117,7 +117,7 @@ def action(paths, request, engine=None):
             if not remove:
                 updated.append(peer)
         try:
-            run("systemd-run", "--quiet", "--unit=gremgr-peer-rollback-" + identity, "--on-active=120s",
+            run("systemd-run", "--quiet", "--unit=gremgr-peer-rollback-" + identity, "--on-active=120s", "--timer-property=AccuracySec=1s",
                 "/usr/local/sbin/gremgr-peer", "--recover", identity)
             engine.apply(combined(paths, updated), combined(paths, peers))
             atomic_json(paths.etc / "peers.json", updated)

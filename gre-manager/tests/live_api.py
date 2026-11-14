@@ -42,7 +42,16 @@ class API:
     def job(self, route, payload, fail=False):
         job = self.request(route, payload)["job"]
         for _ in range(300):
-            result = self.request("job?id=" + job)
+            try:
+                result = self.request("job?id=" + job)
+            except OSError:
+                time.sleep(1)
+                continue
+            except RuntimeError as error:
+                if "HTTP 503" not in str(error):
+                    raise
+                time.sleep(1)
+                continue
             if result["status"] in ("done", "failed", "interrupted"):
                 if fail:
                     assert result["status"] == "failed", result

@@ -291,6 +291,9 @@ class Controller:
                 cfg["settings"]["ssh_ports"] = sorted(set(cfg["settings"]["ssh_ports"] + discovered_ssh_ports()))
             if cfg["settings"]["port"] != previous["port"]:
                 with socket.socket() as probe:
+                    # Match HTTPServer's reuse behavior: TIME_WAIT from a
+                    # previous panel port must not look like a live listener.
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     try:
                         probe.bind(("0.0.0.0", cfg["settings"]["port"]))
                     except OSError:
@@ -366,7 +369,7 @@ class Controller:
             run("systemctl", "start", "--no-block", "gremgr-certificate.service")
             return {"scheduled": True}
         if operation == "update":
-            run("systemd-run", "--quiet", "--unit=gremgr-update-" + uuid.uuid4().hex[:8], "--on-active=3s",
+            run("systemd-run", "--quiet", "--unit=gremgr-update-" + uuid.uuid4().hex[:8], "--on-active=3s", "--timer-property=AccuracySec=1s",
                 "/bin/bash", "/opt/gremgr/current/install.sh", "--update-only")
             self.store.event("info", "Update scheduled. The management services will restart after package verification.")
             return {"scheduled": True}
@@ -450,7 +453,7 @@ class Controller:
 
     def schedule_web_restart(self):
         self.publish_web_config()
-        run("systemd-run", "--quiet", "--unit=gremgr-web-reload-" + uuid.uuid4().hex[:8], "--on-active=2s",
+        run("systemd-run", "--quiet", "--unit=gremgr-web-reload-" + uuid.uuid4().hex[:8], "--on-active=2s", "--timer-property=AccuracySec=1s",
             "/bin/systemctl", "restart", "gremgr-web.service")
 
     def state(self, session):

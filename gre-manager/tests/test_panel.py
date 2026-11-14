@@ -215,6 +215,27 @@ class TransactionTests(StoreTests):
         self.assertEqual(reply["peers"],0)
         self.assertFalse(pending.exists())
 
+    def test_panel_can_return_to_previous_port_with_time_wait_connections(self):
+        import socket
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            listener.bind(("127.0.0.1",0));port=listener.getsockname()[1];listener.listen()
+            with socket.socket() as client:
+                client.connect(("127.0.0.1",port));server,_=listener.accept()
+                server.close();client.recv(1)
+        self.controller.schedule_web_restart=lambda:None
+        self.controller.operation("settings.save",{"port":port},lambda *args:None)
+        self.assertEqual(self.store.config()["settings"]["port"],port)
+
+    def test_panel_still_rejects_an_actively_listening_port(self):
+        import socket
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            listener.bind(("127.0.0.1",0));port=listener.getsockname()[1];listener.listen()
+            with self.assertRaises(PanelError) as caught:
+                self.controller.operation("settings.save",{"port":port},lambda *args:None)
+            self.assertEqual(caught.exception.code,"port_in_use")
+
     def test_gre_peer_failure_does_not_leave_a_half_created_connection(self):
         cfg=self.store.config();server=self.remote.connect({"host":"203.0.113.10"});cfg["servers"].append(server);self.store.save(cfg)
         changed=copy.deepcopy(cfg);changed["connections"]=[make(kind="gre", server_id=server["id"])]
