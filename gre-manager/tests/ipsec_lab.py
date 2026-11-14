@@ -75,8 +75,10 @@ try:
             wait(lambda: 'gml-l2tp' in inside(p, 'ipsec', 'statusall', check=False).stdout, 'IPsec server')
     server, client = charons
     wait(lambda: 'INSTALLED, TRANSPORT' in inside(client, 'ipsec', 'statusall', check=False).stdout, 'IPsec transport SA')
-    (work / 'lns.options').write_text('auth\nname gml-l2tp\nrequire-mschap-v2\nmtu 1280\nmru 1280\n')
-    (work / 'lac.options').write_text('noauth\nuser gmluser\npassword isolated-ppp-secret\nnoipdefault\nnodefaultroute\nmtu 1280\nmru 1280\n')
+    (work / 'lns.options').write_text('auth\nname gml-l2tp\nrequire-mschap-v2\nmtu 1280\nmru 1280\ndebug\nlogfile '+str(work/'lns-ppp.log')+'\n')
+    # Wait for the server's LCP packet. This avoids the older userspace PTY
+    # implementation echoing a client's early LCP request during peer startup.
+    (work / 'lac.options').write_text('noauth\nuser gmluser\npassword isolated-ppp-secret\nnoipdefault\nnodefaultroute\nmtu 1280\nmru 1280\nsilent\ndebug\nlogfile '+str(work/'lac-ppp.log')+'\n')
     (work / 'lns.conf').write_text(f'[global]\nport=1701\n[lns default]\nip range=10.254.0.2-10.254.0.5\nlocal ip=10.254.0.1\nrequire authentication=yes\nrequire chap=yes\nrefuse pap=yes\nname=gml-l2tp\npppoptfile={work}/lns.options\nlength bit=yes\n')
     (work / 'lac.conf').write_text(f'[global]\nport=1701\n[lac gml]\nlns=192.0.2.10\npppoptfile={work}/lac.options\nname=gmluser\nautodial=yes\nredial=yes\nredial timeout=3\nmax redials=3\nlength bit=yes\n')
     for role, process in [('lns', server), ('lac', client)]:
