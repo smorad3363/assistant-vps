@@ -75,6 +75,27 @@ class PortManagementTests(unittest.TestCase):
         self.controller.allocate_gre(updated,cfg)
         self.assertEqual(updated["connections"][0]["gre_slot"],2)
 
+    def test_private_subnet_selection_skips_a_whole_existing_prefix(self):
+        c=self.make();prefix=ipaddress.ip_network(gre_for(c)["local_tun"]+"/16",strict=False)
+        self.engine.routes=lambda:[{"dst":str(prefix),"dev":"vpn-prefix"}]
+        cfg=self.store.config();cfg["connections"]=[c]
+        self.controller.allocate_gre(cfg,self.store.config())
+        self.assertNotIn(ipaddress.ip_address(gre_for(c)["local_tun"]),prefix)
+
+    def test_exhausted_private_pool_returns_conflict(self):
+        self.engine.routes=lambda:[{"dst":"10.0.0.0/8","dev":"private-network"}]
+        cfg=self.store.config();cfg["connections"]=[self.make()]
+        with self.assertRaises(PanelError) as caught:self.controller.allocate_gre(cfg,self.store.config())
+        self.assertEqual(caught.exception.code,"route_conflict")
+
+    def test_reactivating_an_old_paused_profile_checks_current_routes_again(self):
+        c=self.make(enabled=False);cfg=self.store.config();cfg["connections"]=[c]
+        subnet=str(ipaddress.ip_network(gre_for(c)["local_tun"]+"/30",strict=False))
+        self.engine.routes=lambda:[{"dst":subnet,"dev":"new-vpn"}]
+        updated=copy.deepcopy(cfg);updated["connections"][0]["enabled"]=True
+        self.controller.allocate_gre(updated,cfg)
+        self.assertEqual(updated["connections"][0]["gre_slot"],1)
+
     def test_one_second_rates_do_not_write_history_each_second(self):
         identity="abcdef0123";key=(identity,"all");port=(identity,"5100")
         counters={key:[100,200],port:[50,100]}
@@ -115,6 +136,16 @@ class PortManagementTests(unittest.TestCase):
         cleanup.assert_not_called()
         self.assertEqual(len(self.store.config()["servers"]),1)
 
+    def test_live_endpoint_requires_login_and_exposes_port_rates_without_csrf(self):
+        c=self.make();cfg=self.store.config();cfg["connections"]=[c];self.store.save(cfg)
+        self.store.set_password("local-live-test-password")
+        with self.assertRaises(PanelError):self.controller.request("live",{})
+        login=self.store.login("admin","local-live-test-password","test")
+        self.controller.rates={(c["id"],"all"):{"up":16000,"down":24000},(c["id"],"5100"):{"up":8000,"down":12000}}
+        live=self.controller.request("live",{},login["token"])
+        self.assertEqual(live["connections"][0]["port_rates"]["5100"]["up"],8000)
+        self.assertNotIn("csrf",live)
+
 
 class PeerCleanupTests(unittest.TestCase):
     def setUp(self):
@@ -151,6 +182,11 @@ class PeerCleanupTests(unittest.TestCase):
         (directory/"0123456789abcdef.json").write_text(json.dumps({"deadline":time.time()+120}))
         with self.assertRaises(PanelError) as caught:self.cleanup()
         self.assertEqual(caught.exception.code,"busy");self.assertIn("FIRST",self.auth.read_text())
+
+    def test_failed_uninstall_keeps_the_key_for_recovery(self):
+        with patch("panel.agent.other_managers",return_value=False),patch("panel.agent.uninstall_peer",side_effect=OSError("Injected failure")):
+            with self.assertRaises(OSError):self.cleanup()
+        self.assertIn("FIRST",self.auth.read_text())
 
     def test_legacy_management_key_in_another_unix_account_prevents_uninstall(self):
         from types import SimpleNamespace

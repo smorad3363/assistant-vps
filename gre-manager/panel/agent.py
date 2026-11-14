@@ -2,6 +2,7 @@
 import contextlib
 import fcntl
 import json
+import ipaddress
 import os
 import pwd
 from pathlib import Path
@@ -146,7 +147,8 @@ def action(paths, request, engine=None):
         return {"version": __version__, "addresses": engine.interfaces(), "peers": len(peers),
                 "routes": engine.routes(),
                 "pair_profiles": [{"gre_id": x["gre"]["id"], "service_ip": x["service_ip"], "mtu": x["gre"]["mtu"],
-                                   "slot": x["gre"].get("slot", 0)} for x in peers]}
+                                   "slot": x["gre"].get("slot", 0),
+                                   "private_subnet": str(ipaddress.ip_network(x["gre"]["local_tun"] + "/30", strict=False))} for x in peers]}
     if operation == "cleanup":
         path, blob = management_key(request)
         if not any(blob in line and "gremgr-peer" in line and "command=" in line for line in path.read_text().splitlines()):

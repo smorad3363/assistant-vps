@@ -91,18 +91,20 @@ class Controller:
             self.live_counters, self.live_epoch, self.last_sample = copy.deepcopy(counters), epoch, now
 
     def allocate_gre(self, updated, previous):
+        if not any(c["kind"] == "gre" and c.get("enabled", True) for c in updated["connections"]):
+            return
         servers = {s["id"]: s for s in updated["servers"]}
         local = self.engine.routes()
         remote = {}
         old = {c["id"]: c for c in previous["connections"]}
-        reserved = [ipaddress.ip_network(gre_for(old[c["id"]])["local_tun"] + "/30", strict=False)
-                    for c in updated["connections"] if c["kind"] == "gre" and c.get("enabled", True)
-                    and c["id"] in old and gre_for(old[c["id"]])["id"] == gre_for(c)["id"]]
+        reserved = {c["id"]: ipaddress.ip_network(gre_for(old[c["id"]])["local_tun"] + "/30", strict=False)
+                    for c in updated["connections"] if c["kind"] == "gre"
+                    and c["id"] in old and old[c["id"]]["kind"] == "gre" and gre_for(old[c["id"]])["id"] == gre_for(c)["id"]}
         for c in updated["connections"]:
             if c["kind"] != "gre" or not c.get("enabled", True):
                 continue
             before = old.get(c["id"])
-            if before and gre_for(before)["id"] == gre_for(c)["id"]:
+            if before and before["kind"] == "gre" and before.get("enabled", True) and gre_for(before)["id"] == gre_for(c)["id"]:
                 c["gre_slot"] = before.get("gre_slot", 0)
                 continue
             server = servers.get(c["server_id"])
@@ -114,14 +116,35 @@ class Controller:
             routes = local + status.get("routes", [])
             blocked = [ipaddress.ip_network(r["dst"], strict=False) for r in routes
                        if r.get("dev") != gre_for(c)["tunnel"]]
-            for offset in range(1 if profile else 4096):
-                c["gre_slot"] = (start + offset) % 262144
-                subnet = ipaddress.ip_network(gre_for(c)["local_tun"] + "/30", strict=False)
-                if not any(subnet.overlaps(n) for n in blocked + reserved):
-                    reserved.append(subnet)
-                    break
-            else:
+            blocked += [ipaddress.ip_network(p["private_subnet"], strict=False) for p in status.get("pair_profiles", [])
+                        if p["gre_id"] != gre_for(c)["id"] and p.get("private_subnet")]
+            blocked += [n for identity, n in reserved.items() if identity != c["id"]]
+            pool = ipaddress.ip_network("10.240.0.0/12")
+            origin = int(pool.network_address)
+            intervals = sorted((max(0, (int(n.network_address)-origin)//4), min(262143, (int(n.broadcast_address)-origin)//4))
+                               for n in blocked if n.overlaps(pool))
+            c["gre_slot"] = start
+            preferred = (int(ipaddress.ip_address(gre_for(c)["local_tun"]))-origin)//4
+            def available(first, last):
+                if first > last:
+                    return None
+                index = first
+                for lo, hi in intervals:
+                    if hi < index:
+                        continue
+                    if lo > index:
+                        break
+                    index = hi + 1
+                    if index > last:
+                        return None
+                return index
+            chosen = available(preferred, preferred if profile else 262143)
+            if chosen is None and not profile:
+                chosen = available(0, preferred-1)
+            if chosen is None:
                 raise PanelError("No free private GRE subnet was found on both endpoints.", "route_conflict")
+            c["gre_slot"] = (start + chosen - preferred) % 262144
+            reserved[c["id"]] = ipaddress.ip_network(gre_for(c)["local_tun"] + "/30", strict=False)
 
     def submit(self, operation, payload):
         identity = uuid.uuid4().hex[:16]

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import re
 import shutil
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 out=Path(os.environ.get("BROWSER_OUTPUT","test-output"));out.mkdir(parents=True,exist_ok=True)
 with sync_playwright() as p:
@@ -52,8 +52,8 @@ with sync_playwright() as p:
     page.locator('#connection-form button[type=submit]').click()
     row.locator('.port-traffic').wait_for(state='attached')
     row.locator('[data-action=expand]').click()
-    assert '5100 → 5000' in row.locator('.port-traffic').inner_text()
-    assert '3300 → 3000' in row.locator('.port-traffic').inner_text()
+    expect(row.locator('.port-traffic')).to_contain_text('5100 → 5000')
+    expect(row.locator('.port-traffic')).to_contain_text('3300 → 3000')
     page.wait_for_function("[...document.querySelectorAll('.port-traffic [data-live-port]')].some(x=>Number(x.textContent)>0)")
     row.locator('[data-action=edit]').click()
     assert rows.count()==2
@@ -96,6 +96,9 @@ with sync_playwright() as p:
         page.locator('#port-rows .port-map-row').nth(1).locator('[data-port-target]').fill('3000')
         assert not page.evaluate('document.querySelector("#connection-dialog").scrollWidth>window.innerWidth')
         page.screenshot(path=str(out/f'port-mappings-{width}.png'),full_page=True)
+        if os.environ.get('CI') and width==390:
+            import base64
+            print('PANEL_MAPPING_PREVIEW='+base64.b64encode(page.screenshot(type='jpeg',quality=65)).decode())
         page.locator('#connection-dialog [data-close]').first.click()
         page.locator('#connection-dialog').wait_for(state='hidden')
     page.emulate_media(reduced_motion='reduce')
