@@ -46,11 +46,15 @@ def inside(process, *args, check=True):
 
 
 charons = []
+ppp_rule = ['-i', 'ppp+', '-s', '10.254.0.2', '-d', '10.254.0.1', '-p', 'icmp', '-m', 'comment', '--comment', 'gremgr-isolated-ppp-test', '-j', 'ACCEPT']
 secrets = Path('/etc/ipsec.secrets')
 chap = Path('/etc/ppp/chap-secrets')
 old_secrets = secrets.read_bytes() if secrets.exists() else None
 old_chap = chap.read_bytes() if chap.exists() else None
 try:
+    # The tunnel manager forwards encrypted transport; VPN server firewall
+    # policy for decrypted PPP traffic belongs to this disposable service.
+    run('ip', 'netns', 'exec', 'gm-fo', 'iptables', '-I', 'INPUT', '1', *ppp_rule)
     # Each fixture starts fresh. Scope conntrack removal to these three test
     # namespaces and only IKE/L2TP ports; no host/global conntrack flush.
     for namespace in ('gm-ir', 'gm-fo', 'gm-client'):
@@ -91,6 +95,7 @@ except Exception:
             print(inside(p, 'ipsec', 'statusall', check=False).stdout)
     raise
 finally:
+    run('ip', 'netns', 'exec', 'gm-fo', 'iptables', '-D', 'INPUT', *ppp_rule, check=False)
     for p in reversed(charons):
         if p.poll() is None:
             inside(p, 'ipsec', 'stop', check=False)
