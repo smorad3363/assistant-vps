@@ -42,7 +42,7 @@ def wait(test, label, seconds=35):
 
 
 def inside(process, *args, check=True):
-    return run('nsenter', '-t', str(process.pid), '-m', '-n', *args, check=check)
+    return run('nsenter', '-t', str(process.pid), '-m', '-n', '-u', *args, check=check)
 
 
 charons = []
@@ -68,21 +68,23 @@ try:
     (work / 'server.conf').write_text(common + f' left={service}\n leftid={service}\n leftprotoport=17/1701\n right=%any\n rightid=gml-client\n rightprotoport=17/%any\n auto=add\n')
     (work / 'client.conf').write_text(common + f' left=192.0.2.30\n leftid=gml-client\n leftprotoport=17/1701\n right=192.0.2.10\n rightid={service}\n rightprotoport=17/1701\n auto=start\n')
     for role, namespace in [('server', 'gm-fo'), ('client', 'gm-client')]:
-        command = 'mount -t tmpfs tmpfs /run; exec ipsec start --nofork --conf ' + shlex.quote(str(work / (role + '.conf')))
-        p = spawn('ipsec-' + role, ['unshare', '--mount', '--propagation', 'private', 'ip', 'netns', 'exec', namespace, 'sh', '-c', command])
+        # pppd seeds its magic-number PRNG partly from the hostname. Give the
+        # endpoints distinct UTS hostnames, just as two actual VPSs have, so
+        # co-scheduled processes cannot negotiate identical random sequences.
+        command = 'hostname gml-' + role + '; mount -t tmpfs tmpfs /run; exec ipsec start --nofork --conf ' + shlex.quote(str(work / (role + '.conf')))
+        p = spawn('ipsec-' + role, ['unshare', '--mount', '--uts', '--propagation', 'private', 'ip', 'netns', 'exec', namespace, 'sh', '-c', command])
         charons.append(p)
         if role == 'server':
             wait(lambda: 'gml-l2tp' in inside(p, 'ipsec', 'statusall', check=False).stdout, 'IPsec server')
     server, client = charons
     wait(lambda: 'INSTALLED, TRANSPORT' in inside(client, 'ipsec', 'statusall', check=False).stdout, 'IPsec transport SA')
     (work / 'lns.options').write_text('auth\nname gml-l2tp\nrequire-mschap-v2\nmtu 1280\nmru 1280\ndebug\nlogfile '+str(work/'lns-ppp.log')+'\n')
-    # Wait for the server's LCP packet. This avoids the older userspace PTY
-    # implementation echoing a client's early LCP request during peer startup.
+    # The client waits for the server's initial LCP request.
     (work / 'lac.options').write_text('noauth\nuser gmluser\npassword isolated-ppp-secret\nnoipdefault\nnodefaultroute\nmtu 1280\nmru 1280\nsilent\ndebug\nlogfile '+str(work/'lac-ppp.log')+'\n')
     (work / 'lns.conf').write_text(f'[global]\nport=1701\n[lns default]\nip range=10.254.0.2-10.254.0.5\nlocal ip=10.254.0.1\nrequire authentication=yes\nrequire chap=yes\nrefuse pap=yes\nname=gml-l2tp\npppoptfile={work}/lns.options\nlength bit=yes\n')
     (work / 'lac.conf').write_text(f'[global]\nport=1701\n[lac gml]\nlns=192.0.2.10\npppoptfile={work}/lac.options\nname=gmluser\nautodial=yes\nredial=yes\nredial timeout=3\nmax redials=3\nlength bit=yes\n')
     for role, process in [('lns', server), ('lac', client)]:
-        spawn('l2tp-' + role, ['nsenter', '-t', str(process.pid), '-m', '-n', 'xl2tpd', '-D', '-c', str(work / (role + '.conf')), '-p', '/run/xl2tp-test.pid', '-C', '/run/xl2tp-test.control'])
+        spawn('l2tp-' + role, ['nsenter', '-t', str(process.pid), '-m', '-n', '-u', 'xl2tpd', '-D', '-c', str(work / (role + '.conf')), '-p', '/run/xl2tp-test.pid', '-C', '/run/xl2tp-test.control'])
     wait(lambda: inside(client, 'ping', '-c', '1', '-W', '1', '10.254.0.1', check=False).returncode == 0, 'L2TP/IPsec data')
     inside(client, 'ping', '-c', '10', '-i', '.1', '-s', '1000', '-W', '2', '10.254.0.1')
     status = inside(server, 'ipsec', 'statusall').stdout

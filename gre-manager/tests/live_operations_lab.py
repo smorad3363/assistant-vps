@@ -12,7 +12,7 @@ import time
 from live_api import API, peer_script
 
 parser=argparse.ArgumentParser()
-parser.add_argument('action',choices=('domain','peers','ports','tls','restart','watchdog','auth'))
+parser.add_argument('action',choices=('domain','peers','ports','tls','restart','watchdog','ssh','auth'))
 args=parser.parse_args()
 a=API()
 report=Path('/root/gremgr-operations-acceptance.json')
@@ -128,6 +128,40 @@ elif args.action=='watchdog':
         assert a.job('connection.probe',{'id':c['id']})['gre'] is True
         passed('watchdog restores the owned GRE state after three failed checks',{'seconds':round(time.time()-started),'event':event['message']})
     finally:subprocess.run(['ip','link','set','dev',device,'up'],check=True)
+elif args.action=='ssh':
+    initial=a.request('state');desired={c['id']:c['enabled'] for c in initial['connections']}
+    peer=initial['servers'][0]['resolved_ip']
+    body=r'''
+import subprocess,pathlib,os,shutil
+D=pathlib.Path('/root/gremgr-protocol-lab')
+if not shutil.which('sshpass'):subprocess.run(['apt-get','install','-y','-qq','sshpass'],stdout=subprocess.DEVNULL,check=True)
+pub=pathlib.Path('/etc/ssh/ssh_host_ed25519_key.pub').read_text().strip()
+known=D/'ssh-known';known.write_text(PEER+' '+pub+'\n['+PEER+']:2222 '+pub+'\n')
+fd,write=os.pipe();os.write(write,PASSWORD.encode()+b'\n');os.close(write)
+try:
+ p=subprocess.run(['ip','netns','exec','gml-client','sshpass','-d',str(fd),'ssh','-T','-p','2222','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+str(known),'-o','GlobalKnownHostsFile=/dev/null','-o','HostKeyAlias='+PEER,'-o','HostKeyAlgorithms=ssh-ed25519','-o','PreferredAuthentications=password','-o','PubkeyAuthentication=no','-o','ConnectTimeout=7','root@'+FRONT,'printf gremgr-ssh-payload'],pass_fds=(fd,),stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=20)
+finally:os.close(fd)
+assert p.returncode==0 and p.stdout=='gremgr-ssh-payload',p.stderr
+print('SSH password authentication and command payload passed')
+'''
+    try:
+        for kind in ('gre','direct'):
+            s=a.request('state');c=next(x for x in s['connections'] if x['kind']==kind)
+            for other in s['connections']:
+                if other['id']!=c['id'] and other['enabled']:a.job('connection.toggle',{'id':other['id']})
+            if not c['enabled']:a.job('connection.toggle',{'id':c['id']})
+            c=next(x for x in a.request('state')['connections'] if x['id']==c['id'])
+            a.job('connection.save',dict(c,ports='2222',target_port=22,port_map={},protocols=['tcp'],monitor_ports=[2222],port_limits={}))
+            try:
+                code='PASSWORD='+repr(os.environ['LAB_PEER_PASSWORD'])+'\nFRONT='+repr(a.host)+'\nPEER='+repr(peer)+'\n'+body
+                passed(kind+' SSH authentication, real command data and single input-to-target port mapping',peer_script(code).strip())
+            finally:a.job('connection.save',c)
+    finally:
+        current=a.request('state')['connections']
+        for c in current:
+            if c['enabled'] and not desired[c['id']]:a.job('connection.toggle',{'id':c['id']})
+        for c in a.request('state')['connections']:
+            if not c['enabled'] and desired[c['id']]:a.job('connection.toggle',{'id':c['id']})
 elif args.action=='auth':
     path=Path('/root/gremgr-test-login.json');old=json.loads(path.read_text())
     try:a.request('password',{'current':old['password'],'password':'short'})

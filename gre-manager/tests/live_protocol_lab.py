@@ -92,7 +92,7 @@ def prepare(front,l2tp=True):
  (D/'lac.conf').write_text(f'[global]\nport = 1701\n[lac gml]\nlns = {front}\npppoptfile = {D}/lac.options\nname = gmluser\nautodial = yes\nredial = yes\nredial timeout = 3\nmax redials = 5\nlength bit = yes\n')
  if l2tp:
   spawn('l2tp-server',['xl2tpd','-D','-c',str(D/'lns.conf'),'-p',str(D/'lns.pid'),'-C',str(D/'lns.control')])
-  spawn('l2tp-client',['ip','netns','exec',NS,'xl2tpd','-D','-c',str(D/'lac.conf'),'-p',str(D/'lac.pid'),'-C',str(D/'lac.control')])
+  spawn('l2tp-client',['unshare','--uts','ip','netns','exec',NS,'sh','-c','hostname gml-client; exec xl2tpd -D -c '+str(D/'lac.conf')+' -p '+str(D/'lac.pid')+' -C '+str(D/'lac.control')])
  return {'prepared':True,'frontend':front,'services':['WireGuard UDP/51820','OpenVPN UDP/1000','OpenVPN TCP/1443','L2TP PPP/1701']}
 def ipsec(front):
  # IKEv1 transport mode plus mandatory NAT-T, as used by L2TP/IPsec clients.
@@ -118,10 +118,10 @@ def ipsec(front):
  (D/'ipsec-client.conf').write_text(common+f' left=10.233.0.2\n leftid=gml-client\n leftprotoport=17/1701\n right={front}\n rightid={peer}\n rightprotoport=17/1701\n auto=start\n')
  spawn('ipsec-packet-trace',['timeout','20','tcpdump','-nni','any','-c','80','udp port 500 or udp port 4500'])
  spawn('ipsec-server',['ipsec','start','--nofork','--conf',str(D/'ipsec-server.conf')]);time.sleep(2)
- pid=spawn('ipsec-client',['unshare','--mount','--propagation','private','ip','netns','exec',NS,'sh','-c','mount -t tmpfs tmpfs /run; exec ipsec start --nofork --conf '+str(D/'ipsec-client.conf')])
+ pid=spawn('ipsec-client',['unshare','--mount','--uts','--propagation','private','ip','netns','exec',NS,'sh','-c','hostname gml-client; mount -t tmpfs tmpfs /run; exec ipsec start --nofork --conf '+str(D/'ipsec-client.conf')])
  wait(lambda:'INSTALLED, TRANSPORT' in run('nsenter','-t',str(pid),'-m','-n','ipsec','statusall',check=False).stdout,'IPsec transport SA',35)
  spawn('l2tp-server-ipsec',['xl2tpd','-D','-c',str(D/'lns.conf'),'-p',str(D/'lns.pid'),'-C',str(D/'lns.control')])
- spawn('l2tp-client-ipsec',['ip','netns','exec',NS,'xl2tpd','-D','-c',str(D/'lac.conf'),'-p',str(D/'lac.pid'),'-C',str(D/'lac.control')])
+ spawn('l2tp-client-ipsec',['nsenter','-t',str(pid),'-m','-n','-u','xl2tpd','-D','-c',str(D/'lac.conf'),'-p',str(D/'lac.pid'),'-C',str(D/'lac.control')])
  wait(lambda:run('ip','netns','exec',NS,'ping','-c','1','-W','1','10.65.0.1',check=False).returncode==0,'L2TP/IPsec data',35)
  stats=run('ipsec','statusall').stdout
  return {'passed':True,'nat_t': 'ESP in UDP' in stats or '4500' in stats,'sa': '\n'.join(x for x in stats.splitlines() if any(s in x for s in ['ESTABLISHED','INSTALLED, TRANSPORT','bytes_i','bytes_o']))}
