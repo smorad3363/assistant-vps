@@ -22,13 +22,23 @@ class DemoEngine:
         self.amount = 0
 
     def interfaces(self): return {"192.0.2.10": "demo0", "192.0.2.11": "demo0"}
+    def routes(self): return []
     def preflight(self, cfg): return self.interfaces()
     def apply(self, cfg, previous=None): self.current = copy.deepcopy(cfg)
     def retire_legacy(self, cfg): pass
     def choose_mtu(self, c, ceiling): return min(1380, ceiling)
     def counters(self):
         self.amount += 1000000
-        return ({(c["id"], "all"): [self.amount, self.amount * 4] for c in (self.current or {}).get("connections", []) if c["enabled"]}, self.epoch)
+        from .engine import monitored
+        cfg = self.current or {"connections": [], "settings": {}}
+        counters = {}
+        for c in cfg["connections"]:
+            if not c["enabled"]:
+                continue
+            counters[(c["id"], "all")] = [self.amount, self.amount * 4]
+            for port in monitored(c, cfg["settings"]):
+                counters[(c["id"], str(port))] = [self.amount // 4, self.amount]
+        return counters, self.epoch
     def probe(self, c): return {"checked": time.time(), "gre": True if c["kind"] == "gre" else None, "tcp": True, "udp": None, "latency_ms": 68.4, "loss_percent": 0}
 
 
@@ -37,6 +47,7 @@ class DemoRemote:
     def connect(self, data):
         identity = uuid.uuid4().hex[:10]
         (self.paths.ssh / identity).write_text("DEMO ONLY")
+        (self.paths.ssh / (identity + ".pub")).write_text("ssh-ed25519 DEMO-ONLY")
         return {"id": identity, "host": data["host"], "resolved_ip": "203.0.113.20", "username": data.get("username", "root"), "port": int(data.get("port", 22)), "name": data.get("name") or data["host"], "fingerprints": ["SHA256:DEMO-ONLY"], "key_ready": True}
     def batch(self, server, changes): return {"transaction": uuid.uuid4().hex[:16]}
     def call(self, server, request): return {}
@@ -94,8 +105,8 @@ def main():
     controller.collect()
     def sample():
         while True:
-            time.sleep(5)
-            with controller.lock: controller.collect()
+            time.sleep(1)
+            with controller.lock: controller.collect(persist=time.time()-controller.last_persist>=5)
     threading.Thread(target=sample, daemon=True).start()
     print(f"Development fixture only: http://127.0.0.1:{args.port}", flush=True)
     serve({"bind": "127.0.0.1", "port": args.port, "tls": False}, LocalBackend(controller))

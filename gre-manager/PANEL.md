@@ -48,12 +48,29 @@ displayed. Re-saving refreshes DNS, with the normal two-endpoint transaction.
 installation is required. The destination service and its firewall must already
 accept connections. Direct forwarding creates no encapsulation interface.
 
-Ports accept `all`, lists (`443,1000,51821`) or ranges (`8000-8100`). A single
-input port can use a different target port. Advanced per-port mappings such as
-`8080:80,8443:443` work with lists or `all`. All-port mode excludes panel/SSH and
+The main connection form has input/target rows. For example, one connection can
+map `5100` to `5000` and `3300` to `3000`; an empty target preserves the input port.
+Untranslated rows also accept lists (`443,1000,51821`) or ranges (`8000-8100`).
+The existing API `target_port` and `port_map` fields remain compatible.
+All-port mode supports optional mapping rows and excludes panel/SSH and
 custom reserved ports. Explicitly selecting a management port is rejected.
 The same input IP/protocol/port cannot belong to two enabled connections.
 Exclude a port from an existing all-port connection before assigning it elsewhere.
+One active GRE is used per endpoint pair. New endpoint pairs choose a private
+subnet that is free in both hosts' routing tables; existing GRE addresses stay
+fixed. An exhausted candidate pool produces an explicit conflict, never an
+overlapping tunnel.
+
+Deleting a GRE removes its owned network state at both endpoints. When its
+management connection is no longer referenced (including by paused profiles),
+the restricted SSH key and local server record are removed as well. The foreign
+helper, restore service and owned firewall chains are uninstalled only when no
+other peers, panel, legacy profiles or management keys depend on them. Ordinary
+SSH keys, VPN applications, shared OS packages and global network tuning are
+preserved. An empty coordination lock can remain for safe concurrent bootstrap.
+An SSH/cleanup failure keeps a retryable server entry in Settings; it is never
+reported as a fully completed cleanup. Older foreign helpers need one reconnect
+from Settings before using the new cleanup operation.
 
 ## Automatic setup and speed limits
 
@@ -74,13 +91,16 @@ cap. Rate limiting never applies to unrelated ports, SSH or panel traffic.
 
 ## Telemetry
 
-Actual accepted-forward byte counters are collected every five seconds, separately
-for original and reply directions. NAT counters are not used as a traffic ledger.
+Actual accepted-forward byte counters are sampled every second, separately for
+original and reply directions. The light authenticated live endpoint updates
+connection and per-port upload/download Mbps without rebuilding the page each
+second. Durable history is flushed every five seconds and before rule changes;
+it is not written to SQLite every second. NAT counters are not used as a traffic ledger.
 Totals are persisted in SQLite across application restarts and server reboots.
 A hard power loss may omit the last unsampled interval. This is operational
 telemetry, not an ISP billing meter. Dates and daily totals use Asia/Tehran.
 
-Specific lists of up to 128 ports are automatically counted individually. Wide
+Specific lists of up to 128 ports and explicitly mapped ports are automatically counted individually. Wide
 ranges and `all` retain an aggregate counter; select individual monitored ports
 in connection details for a breakdown. This avoids adding 65,535 firewall rules.
 Minute history has configurable bounded retention; lifetime totals remain.

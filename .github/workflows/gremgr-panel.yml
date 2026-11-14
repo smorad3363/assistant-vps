@@ -43,7 +43,7 @@ jobs:
           python3 gre-manager/build-release.py WORKTREE
           sudo --preserve-env=GRE_PANEL_SKIP_ACME bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
           sudo systemctl is-active gremgr-worker.service gremgr-web.service
-          sudo gremgr --version | grep -Fx 1.1.0
+          sudo gremgr --version | grep -Fx 1.2.0
           sudo --preserve-env=GRE_PANEL_SKIP_ACME bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
           curl -kfSs https://127.0.0.1:8787/ | grep -F GRE
           sudo systemctl kill --kill-who=main --signal=SIGKILL gremgr-worker.service

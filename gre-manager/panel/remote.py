@@ -158,7 +158,7 @@ class Remote:
     def prepare(self, server, connection, remove=False):
         from .engine import gre_for, pair_values
         gre = gre_for(connection)
-        foreign = pair_values(gre["outer_peer"], gre["outer_local"])
+        foreign = pair_values(gre["outer_peer"], gre["outer_local"], connection.get("gre_slot", 0))
         foreign["mtu"] = connection["mtu"]
         return self.call(server, {"action": "prepare", "remove": remove,
                                  "peer": {"id": connection["id"], "kind": "peer", "gre": foreign,
@@ -169,7 +169,7 @@ class Remote:
         entries = []
         for c, remove in changes:
             g = gre_for(c)
-            foreign = pair_values(g["outer_peer"], g["outer_local"])
+            foreign = pair_values(g["outer_peer"], g["outer_local"], c.get("gre_slot", 0))
             foreign["mtu"] = c["mtu"]
             entries.append({"peer": {"id": c["id"], "kind": "peer", "gre": foreign,
                                      "enabled": c.get("enabled", True), "service_ip": c["service_ip"]}, "remove": remove})

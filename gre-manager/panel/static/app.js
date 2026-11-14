@@ -12,6 +12,8 @@ const errors = {
   auth:'اطلاعات ورود درست نیست یا نشست منقضی شده است.', csrf:'نشست صفحه تازه نیست؛ صفحه را دوباره بارگذاری کن.',
   rate_limit:'تعداد تلاش‌های ورود زیاد شده؛ پنج دقیقه دیگر تلاش کن.',
   overlap:'پورت‌های این اتصال با اتصال دیگری هم‌پوشانی دارند. ابتدا پورت را از اتصال قبلی جدا کن.',
+  gre_exists:'برای این دو سرور یک GRE وجود دارد. پورت‌ها و مقصدهای جدید را به همان اتصال اضافه کن.',
+  cleanup_pending:'تونل حذف شد؛ پاک‌سازی سمت خارج هنوز کامل نیست. در تنظیمات، اتصال سرور را بررسی و پاک‌سازی را دوباره انجام بده. اگر عامل قدیمی است، ابتدا اتصال SSH را ویرایش و دوباره متصل کن.',
   reserved:'یکی از پورت‌ها برای ورود پنل یا SSH محفوظ است. پورت دیگری انتخاب کن.',
   local_ip:'IP ورودی باید روی همین سرور ایران فعال باشد.', loop:'مقصد انتقال مستقیم نمی‌تواند خود سرور ورودی باشد.',
   dns:'دامنه مقصد به IPv4 معتبر تبدیل نشد. آدرس و DNS را بررسی کن.',
@@ -38,7 +40,7 @@ function when(value) { return value ? clock.format(new Date(value * 1000)) : '�
 function failText(error) {
   if (errors[error.code]) return errors[error.code];
   const text = String(error.error || error.message || '');
-  if (/port range|ports|port mapping|Port translation/i.test(text)) return 'فهرست پورت‌ها را بررسی کن. برای تغییر پورت مقصد، یک پورت ورودی انتخاب کن.';
+  if (/port range|ports|port mapping|mapped input|Port translation/i.test(text)) return 'پورت‌های ورودی نباید تکراری باشند. برای هر مقصد متفاوت، یک ردیف با یک پورت ورودی بنویس؛ مقصد خالی یعنی همان شماره.';
   if (/hostname|IPv4|unicast|address/i.test(text)) return 'آدرس واردشده معتبر نیست. IP یا دامنه را بدون http و شماره پورت وارد کن.';
   if (/whole number|between|speed|number/i.test(text)) return 'مقدار عددی را در محدوده مجاز وارد کن.';
   if (/corrupt|backup|archive|telemetry/i.test(text)) return 'فایل پشتیبان معتبر نیست یا امکان بازیابی آن وجود ندارد.';
@@ -56,6 +58,8 @@ function eventText(message) {
     ['Owned GRE state refreshed','پس از سه بررسی ناموفق، تنظیمات GRE تازه‌سازی شد.'],
     ['Panel port change rolled back','ورود در پورت جدید تأیید نشد؛ پورت قبلی پنل بازیابی شد.'],
     ['Update scheduled','به‌روزرسانی برنامه زمان‌بندی شد.'],
+    ['Foreign cleanup pending','تونل حذف شد؛ پاک‌سازی مقصد در انتظار اتصال دوباره است.'],
+    ['Unused foreign management','اتصال مدیریت بدون استفاده از دو طرف پاک شد.'],
   ];
   for (const [prefix, copy] of pairs) if (message.startsWith(prefix)) return copy;
   return failText({message});
@@ -168,16 +172,18 @@ function renderConnections(items) {
   }
 }
 
+function portRate(c, port, direction) { return c.port_rates?.[String(port)]?.[direction] || 0; }
+function liveValue(c, port, direction) { return `<span data-live-port="${esc(port)}" data-direction="${direction}">${speed(port==='all'?c.rate[direction]:portRate(c,port,direction))}</span>`; }
 function detailsFor(c) {
   const total=totalFor(c.id), limit=v=>v?`${latin.format(v)} Mbps`:'نامحدود';
   const health = value => value===true?'پاسخ دریافت شد':value===false?'بدون پاسخ':'بررسی نشده';
   const metrics = [['IP فعلی مقصد',c.resolved_ip],['سقف دریافت',limit(c.download_mbps)],['سقف ارسال',limit(c.upload_mbps)],['مصرف کل',bytes(total.up+total.down)],
     ...(c.kind==='gre'?[['پینگ GRE',c.health?.latency_ms!=null?latin.format(c.health.latency_ms)+' ms':'بررسی نشده'],['افت بسته',c.health?.loss_percent!=null?latin.format(c.health.loss_percent)+'%':'بررسی نشده']]:[]),['سرویس TCP',health(c.health?.tcp)],['سرویس UDP',health(c.health?.udp)]];
   let output = `<div class="detail-grid">${metrics.map(([label,value])=>`<div><span class="data-label">${esc(label)}</span><span class="detail-value">${esc(value)}</span></div>`).join('')}</div>`;
-  const ports=state.stats.totals.filter(x=>x.identity===c.id&&x.port!=='all');
-  if(ports.length) output+=`<table class="detail-table"><thead><tr><th>پورت ورودی</th><th>ارسال</th><th>دریافت</th></tr></thead><tbody>${ports.map(x=>`<tr><td>${esc(x.port)}</td><td dir="ltr">${bytes(x.up)}</td><td dir="ltr">${bytes(x.down)}</td></tr>`).join('')}</tbody></table>`;
+  const ports=[...new Set([...state.stats.totals.filter(x=>x.identity===c.id&&x.port!=='all').map(x=>x.port),...Object.keys(c.port_rates||{}),...Object.keys(c.port_map||{}),...(c.measured_ports||[]).map(String)])].sort((a,b)=>Number(a)-Number(b));
+  if(ports.length) output+=`<div class="table-scroll"><table class="detail-table port-traffic"><thead><tr><th>ورودی ← مقصد</th><th>مصرف ارسال / دریافت</th><th>سرعت ارسال / دریافت · Mbps</th></tr></thead><tbody>${ports.map(p=>{const x=totalFor(c.id,p);return `<tr><td><bdi dir="ltr">${esc(p)} → ${esc(c.port_map?.[p]||c.target_port||p)}</bdi></td><td dir="ltr">${bytes(x.up)} / ${bytes(x.down)}</td><td class="live-rate" dir="ltr">${liveValue(c,p,'up')} / ${liveValue(c,p,'down')}</td></tr>`;}).join('')}</tbody></table></div>`;
   const map=Object.entries(c.port_map||{}); if(map.length)output+=`<p class="detail-note">نگاشت‌ها: <bdi dir="ltr">${map.map(([a,b])=>esc(a+':'+b)).join(' · ')}</bdi></p>`;
-  output+=`<p class="detail-note">تست UDP فقط با پاسخ واقعی سرویس تأیید می‌شود. آمار «همه پورت‌ها» مجموع اتصال است؛ پورت‌های انتخاب‌شده در جزئیات تفکیک می‌شوند.</p><button class="button secondary compact" data-action="probe">${icon('refresh')}بررسی دوباره اتصال</button>`;
+  output+=`<p class="detail-note">سرعت‌ها هر ثانیه تازه می‌شوند. در حالت «همه پورت‌ها»، نگاشت‌ها خودکار تفکیک می‌شوند؛ پورت‌های دیگر را در ویرایش اتصال برای آمار انتخاب کن. تست UDP به پاسخ واقعی سرویس نیاز دارد.</p><button class="button secondary compact" data-action="probe">${icon('refresh')}بررسی دوباره اتصال</button>`;
   return output;
 }
 
@@ -205,7 +211,7 @@ function renderSettings() {
   const cert=state.certificate||{},labels={ready:'گواهی معتبر IP · تمدید خودکار فعال',pending:'صدور گواهی خودکار در انتظار اجرا',renewing:'در حال بررسی و تمدید گواهی',error:'صدور یا تمدید گواهی نیاز به بررسی دارد',manual:'گواهی دستی · تمدید خودکار غیرفعال'};
   $('#certificate-status').textContent=(labels[cert.status]||labels.manual)+(cert.expires_at?' · اعتبار تا '+new Date(cert.expires_at*1000).toLocaleDateString('fa-IR'):'')+(cert.error?' · '+cert.error:'');
   if(!form.dataset.dirty && !form.contains(document.activeElement))for(const [key,value]of Object.entries(state.settings)){const el=form.elements[key];if(!el)continue;if(el.type==='checkbox')el.checked=value;else el.value=Array.isArray(value)?value.join(','):value;}
-  $('#server-list').innerHTML=state.servers.length?state.servers.map(s=>`<div class="server-item" data-server="${s.id}"><div class="connection-avatar">${icon('server')}</div><div class="server-info"><strong>${esc(s.name)}</strong><small dir="ltr">${esc(s.host)}:${esc(s.port)} · ${esc(s.username)}</small><span class="status ${s.key_ready?'':'warning'}"><i></i>${s.key_ready?'کلید مدیریت آماده است':'نیاز به اتصال مجدد'}</span><details><summary>اثر انگشت سرور</summary><bdi dir="ltr">${(s.fingerprints||[]).map(esc).join('<br>')}</bdi></details></div><button class="icon-button" data-action="edit-server" aria-label="ویرایش اتصال سرور ${esc(s.name)}">${icon('edit')}</button><button class="icon-button" data-action="delete-server" aria-label="حذف سرور ${esc(s.name)}">${icon('trash')}</button></div>`).join(''):'<p class="empty-line">سروری برای مدیریت GRE اضافه نشده است.</p>';
+  $('#server-list').innerHTML=state.servers.length?state.servers.map(s=>`<div class="server-item" data-server="${s.id}"><div class="connection-avatar">${icon('server')}</div><div class="server-info"><strong>${esc(s.name)}</strong><small dir="ltr">${esc(s.host)}:${esc(s.port)} · ${esc(s.username)}</small><span class="status ${s.cleanup_pending||!s.key_ready?'warning':''}"><i></i>${s.cleanup_pending?'پاک‌سازی مقصد در انتظار تلاش دوباره':s.key_ready?'کلید مدیریت آماده است':'نیاز به اتصال مجدد'}</span><details><summary>اثر انگشت سرور</summary><bdi dir="ltr">${(s.fingerprints||[]).map(esc).join('<br>')}</bdi></details></div><button class="icon-button" data-action="edit-server" aria-label="ویرایش اتصال سرور ${esc(s.name)}">${icon('edit')}</button><button class="icon-button" data-action="delete-server" aria-label="حذف سرور ${esc(s.name)}">${icon('trash')}</button></div>`).join(''):'<p class="empty-line">سروری برای مدیریت GRE اضافه نشده است.</p>';
   $('#backup-list').innerHTML=state.backups.length?state.backups.map(name=>`<div class="backup-row"><code dir="ltr">${esc(name)}</code><a class="button compact secondary" href="/api/backup.download?filename=${encodeURIComponent(name)}" download>${icon('down')}دانلود</a></div>`).join(''):'<p class="empty-line">بکاپ‌ها پس از اولین ثبت یا پشتیبان‌گیری روزانه اینجا نمایش داده می‌شوند.</p>';
 }
 
@@ -219,6 +225,19 @@ function portLimitRow(port='',up=0,down=0) {
   row.innerHTML=`<label>پورت<input data-limit="port" type="number" min="1" max="65535" dir="ltr" value="${esc(port)}" required></label><label>ارسال · Mbps<input data-limit="up" type="number" min="0" step="0.001" dir="ltr" value="${esc(up)}"></label><label>دریافت · Mbps<input data-limit="down" type="number" min="0" step="0.001" dir="ltr" value="${esc(down)}"></label><button type="button" class="icon-button" data-action="remove-limit" aria-label="حذف محدودیت پورت">${icon('trash')}</button>`;
   $('#port-limit-rows').append(row);
 }
+function portRow(source='', target='') {
+  const row=document.createElement('div');row.className='port-map-row';
+  row.innerHTML=`<label>پورت ورودی یا بازه<input data-port-source dir="ltr" inputmode="text" placeholder="5100 یا 5000-5010" value="${esc(source)}"></label><span class="port-map-arrow" aria-hidden="true">←</span><label>پورت مقصد<input data-port-target type="number" min="1" max="65535" inputmode="numeric" dir="ltr" placeholder="همان شماره" value="${esc(target)}"></label><button type="button" class="icon-button" data-action="remove-port-row" aria-label="حذف ردیف پورت">${icon('trash')}</button>`;
+  $('#port-rows').append(row);togglePortInputs();return row;
+}
+function sourceRanges(text) {
+  return text.split(',').filter(Boolean).map(x=>{const parts=x.trim().split('-').map(Number);return [parts[0],parts.at(-1)];});
+}
+function remainingPorts(text, mapped) {
+  const out=[];
+  for(const [lo,hi]of sourceRanges(text)){let start=lo;for(const p of mapped){if(p<start||p>hi)continue;if(start<p)out.push(start===p-1?String(start):`${start}-${p-1}`);start=p+1;}if(start<=hi)out.push(start===hi?String(start):`${start}-${hi}`);}
+  return out.join(',');
+}
 function openConnection(c) {
   const form=$('#connection-form');form.reset();$('.form-error',form).textContent='';
   const kind=c?.kind || page; form.elements.kind.value=kind;form.elements.id.value=c?.id||'';
@@ -228,16 +247,20 @@ function openConnection(c) {
   const addresses=Object.keys(state.addresses);
   for(const field of ['listen_ip','outer_local'])form.elements[field].innerHTML=addresses.map(ip=>`<option value="${esc(ip)}">${esc(ip)} · ${esc(state.addresses[ip])}</option>`).join('');
   fillServers(c?.server_id||'');
-  for(const key of ['name','target_host','target_port','upload_mbps','download_mbps','mtu_mode','service_ip'])if(c?.[key]!=null)form.elements[key].value=c[key];
+  for(const key of ['name','target_host','upload_mbps','download_mbps','mtu_mode','service_ip'])if(c?.[key]!=null)form.elements[key].value=c[key];
   form.elements.listen_ip.value=c?.listen_ip||addresses[0]||'';
   form.elements.outer_local.value=c?.outer_local||c?.listen_ip||addresses[0]||'';
   form.elements.mtu.value=c?.mtu||state.settings.mtu;
   form.elements.mtu_mode.value=c?.mtu_mode||'auto';
   form.elements.upload_mbps.value=c?.upload_mbps||0;form.elements.download_mbps.value=c?.download_mbps||0;
   form.elements.proto_tcp.checked=c?c.protocols.includes('tcp'):true;form.elements.proto_udp.checked=c?c.protocols.includes('udp'):true;
-  form.elements.port_mode.value=(!c||c.ports==='all')?'all':'selected';form.elements.ports.value=c?.ports==='all'?'':c?.ports||'';
+  form.elements.port_mode.value=(!c||c.ports==='all')?'all':'selected';
+  $('#port-rows').replaceChildren();
+  const mappings=Object.entries(c?.port_map||{}).sort((a,b)=>Number(a[0])-Number(b[0]));
+  for(const [source,target]of mappings)portRow(source,target);
+  if(c&&c.ports!=='all'){const remaining=remainingPorts(c.ports,mappings.map(x=>Number(x[0])));if(remaining)portRow(remaining,c.target_port||'');}
+  if(!$('#port-rows').children.length)portRow();
   form.elements.exclude_ports.value=(c?.exclude_ports||[]).join(',');form.elements.monitor_ports.value=(c?.monitor_ports||[]).join(',');
-  form.elements.port_map.value=Object.entries(c?.port_map||{}).map(([a,b])=>a+':'+b).join(',');
   $('#port-limit-rows').replaceChildren();for(const [p,v]of Object.entries(c?.port_limits||{}))portLimitRow(p,v.up,v.down);
   $('details',form).open=false;
   $('#protected-hint').textContent='پورت‌های محفوظ: '+[...new Set([22,state.settings.port,...state.settings.ssh_ports,...state.settings.reserved_ports])].join('، ');
@@ -245,7 +268,7 @@ function openConnection(c) {
   form.elements.server_id.required=kind==='gre'&&!c?.adopted;
   togglePortInputs();$('#connection-dialog').showModal();
 }
-function togglePortInputs(){const form=$('#connection-form');const all=form.elements.port_mode.value==='all';$('#port-inputs').hidden=all;form.elements.ports.required=!all;form.elements.target_port.disabled=all;}
+function togglePortInputs(){const all=$('#connection-form').elements.port_mode.value==='all';$('#port-rows-title').textContent=all?'تغییر مقصد پورت‌ها · اختیاری':'پورت‌های انتخابی';$('#port-rows-hint').textContent=all?'پورت‌های دیگر با همان شماره منتقل می‌شوند.':'مقصد خالی یعنی همان پورت ورودی. برای تغییر مقصد، هر پورت را در یک ردیف بنویس.';$$('.port-map-row').forEach((row,i)=>{const source=$('[data-port-source]',row),target=$('[data-port-target]',row);source.required=!all;if(i===0){source.name='ports';target.name='target_port';}else{source.removeAttribute('name');target.removeAttribute('name');}});}
 async function confirmAction(title,text,button='تأیید',danger=true){
   const dialog=$('#confirm-dialog');$('#confirm-title').textContent=title;$('#confirm-text').textContent=text;$('#confirm-submit').textContent=button;$('#confirm-submit').className='button '+(danger?'danger':'primary');dialog.returnValue='';dialog.showModal();
   return new Promise(resolve=>dialog.addEventListener('close',()=>resolve(dialog.returnValue==='ok'),{once:true}));
@@ -260,7 +283,7 @@ async function runJob(route,payload,form,dialog) {
   }catch(e){if(form)setError(form,e);else showToast(failText(e));return null;}
   finally{if(form)setBusy(form,false);}
 }
-const jobMessages={'Queued':'در صف انجام','Checking configuration':'بررسی تنظیمات و تداخل پورت‌ها','Checking SSH host keys and credentials':'بررسی SSH و آماده‌سازی سرور خارج','Preparing foreign servers':'آماده‌سازی سمت خارج','Applying scoped network rules':'اعمال تنظیمات اتصال','Checking GRE and MTU':'بررسی ارتباط GRE و MTU','Committing both endpoints':'ذخیره نهایی در هر دو سرور'};
+const jobMessages={'Queued':'در صف انجام','Checking configuration':'بررسی تنظیمات و تداخل پورت‌ها','Checking SSH host keys and credentials':'بررسی SSH و آماده‌سازی سرور خارج','Preparing foreign servers':'آماده‌سازی سمت خارج','Applying scoped network rules':'اعمال تنظیمات اتصال','Checking GRE and MTU':'بررسی ارتباط GRE و MTU','Committing both endpoints':'ذخیره نهایی در هر دو سرور','Cleaning unused foreign helper':'پاک‌سازی امن اتصال بدون استفاده در خارج'};
 async function pollJob(identity){
   $('#job-status').hidden=false;$('#job-dismiss').hidden=true;$('#job-status').classList.remove('failed');
   try{
@@ -294,6 +317,7 @@ $('#logout').addEventListener('click',async()=>{await api('logout',{});csrf='';s
 $('#refresh').addEventListener('click',()=>refresh());
 $('#add-connection').addEventListener('click',()=>openConnection());
 $('#add-port-limit').addEventListener('click',()=>portLimitRow());
+$('#add-port-row').addEventListener('click',()=>{$('[data-port-source]',portRow()).focus();});
 $('#connection-form').addEventListener('change',e=>{
   const form=e.currentTarget;if(e.target.name==='port_mode')togglePortInputs();
   if(e.target.name==='server_id'){const s=state.servers.find(x=>x.id===e.target.value);if(s)form.elements.target_host.value=s.host;}
@@ -303,7 +327,9 @@ $('#connection-form').addEventListener('submit',async e=>{
   e.preventDefault();const form=e.currentTarget,p=Object.fromEntries(new FormData(form));
   if(!p.id)delete p.id;p.enabled=state.connections.find(x=>x.id===p.id)?.enabled??true;
   p.protocols=[...(form.elements.proto_tcp.checked?['tcp']:[]),...(form.elements.proto_udp.checked?['udp']:[])];
-  p.ports=p.port_mode==='all'?'all':p.ports;p.exclude_ports=p.exclude_ports.split(',').map(x=>x.trim()).filter(Boolean);p.monitor_ports=p.monitor_ports.split(',').map(x=>x.trim()).filter(Boolean);
+  const sources=[];p.port_map={};p.target_port=null;
+  for(const row of $$('.port-map-row',form)){const source=$('[data-port-source]',row).value.trim(),target=$('[data-port-target]',row).value.trim();if(!source&&!target)continue;if(!source||(target&&!/^\d+$/.test(source))){setError(form,{message:'ports'});$('[data-port-source]',row).focus();return;}sources.push(source);if(target){const key=String(Number(source));if(Object.hasOwn(p.port_map,key)){setError(form,{message:'Duplicate mapped input port'});return;}p.port_map[key]=Number(target);}}
+  p.ports=p.port_mode==='all'?'all':sources.join(',');p.exclude_ports=p.exclude_ports.split(',').map(x=>x.trim()).filter(Boolean);p.monitor_ports=p.monitor_ports.split(',').map(x=>x.trim()).filter(Boolean);
   p.port_limits={};for(const row of $$('.port-limit-row',form)){const port=$('[data-limit=port]',row).value;if(p.port_limits[port]){setError(form,{message:'ports'});return;}p.port_limits[port]={up:$('[data-limit=up]',row).value,down:$('[data-limit=down]',row).value};}
   await runJob('connection.save',p,form,$('#connection-dialog'));
 });
@@ -324,10 +350,11 @@ document.addEventListener('click',async e=>{
     case 'expand':expanded.has(c.id)?expanded.delete(c.id):expanded.add(c.id);action.setAttribute('aria-expanded',expanded.has(c.id));$('.connection-details',row).hidden=!expanded.has(c.id);break;
     case 'probe':await runJob('connection.probe',{id:c.id});break;
     case 'toggle':if(!c.enabled||await confirmAction('توقف اتصال',`اتصال «${c.name}» متوقف شود؟ تنظیمات و آمار آن باقی می‌مانند.`,'توقف'))await runJob('connection.toggle',{id:c.id});break;
-    case 'delete':if(await confirmAction('حذف اتصال',`اتصال «${c.name}» و قوانین متعلق به آن حذف شوند؟`,'حذف اتصال'))await runJob('connection.delete',{id:c.id});break;
+    case 'delete':if(await confirmAction('حذف اتصال',c.kind==='gre'?`تونل «${c.name}» و تنظیمات اختصاصی آن از هر دو طرف حذف شوند؟ اتصال مدیریتِ بدون استفاده هم پاک می‌شود؛ تونل‌های دیگر حفظ می‌شوند.`:`اتصال «${c.name}» و قوانین متعلق به آن حذف شوند؟`,'حذف اتصال'))await runJob('connection.delete',{id:c.id});break;
     case 'add-server':$('#server-form').reset();$('#server-dialog h2').textContent='اتصال سرور';$('.form-error',$('#server-form')).textContent='';$('#server-dialog').showModal();break;
     case 'edit-server':{const server=state.servers.find(s=>s.id===action.closest('[data-server]').dataset.server);const form=$('#server-form');form.reset();for(const key of ['id','name','host','port','username'])form.elements[key].value=server[key];$('#server-dialog h2').textContent='ویرایش اتصال SSH';$('.form-error',form).textContent='';$('#server-dialog').showModal();break;}
-    case 'delete-server':{const id=action.closest('[data-server]').dataset.server;if(await confirmAction('حذف سرور','سرور از فهرست مدیریت حذف شود؟ ابتدا اتصال‌های وابسته باید حذف یا منتقل شوند.','حذف'))await runJob('server.delete',{id});break;}
+    case 'delete-server':{const id=action.closest('[data-server]').dataset.server;if(await confirmAction('پاک‌سازی اتصال سرور','کلید مدیریت حذف می‌شود. اگر ابزار سمت خارج هیچ استفاده‌کنندهٔ دیگری نداشته باشد، آن هم پاک می‌شود. ابتدا تونل‌های وابسته را حذف یا منتقل کن.','پاک‌سازی'))await runJob('server.delete',{id});break;}
+    case 'remove-port-row':action.closest('.port-map-row').remove();if(!$('#port-rows').children.length)portRow();togglePortInputs();break;
     case 'remove-limit':action.closest('.port-limit-row').remove();break;
     case 'backup':await runJob('backup.create',{});break;
     case 'restore':$('#backup-file').click();break;
@@ -355,4 +382,16 @@ window.addEventListener('hashchange',navigate);navigate();refresh();
 let chartResizeFrame;
 window.addEventListener('resize',()=>{cancelAnimationFrame(chartResizeFrame);chartResizeFrame=requestAnimationFrame(()=>{if(state&&page!=='settings')renderChart();});});
 setInterval(()=>{if(!document.hidden)refresh(true);},5000);
+let liveBusy=false;
+async function refreshLive(){
+  if(liveBusy||document.hidden||!state||$('#app').hidden)return;
+  liveBusy=true;
+  try{
+    const live=await api('live');state.sampled_at=live.sampled_at;
+    for(const value of live.connections){const c=state.connections.find(x=>x.id===value.id);if(!c)continue;c.rate=value.rate;c.port_rates=value.port_rates;const row=$(`.connection[data-id="${c.id}"]`);if(!row)continue;const up=$('.speed-value .up',row),down=$('.speed-value .down',row);if(up)up.textContent=speed(c.rate.up);if(down)down.textContent=speed(c.rate.down);for(const el of $$('[data-live-port]',row))el.textContent=speed(portRate(c,el.dataset.livePort,el.dataset.direction));}
+    if(page!=='settings'){const items=state.connections.filter(x=>x.kind===page);$('#metric-up').textContent=speed(items.reduce((n,x)=>n+x.rate.up,0));$('#metric-down').textContent=speed(items.reduce((n,x)=>n+x.rate.down,0));}
+  }catch(error){if(error.status===401){state=null;showLogin();}}
+  finally{liveBusy=false;}
+}
+setInterval(refreshLive,1000);
 const saved=sessionStorage.getItem('gremgr_job');if(saved){activeJob=saved;setTimeout(()=>pollJob(saved),1000);}

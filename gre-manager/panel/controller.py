@@ -6,6 +6,7 @@ import contextlib
 import copy
 import fcntl
 import json
+import ipaddress
 import os
 from pathlib import Path
 import re
@@ -35,6 +36,7 @@ class Controller:
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="network-job")
         self.rates, self.health, self.failures = {}, {}, {}
         self.last_sample, self.last_probe, self.last_backup = 0, 0, 0
+        self.live_counters, self.live_epoch, self.last_persist = {}, None, 0
         self.pending = self.paths.etc / "pending.json"
         self.stats_cache, self.stats_cached_at = None, 0
 
@@ -68,10 +70,58 @@ class Controller:
         result["connections"] += read_peers(self.paths)
         return result
 
-    def collect(self):
+    def collect(self, persist=True):
         counters, epoch = self.engine.counters()
-        self.rates = self.store.sample(counters, epoch)
-        self.last_sample = time.time()
+        now = time.time()
+        fallback = self.store.sample(counters, epoch, now) if persist else {}
+        if persist:
+            self.last_persist = now
+        # Read counters every second; persist durable history every five seconds.
+        # Network transactions still flush before changing the counter epoch.
+        elapsed = now - self.last_sample
+        if elapsed >= .8 or epoch != self.live_epoch:
+            self.rates = {}
+            for key, values in counters.items():
+                before = self.live_counters.get(key)
+                if before is not None and epoch == self.live_epoch:
+                    delta = [max(0, value - previous) for value, previous in zip(values, before)]
+                    self.rates[key] = dict(zip(("up", "down"), (v * 8 / max(.001, elapsed) for v in delta)))
+                else:
+                    self.rates[key] = fallback.get(key, {"up": 0, "down": 0})
+            self.live_counters, self.live_epoch, self.last_sample = copy.deepcopy(counters), epoch, now
+
+    def allocate_gre(self, updated, previous):
+        servers = {s["id"]: s for s in updated["servers"]}
+        local = self.engine.routes()
+        remote = {}
+        old = {c["id"]: c for c in previous["connections"]}
+        reserved = [ipaddress.ip_network(gre_for(old[c["id"]])["local_tun"] + "/30", strict=False)
+                    for c in updated["connections"] if c["kind"] == "gre" and c.get("enabled", True)
+                    and c["id"] in old and gre_for(old[c["id"]])["id"] == gre_for(c)["id"]]
+        for c in updated["connections"]:
+            if c["kind"] != "gre" or not c.get("enabled", True):
+                continue
+            before = old.get(c["id"])
+            if before and gre_for(before)["id"] == gre_for(c)["id"]:
+                c["gre_slot"] = before.get("gre_slot", 0)
+                continue
+            server = servers.get(c["server_id"])
+            if server and server["id"] not in remote:
+                remote[server["id"]] = self.remote.call(server, {"action": "status"})
+            status = remote.get(c["server_id"], {})
+            profile = next((p for p in status.get("pair_profiles", []) if p["gre_id"] == gre_for(c)["id"]), None)
+            start = profile.get("slot", 0) if profile else c.get("gre_slot", 0)
+            routes = local + status.get("routes", [])
+            blocked = [ipaddress.ip_network(r["dst"], strict=False) for r in routes
+                       if r.get("dev") != gre_for(c)["tunnel"]]
+            for offset in range(1 if profile else 4096):
+                c["gre_slot"] = (start + offset) % 262144
+                subnet = ipaddress.ip_network(gre_for(c)["local_tun"] + "/30", strict=False)
+                if not any(subnet.overlaps(n) for n in blocked + reserved):
+                    reserved.append(subnet)
+                    break
+            else:
+                raise PanelError("No free private GRE subnet was found on both endpoints.", "route_conflict")
 
     def submit(self, operation, payload):
         identity = uuid.uuid4().hex[:16]
@@ -129,6 +179,7 @@ class Controller:
                     c["mtu"] = updated["settings"]["mtu"]
                     measurements.add(c["id"])
         validate_conflicts(updated["connections"], updated["settings"])
+        self.allocate_gre(updated, previous)
         self.engine.preflight(self.combined(updated))
         self.collect()
         self.store.automatic_backup()
@@ -255,16 +306,7 @@ class Controller:
             identity = str(payload.get("id", ""))
             if any(x.get("server_id") == identity for x in cfg["connections"]):
                 raise PanelError("This server is still used by a GRE connection.", "in_use")
-            server = next((x for x in cfg["servers"] if x["id"] == identity), None)
-            public = self.paths.ssh / (identity + ".pub") if re.fullmatch(r"[0-9a-f]{10}", identity) else None
-            if server and public and public.is_file():
-                self.remote.call(server, {"action": "revoke-key", "username": server["username"], "key": public.read_text()})
-            cfg["servers"] = [x for x in cfg["servers"] if x["id"] != identity]
-            self.store.save(cfg)
-            for suffix in ("", ".pub", ".known"):
-                if re.fullmatch(r"[0-9a-f]{10}", identity):
-                    (self.paths.ssh / (identity + suffix)).unlink(missing_ok=True)
-            return {}
+            return self.cleanup_server(identity)
         if operation in ("connection.save", "connection.delete", "connection.toggle", "connection.probe"):
             identity = payload.get("id")
             previous = next((x for x in cfg["connections"] if x["id"] == identity), None)
@@ -283,7 +325,13 @@ class Controller:
             else:
                 cfg["connections"] = [x for x in cfg["connections"] if x["id"] != identity]
             self.transaction(cfg, progress)
-            return {"id": item["id"] if operation == "connection.save" else identity}
+            result = {"id": item["id"] if operation == "connection.save" else identity}
+            if operation == "connection.delete" and previous["kind"] == "gre" and previous.get("server_id"):
+                server_id = previous["server_id"]
+                if not any(c.get("server_id") == server_id for c in cfg["connections"]):
+                    progress(92, "Cleaning unused foreign helper")
+                    result["cleanup"] = self.cleanup_server(server_id)
+            return result
         if operation == "settings.save":
             previous = copy.deepcopy(cfg["settings"])
             cfg["settings"] = settings_update(previous, payload)
@@ -375,6 +423,28 @@ class Controller:
             return {"scheduled": True}
         raise PanelError("Unsupported operation.")
 
+    def cleanup_server(self, identity):
+        cfg = self.store.config()
+        server = next((s for s in cfg["servers"] if s["id"] == identity), None)
+        if not server or not re.fullmatch(r"[0-9a-f]{10}", identity):
+            raise PanelError("Foreign server not found.", "not_found")
+        public = self.paths.ssh / (identity + ".pub")
+        try:
+            if not public.is_file():
+                raise PanelError("Reconnect this server before cleaning the foreign installation.", "ssh_key")
+            result = self.remote.call(server, {"action": "cleanup", "username": server["username"], "key": public.read_text()})
+        except Exception as error:
+            server["cleanup_pending"] = True
+            self.store.save(cfg)
+            self.store.event("warning", "Foreign cleanup pending; retry from the server list.")
+            raise PanelError("The tunnel was removed, but foreign cleanup is pending. Reconnect an older helper or retry from Settings.", "cleanup_pending") from error
+        cfg["servers"] = [s for s in cfg["servers"] if s["id"] != identity]
+        self.store.save(cfg)
+        for suffix in ("", ".pub", ".known"):
+            (self.paths.ssh / (identity + suffix)).unlink(missing_ok=True)
+        self.store.event("success", "Unused foreign management connection removed safely.")
+        return result
+
     def restore_telemetry(self, raw):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "restore.sqlite3"
@@ -463,6 +533,7 @@ class Controller:
             self.stats_cached_at = time.time()
         for c in cfg["connections"]:
             c["rate"] = self.rates.get((c["id"], "all"), {"up": 0, "down": 0})
+            c["port_rates"] = {p: rate for (identity, p), rate in self.rates.items() if identity == c["id"] and p != "all"}
             c["health"] = self.health.get(c["id"])
             c["adopted"] = bool(c.pop("legacy_pair", None))
             c["measured_ports"] = sorted(int(p) for identity, p in self.rates if identity == c["id"] and p != "all")
@@ -480,11 +551,17 @@ class Controller:
     def request(self, route, payload, token=None, csrf=None, peer="local"):
         if route == "login":
             return self.store.login(payload.get("username", ""), payload.get("password", ""), peer)
-        session = self.store.session(token, None if route in ("state", "stats", "job", "backup.download") else csrf or "")
+        session = self.store.session(token, None if route in ("state", "live", "stats", "job", "backup.download") else csrf or "")
         if route == "auth.check":
             return {}
         if route == "state":
             return self.state(session)
+        if route == "live":
+            with self.lock:
+                return {"sampled_at": self.last_sample, "connections": [
+                    {"id": c["id"], "rate": self.rates.get((c["id"], "all"), {"up": 0, "down": 0}),
+                     "port_rates": {p: rate for (identity, p), rate in self.rates.items() if identity == c["id"] and p != "all"}}
+                    for c in self.store.config()["connections"]]}
         if route == "stats":
             return self.store.stats(payload.get("id"), min(24 * 30, max(1, int(payload.get("hours", 24)))))
         if route == "job":
@@ -525,7 +602,7 @@ class Controller:
             now = time.time()
             if self.pending.exists():
                 self.recover()
-            self.collect()
+            self.collect(persist=now - self.last_persist >= 5)
             pending = self.paths.etc / "web-pending.json"
             if pending.exists():
                 rollback = json.loads(pending.read_text())
