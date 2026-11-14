@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.1.0",
-  "revision": "faa633381ce10c9b40ebf03910db8d43e9a0af2c",
+  "revision": "87214cda4591be12b7178c42b2d6819c7b9da5e7",
   "files": {
     "gremgr-certificate.service": "ecaad1b0a845d02eda7dc0072d5fb9bbbdea4b874047e6c4401f5c441cec37b5",
     "gremgr-certificate.timer": "717a6d83996fdf54d8485b597bdfe339d6fff823feec19b1337ab400b70d6dc9",
@@ -10,7 +10,7 @@
     "gremgr-pair@.service": "e443deb74e913d519bfb0cc430cf5149eb60984b2f136e792e85d73234b0388b",
     "gremgr-web.service": "3c85549f067c2bf82016fdcdf7f221d88c4f644437742d93aa4da2f0fb2ca263",
     "gremgr-worker.service": "6df8bfcf9f578069764db55b32f8060cb52e4a799488fbad6fc2aed0812792c3",
-    "gremgr.sh": "e5c9cc46a7e06a6300eddbce15108b553f1ba8d79601b3618c39fedb0cc4342e",
+    "gremgr.sh": "cbd88fe64cd046f88ecb0433a1ed9c943bc317bb3b5cf510225b43e4d06881ea",
     "install.sh": "2f3b14e86cb39faeb527731f860658ecfb5f30dba4a34ad7ea19163909b74c58",
     "legacy-restore.sh": "a2d40a8eb9a2afc875e1789e22e39d19fcc1a7c7d58f5dac1b667b8054fe71d5",
     "pair.py": "3ecc0ccd12b192bd8630d07c8d3e6410ff4b76e9a8a30afc700a9459eeb9099f",
