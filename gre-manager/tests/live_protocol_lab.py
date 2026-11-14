@@ -87,7 +87,7 @@ def prepare(front,l2tp=True):
  chap=pathlib.Path('/etc/ppp/chap-secrets');old=chap.read_text() if chap.exists() else ''
  if secret not in old:chap.write_text(old+'\n'+secret);chap.chmod(0o600)
  (D/'lns.options').write_text('auth\nname gml-l2tp\nrequire-mschap-v2\nmtu 1280\nmru 1280\nms-dns 1.1.1.1\n')
- (D/'lac.options').write_text('noauth\nuser gmluser\npassword lab-only-password\nnoipdefault\nnodefaultroute\nusepeerdns\nmtu 1280\nmru 1280\n')
+ (D/'lac.options').write_text('noauth\nuser gmluser\npassword lab-only-password\nnoipdefault\nnodefaultroute\nmtu 1280\nmru 1280\nsilent\n')
  (D/'lns.conf').write_text(f'[global]\nport = 1701\n[lns default]\nip range = 10.65.0.2-10.65.0.10\nlocal ip = 10.65.0.1\nrequire authentication = yes\nrequire chap = yes\nrefuse pap = yes\nname = gml-l2tp\npppoptfile = {D}/lns.options\nlength bit = yes\n')
  (D/'lac.conf').write_text(f'[global]\nport = 1701\n[lac gml]\nlns = {front}\npppoptfile = {D}/lac.options\nname = gmluser\nautodial = yes\nredial = yes\nredial timeout = 3\nmax redials = 5\nlength bit = yes\n')
  if l2tp:
@@ -116,6 +116,7 @@ def ipsec(front):
  common='config setup\n uniqueids=no\nconn gml-l2tp\n keyexchange=ikev1\n authby=secret\n type=transport\n ike=aes128-sha256-modp2048!\n esp=aes128-sha256!\n forceencaps=yes\n fragmentation=yes\n dpdaction=clear\n'
  (D/'ipsec-server.conf').write_text(common+f' left={peer}\n leftid={peer}\n leftprotoport=17/1701\n right=%any\n rightid=gml-client\n rightprotoport=17/%any\n auto=add\n')
  (D/'ipsec-client.conf').write_text(common+f' left=10.233.0.2\n leftid=gml-client\n leftprotoport=17/1701\n right={front}\n rightid={peer}\n rightprotoport=17/1701\n auto=start\n')
+ spawn('ipsec-packet-trace',['timeout','20','tcpdump','-nni','any','-c','80','udp port 500 or udp port 4500'])
  spawn('ipsec-server',['ipsec','start','--nofork','--conf',str(D/'ipsec-server.conf')]);time.sleep(2)
  pid=spawn('ipsec-client',['unshare','--mount','--propagation','private','ip','netns','exec',NS,'sh','-c','mount -t tmpfs tmpfs /run; exec ipsec start --nofork --conf '+str(D/'ipsec-client.conf')])
  wait(lambda:'INSTALLED, TRANSPORT' in run('nsenter','-t',str(pid),'-m','-n','ipsec','statusall',check=False).stdout,'IPsec transport SA',35)
