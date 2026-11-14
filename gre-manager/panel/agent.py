@@ -2,7 +2,9 @@
 import contextlib
 import fcntl
 import json
+import ipaddress
 import os
+import pwd
 from pathlib import Path
 import re
 import sys
@@ -20,7 +22,7 @@ def validate_peer(data):
         raise PanelError("Invalid peer ID.")
     g = data.get("gre", {})
     local, remote = address(g.get("outer_local", "")), address(g.get("outer_peer", ""))
-    expected = pair_values(local, remote)
+    expected = pair_values(local, remote, integer(g.get("slot", 0), 0, 262143, "gre_slot"))
     if local == remote or any(g.get(key) != value for key, value in expected.items()):
         raise PanelError("The GRE identity does not match its endpoints.")
     expected["mtu"] = integer(g.get("mtu"), 576, 1476, "mtu")
@@ -62,6 +64,76 @@ def recover(paths, transaction, engine):
     path.unlink()
 
 
+def management_key(request):
+    username = str(request.get("username", ""))
+    parts = str(request.get("key", "")).split()
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username) or len(parts) < 2 or len(parts[1]) > 4096:
+        raise PanelError("Invalid management public key.")
+    return Path(pwd.getpwnam(username).pw_dir) / ".ssh" / "authorized_keys", parts[1]
+
+
+def revoke_key(path, blob):
+    import tempfile
+    content = path.read_text()
+    filtered = "".join(line + "\n" for line in content.splitlines() if not (blob in line and "gremgr-peer" in line and "command=" in line))
+    stat = path.stat()
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".gremgr-key-")
+    try:
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, stat.st_uid, stat.st_gid)
+        with os.fdopen(fd, "w") as out:
+            out.write(filtered)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def other_managers(path, blob):
+    # Includes keys installed by older helpers and keys in other Unix accounts.
+    for user in pwd.getpwall():
+        auth = Path(user.pw_dir) / ".ssh" / "authorized_keys"
+        try:
+            lines = auth.read_text().splitlines()
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            if "gremgr-peer" in line and "command=" in line and not (auth == path and blob in line):
+                return True
+    return False
+
+
+def uninstall_peer(paths, engine):
+    """Remove the dedicated helper only. Shared software and host tuning stay intact."""
+    if paths.etc != Path("/etc/gremgr"):
+        raise PanelError("Peer removal requires the system installation.")
+    wrapper = Path("/usr/local/sbin/gremgr-peer")
+    if "/opt/gremgr-peer" not in wrapper.read_text():
+        raise PanelError("The peer wrapper is not owned by this installer.")
+    engine.clear_owned()
+    run("systemctl", "disable", "--now", "gremgr-peer.service")
+    Path("/etc/systemd/system/gremgr-peer.service").unlink(missing_ok=True)
+    Path("/etc/sudoers.d/gremgr-peer").unlink(missing_ok=True)
+    run("systemctl", "daemon-reload")
+    base = Path("/opt/gremgr-peer/panel")
+    for name in ("__init__", "model", "store", "engine", "agent"):
+        (base / (name + ".py")).unlink(missing_ok=True)
+        for cached in (base / "__pycache__").glob(name + ".*.pyc"):
+            cached.unlink()
+    wrapper.unlink(missing_ok=True)
+    (paths.etc / "peers.json").unlink(missing_ok=True)
+    (paths.run / "counter-epoch").unlink(missing_ok=True)
+    # Keep the empty coordination lock: unlinking a held flock would let a
+    # concurrent bootstrap lock a new inode while removal is still running.
+    # rmdir preserves anything not created by this helper, including user files.
+    for directory in (base / "__pycache__", base, base.parent, paths.etc / "transactions",
+                      paths.ssh, paths.tls, paths.etc, paths.backups, paths.var, paths.run):
+        with contextlib.suppress(OSError):
+            directory.rmdir()
+
+
 def action(paths, request, engine=None):
     engine = engine or Engine(paths)
     # Reconcile expired leases even if a rollback unit failed or was killed.
@@ -73,29 +145,26 @@ def action(paths, request, engine=None):
     operation = request.get("action")
     if operation == "status":
         return {"version": __version__, "addresses": engine.interfaces(), "peers": len(peers),
-                "pair_profiles": [{"gre_id": x["gre"]["id"], "service_ip": x["service_ip"], "mtu": x["gre"]["mtu"]} for x in peers]}
+                "routes": engine.routes(),
+                "pair_profiles": [{"gre_id": x["gre"]["id"], "service_ip": x["service_ip"], "mtu": x["gre"]["mtu"],
+                                   "slot": x["gre"].get("slot", 0), "enabled": x.get("enabled", True),
+                                   "private_subnet": str(ipaddress.ip_network(x["gre"]["local_tun"] + "/30", strict=False))} for x in peers]}
+    if operation == "cleanup":
+        path, blob = management_key(request)
+        if not any(blob in line and "gremgr-peer" in line and "command=" in line for line in path.read_text().splitlines()):
+            raise PanelError("The management key was not found.")
+        if list((paths.etc / "transactions").glob("*.json")):
+            raise PanelError("A peer transaction is still pending.", "busy")
+        reason = ("peers" if peers else "panel" if paths.config.exists() or Path("/opt/gremgr/current/panel/worker.py").exists() else
+                  "legacy" if list((paths.etc / "pairs").glob("*.json")) else
+                  "managers" if other_managers(path, blob) else "")
+        if not reason:
+            uninstall_peer(paths, engine)
+        revoke_key(path, blob)
+        return {"revoked": True, "purged": not reason, "shared": reason}
     if operation == "revoke-key":
-        import pwd
-        import tempfile
-        username = str(request.get("username", ""))
-        parts = str(request.get("key", "")).split()
-        if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username) or len(parts) < 2 or len(parts[1]) > 4096:
-            raise PanelError("Invalid management public key.")
-        path = Path(pwd.getpwnam(username).pw_dir) / ".ssh" / "authorized_keys"
-        content = path.read_text()
-        filtered = "".join(line + "\n" for line in content.splitlines() if not (parts[1] in line and "gremgr-peer" in line and "command=" in line))
-        stat = path.stat()
-        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".gremgr-key-")
-        try:
-            os.fchmod(fd, 0o600)
-            os.fchown(fd, stat.st_uid, stat.st_gid)
-            with os.fdopen(fd, "w") as out:
-                out.write(filtered)
-                out.flush()
-                os.fsync(out.fileno())
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary): os.unlink(temporary)
+        path, blob = management_key(request)
+        revoke_key(path, blob)
         return {"revoked": True}
     if operation == "prepare":
         changes = request.get("changes", [{"peer": request.get("peer"), "remove": request.get("remove", False)}])

@@ -47,7 +47,11 @@ with tempfile.TemporaryDirectory(prefix='gremgr-ssh-lab-') as directory:
         assert remote.call(foreign,{'action':'status'})['peers']>=1
         reply=remote.batch(foreign,[(c,True)])
         remote.call(foreign,{'action':'commit','transaction':reply['transaction']})
-        print('PASS: real SSH bootstrap, pinned host keys, forced command, peer prepare/rollback/commit/boot restore/removal.')
+        result=remote.call(foreign,{'action':'cleanup','username':'root','key':(paths.ssh/(foreign['id']+'.pub')).read_text()})
+        assert result['revoked'] and not result['purged'] and result['shared']=='panel',result
+        rejected=run(*opts,input=json.dumps({'action':'status'}),check=False,timeout=20)
+        assert rejected.returncode!=0,rejected.stdout
+        print('PASS: real SSH bootstrap, pinned keys, forced command, peer transaction/boot restoration, scoped cleanup and revoked-key denial; co-installed panel preserved.')
     finally:
         server.terminate()
         server.wait(timeout=5)

@@ -32,15 +32,18 @@ def run(*args, check=True, timeout=20, input=None):
     return result
 
 
-def pair_values(local, remote):
+def pair_values(local, remote, slot=0):
     digest = hashlib.sha256("|".join(sorted((local, remote))).encode()).hexdigest()
-    index = int(digest[:6], 16) % (16 * 16384)
+    index = (int(digest[:6], 16) + slot) % (16 * 16384)
     network = ipaddress.IPv4Network((int(ipaddress.IPv4Address("10.240.0.0")) + index * 4, 30))
     hosts = list(map(str, network.hosts()))
     if ipaddress.IPv4Address(local) > ipaddress.IPv4Address(remote):
         hosts.reverse()
-    return {"id": digest[:10], "tunnel": "gmp-" + digest[:10], "local_tun": hosts[0], "peer_tun": hosts[1],
-            "key": int(digest[:8], 16) or 1, "outer_local": local, "outer_peer": remote}
+    result = {"id": digest[:10], "tunnel": "gmp-" + digest[:10], "local_tun": hosts[0], "peer_tun": hosts[1],
+              "key": int(digest[:8], 16) or 1, "outer_local": local, "outer_peer": remote}
+    if slot:
+        result["slot"] = slot
+    return result
 
 
 def local_addresses():
@@ -56,7 +59,7 @@ def discovered_ssh_ports():
 def gre_for(c):
     local = c.get("outer_local", c["listen_ip"])
     remote = c["resolved_ip"]
-    result = pair_values(local, remote)
+    result = pair_values(local, remote, c.get("gre_slot", 0))
     result["mtu"] = c["mtu"]
     return result
 
@@ -66,7 +69,7 @@ def match_port(low, high):
 
 
 def monitored(c, settings):
-    explicit = c.get("monitor_ports", []) + [int(x) for x in c.get("port_limits", {})]
+    explicit = c.get("monitor_ports", []) + [int(x) for x in c.get("port_limits", {})] + [int(x) for x in c.get("port_map", {})]
     ranges = ranges_for(c, settings)
     # Specific port lists are individually counted; wide ranges remain grouped
     # until the operator selects ports to monitor. Never adds 65k firewall rules.
@@ -205,6 +208,23 @@ class Engine:
     def interfaces(self):
         rows = json.loads(self.run("ip", "-j", "-4", "addr", "show").stdout)
         return {x["local"]: row["ifname"] for row in rows for x in row.get("addr_info", []) if x.get("scope") != "host"}
+
+    def routes(self):
+        return [{"dst": x["dst"], "dev": x.get("dev", "")} for x in
+                json.loads(self.run("ip", "-j", "-4", "route", "show", "table", "all").stdout)
+                if x.get("dst") and x["dst"] != "default"]
+
+    def clear_owned(self):
+        """Used only after the peer confirms no panel, peers or other managers remain."""
+        for table, hook, chain in HOOKS:
+            while self.run("iptables", "-w", "5", "-t", table, "-C", hook, "-j", chain, check=False).returncode == 0:
+                self.run("iptables", "-w", "5", "-t", table, "-D", hook, "-j", chain)
+        for table, chains in CHAINS.items():
+            present = [chain for chain in chains if self.run("iptables", "-w", "5", "-t", table, "-S", chain, check=False).returncode == 0]
+            for chain in present:
+                self.run("iptables", "-w", "5", "-t", table, "-F", chain)
+            for chain in reversed(present):
+                self.run("iptables", "-w", "5", "-t", table, "-X", chain)
 
     def preflight(self, config):
         interfaces = self.interfaces()

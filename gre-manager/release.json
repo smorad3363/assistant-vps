@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "1.1.0",
-  "revision": "3fc9e06bf79359aab2545e4697af4dfd4ccd689c",
+  "version": "1.2.0",
+  "revision": "b1be495f824a357160fa5524e1b56ba2d1b70db1",
   "files": {
     "gremgr-certificate.service": "ecaad1b0a845d02eda7dc0072d5fb9bbbdea4b874047e6c4401f5c441cec37b5",
     "gremgr-certificate.timer": "717a6d83996fdf54d8485b597bdfe339d6fff823feec19b1337ab400b70d6dc9",
@@ -14,21 +14,21 @@
     "install.sh": "2f3b14e86cb39faeb527731f860658ecfb5f30dba4a34ad7ea19163909b74c58",
     "legacy-restore.sh": "a2d40a8eb9a2afc875e1789e22e39d19fcc1a7c7d58f5dac1b667b8054fe71d5",
     "pair.py": "3ecc0ccd12b192bd8630d07c8d3e6410ff4b76e9a8a30afc700a9459eeb9099f",
-    "panel/__init__.py": "c374b03e5ac9c9e7f9918d85acd259d21971c29ef7891c4d910032102b25afb2",
-    "panel/agent.py": "8daae86a45c4174e391ccfcddf7ed568e3381eeb9ae21770d1887a0984b02ec3",
+    "panel/__init__.py": "d14599f656ac634743b08c03335287e2a4956b592c34a4432bffb4a0aa799308",
+    "panel/agent.py": "cbd17db174e61254f6cc9483ef0d66ab9a1600a6962ef23a99d32c5db7f01e6e",
     "panel/certificates.py": "09c2f988eb700d308ca6254e5a4fed9fe940cad56cde2f2d3d99286b474423d4",
     "panel/cli.py": "b60df7b3a80b3c6ebf4e988da97625fe9b6102aeee4dfd2a46da7c5f5fe5f99c",
-    "panel/controller.py": "e6d39328e5695a3a4e5833964f331ad9d6012b590d2fbcb51fabfb68fb3557e4",
-    "panel/demo.py": "9c9c03b72351c01a75e5a6e63deb502ef271b50acc135e57932d33e8692cc326",
-    "panel/engine.py": "737fe6fc1bb650fa358bfa64cf029dcdd50891cbc9ab0dfc821eb2c75e820b8c",
-    "panel/model.py": "8bd9fc07d165036e79c45f07a00bc7dd99fb01bfb2329c6cc2faf16ae64c16a1",
-    "panel/remote.py": "4e1ae87bbb2f4c8dbb5ca045825ac2e2c140d1bdcb4eae4903887f60aac1b487",
-    "panel/static/app.js": "918855529173dbcead7c6bb2b4bea339820266d04fab63e5ef1b2a7609528a35",
+    "panel/controller.py": "255a31bd1ab890b675d185a3f58e6dd203aa46aa2ebc78f8fc0d3bbf8897b783",
+    "panel/demo.py": "1fea150afdcb3c9ac848eafeb71a5ac92d4fec52d888b2cca4a496e22796b39b",
+    "panel/engine.py": "0c48f3e0a9bee110ddf395d81c590a07144b7c4d206e8cd00edfb69173d28653",
+    "panel/model.py": "a320d5eca6a5d009199fc3b739d38a1f328f4f01245e16f508a93434ea8752bc",
+    "panel/remote.py": "01bbb1ecb629b8f83b35a03979d67904abafb4a3e4cf226e82b343974c953e92",
+    "panel/static/app.js": "3675f265dfaaa89f9cb7f4866b03a6cbaf49c1bf296ca6fc77c99efaf4eb1252",
     "panel/static/favicon.svg": "c9c1421e8344aafc6d61c94b694ab51ed17505b1b3f779ef26a6d8b77efda5b1",
-    "panel/static/index.html": "8c96e0cb6b023736dbe6bcdcab93c9b3ff913f8ad5aa2bf42895afb4cbdd19aa",
-    "panel/static/style.css": "e9842f37879557c4f80bb8ab28c2fbe6ecb5d9bbc71bd66c967801e4ba4d9853",
+    "panel/static/index.html": "b1cebe070de897fb92522ad5c4bb25101fc1830a0e0936e13ad83eda412061a9",
+    "panel/static/style.css": "7c6220f53fcd34d49d818707b367e12cb74f9ec95c02a9b0a4fb8f7a31b4b1fd",
     "panel/store.py": "40859d581a5246153332295d2952da6cedd0fd29af52e1734192198a719c384d",
-    "panel/web.py": "43808b8ffd1e05f7fcaccc6ce877e09cdf2e13fa26e66939c805a4950f6d80af",
-    "panel/worker.py": "3ee422f874d89d439212845d6991ad7d9a68ad79111d1a24eb138946617d5660"
+    "panel/web.py": "f6cd837aea9e2815d634cfaf35ec60ed51948828670a58855edae6687f05a073",
+    "panel/worker.py": "348874a773058171f72ece58ad844da7d0dd0dc991368d98e06b1b0df57281b1"
   }
 }

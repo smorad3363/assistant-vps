@@ -171,13 +171,18 @@ def connection(data, settings, previous=None, resolver=resolve):
     mappings = data.get("port_map", previous.get("port_map", {}) if previous and ports == previous["ports"] else {})
     if isinstance(mappings, str):
         try:
-            mappings = dict(x.strip().split(":") for x in mappings.split(",") if x.strip())
+            entries = [x.strip().split(":") for x in mappings.split(",") if x.strip()]
+            if len({int(x[0]) for x in entries}) != len(entries):
+                raise ValueError()
+            mappings = dict(entries)
         except ValueError:
             raise PanelError("Use port mappings such as 8080:80,8443:443.", field="port_map")
     if not isinstance(mappings, dict) or len(mappings) > 128:
         raise PanelError("Invalid port mappings.", field="port_map")
     for p, destination in mappings.items():
         p = integer(p, 1, 65535, "port_map")
+        if str(p) in result["port_map"]:
+            raise PanelError("Duplicate mapped input port.", field="port_map")
         if not any(lo <= p <= hi for lo, hi in ranges_for(result, settings)):
             raise PanelError("Mapped input ports must belong to this connection.", field="port_map")
         result["port_map"][str(p)] = integer(destination, 1, 65535, "port_map")
@@ -196,6 +201,7 @@ def connection(data, settings, previous=None, resolver=resolve):
         result["port_limits"][str(p)] = {"up": rate(values.get("up")), "down": rate(values.get("down"))}
     if kind == "gre":
         result.update(mtu=integer(data.get("mtu", settings["mtu"]), 576, 1476, "mtu"),
+                      gre_slot=integer(data.get("gre_slot", previous.get("gre_slot", 0) if previous else 0), 0, 262143, "gre_slot"),
                       mtu_mode=data.get("mtu_mode", "auto"),
                       service_ip=address(data.get("service_ip") or resolved),
                       outer_local=address(data.get("outer_local") or result["listen_ip"]),
@@ -222,7 +228,7 @@ def validate_conflicts(items, settings):
     for index, a in enumerate(active):
         for b in active[index + 1:]:
             if a["kind"] == b["kind"] == "gre" and (a.get("outer_local", a["listen_ip"]), a["resolved_ip"]) == (b.get("outer_local", b["listen_ip"]), b["resolved_ip"]):
-                raise PanelError("Edit the existing GRE connection to this server.", "overlap")
+                raise PanelError("Edit the existing GRE connection to this server.", "gre_exists")
             if a["listen_ip"] != b["listen_ip"] or not set(a["protocols"]) & set(b["protocols"]):
                 continue
             if any(max(al, bl) <= min(ah, bh) for al, ah in ranges_for(a, settings) for bl, bh in ranges_for(b, settings)):

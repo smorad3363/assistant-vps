@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import re
 import shutil
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 out=Path(os.environ.get("BROWSER_OUTPUT","test-output"));out.mkdir(parents=True,exist_ok=True)
 with sync_playwright() as p:
@@ -42,9 +42,29 @@ with sync_playwright() as p:
     page.locator("#connection-form button[type=submit]").click()
     page.get_by_text("Browser edited",exact=True).first.wait_for(state="visible")
     row=page.locator(".connection").filter(has=page.get_by_text("Browser edited",exact=True))
+    row.locator('[data-action=edit]').click()
+    rows=page.locator('#port-rows .port-map-row')
+    rows.nth(0).locator('[data-port-source]').fill('5100')
+    rows.nth(0).locator('[data-port-target]').fill('5000')
+    page.locator('#add-port-row').click()
+    rows.nth(1).locator('[data-port-source]').fill('3300')
+    rows.nth(1).locator('[data-port-target]').fill('3000')
+    page.locator('#connection-form button[type=submit]').click()
+    row.locator('.port-traffic').wait_for(state='attached')
+    row.locator('[data-action=expand]').click()
+    expect(row.locator('.port-traffic')).to_contain_text('5100 → 5000')
+    expect(row.locator('.port-traffic')).to_contain_text('3300 → 3000')
+    page.wait_for_function("[...document.querySelectorAll('.port-traffic [data-live-port]')].some(x=>Number(x.textContent)>0)")
+    row.locator('[data-action=edit]').click()
+    assert rows.count()==2
+    assert set(rows.locator('[data-port-target]').evaluate_all('(els)=>els.map(x=>x.value)'))=={'5000','3000'}
+    rows.nth(1).locator('[data-port-source]').fill(rows.nth(0).locator('[data-port-source]').input_value())
+    page.locator('#connection-form button[type=submit]').click()
+    assert page.locator('#connection-form .form-error').inner_text()
+    page.keyboard.press('Escape')
     row.locator('[data-action=delete]').click()
     page.locator("#confirm-submit").click()
-    page.get_by_text("Browser edited",exact=True).wait_for(state="detached")
+    row.wait_for(state="detached")
     page.locator('[data-page=direct]').click()
     page.locator('[data-page=direct][aria-current=page]').wait_for()
     assert page.locator("#page-title").inner_text()=="انتقال مستقیم"
@@ -68,7 +88,17 @@ with sync_playwright() as p:
                 print('PANEL_MOBILE_PREVIEW='+base64.b64encode(page.screenshot(type='jpeg',quality=70)).decode())
         page.locator('[data-page=gre]').click()
         page.locator('#add-connection').click()
+        page.locator('#connection-form [value=selected]').check()
+        page.locator('#port-rows [data-port-source]').fill('5100')
+        page.locator('#port-rows [data-port-target]').fill('5000')
+        page.locator('#add-port-row').click()
+        page.locator('#port-rows .port-map-row').nth(1).locator('[data-port-source]').fill('3300')
+        page.locator('#port-rows .port-map-row').nth(1).locator('[data-port-target]').fill('3000')
         assert not page.evaluate('document.querySelector("#connection-dialog").scrollWidth>window.innerWidth')
+        page.screenshot(path=str(out/f'port-mappings-{width}.png'),full_page=True)
+        if os.environ.get('CI') and width==390:
+            import base64
+            print('PANEL_MAPPING_PREVIEW='+base64.b64encode(page.screenshot(type='jpeg',quality=65)).decode())
         page.locator('#connection-dialog [data-close]').first.click()
         page.locator('#connection-dialog').wait_for(state='hidden')
     page.emulate_media(reduced_motion='reduce')
@@ -77,5 +107,5 @@ with sync_playwright() as p:
     page.keyboard.press('Escape')
     page.locator('#connection-dialog').wait_for(state='hidden')
     assert not failures,failures
-    print(json.dumps({'result':'PASS','console_errors':failures,'viewports':[375,390,768,1440],'flows':['login','create','edit','delete','settings','keyboard escape','reduced motion']}))
+    print(json.dumps({'result':'PASS','console_errors':failures,'viewports':[375,390,768,1440],'flows':['login','create','edit','independent mapping rows','mapping roundtrip','duplicate input validation','live port rates','delete','settings','keyboard escape','reduced motion']}))
     browser.close()

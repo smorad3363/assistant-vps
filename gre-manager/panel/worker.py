@@ -60,7 +60,7 @@ def main():
                 controller.tick()
             except Exception as error:
                 controller.store.event("error", "Background check: " + str(error)[:600])
-            stop.wait(5)
+            stop.wait(1)
 
     threading.Thread(target=timer, daemon=True).start()
 
