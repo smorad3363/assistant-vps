@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.2.0",
-  "revision": "9c9979988f19ce1f0b25a86e47183dc8b3e6435d",
+  "revision": "3c1f94ab157b3f400385fa29e9539ed6ddaf6a7d",
   "files": {
     "gremgr-certificate.service": "ecaad1b0a845d02eda7dc0072d5fb9bbbdea4b874047e6c4401f5c441cec37b5",
     "gremgr-certificate.timer": "717a6d83996fdf54d8485b597bdfe339d6fff823feec19b1337ab400b70d6dc9",
@@ -15,10 +15,10 @@
     "legacy-restore.sh": "a2d40a8eb9a2afc875e1789e22e39d19fcc1a7c7d58f5dac1b667b8054fe71d5",
     "pair.py": "3ecc0ccd12b192bd8630d07c8d3e6410ff4b76e9a8a30afc700a9459eeb9099f",
     "panel/__init__.py": "d14599f656ac634743b08c03335287e2a4956b592c34a4432bffb4a0aa799308",
-    "panel/agent.py": "0af2d86ee0144e4310ccad0e42ee166d08ceae31c7727f708ddfd9ad14fb221b",
+    "panel/agent.py": "170195654f3263e8bca50f7f1ab1d750edf28f52cbf9dcc5232480f91d3b534a",
     "panel/certificates.py": "09c2f988eb700d308ca6254e5a4fed9fe940cad56cde2f2d3d99286b474423d4",
     "panel/cli.py": "b60df7b3a80b3c6ebf4e988da97625fe9b6102aeee4dfd2a46da7c5f5fe5f99c",
-    "panel/controller.py": "1e10e2319f7c9bfb2010524f04bfd1ecec6b902e603db66435ea5b2e7f55db28",
+    "panel/controller.py": "5cb1414585f432b79900ee6d73684a9c1e8d2ab2d305632a295ebf0903ca0418",
     "panel/demo.py": "1fea150afdcb3c9ac848eafeb71a5ac92d4fec52d888b2cca4a496e22796b39b",
     "panel/engine.py": "0c48f3e0a9bee110ddf395d81c590a07144b7c4d206e8cd00edfb69173d28653",
     "panel/model.py": "a320d5eca6a5d009199fc3b739d38a1f328f4f01245e16f508a93434ea8752bc",
