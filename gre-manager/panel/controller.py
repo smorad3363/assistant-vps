@@ -111,8 +111,11 @@ class Controller:
             if server and server["id"] not in remote:
                 remote[server["id"]] = self.remote.call(server, {"action": "status"})
             status = remote.get(c["server_id"], {})
-            profile = next((p for p in status.get("pair_profiles", []) if p["gre_id"] == gre_for(c)["id"]), None)
-            start = profile.get("slot", 0) if profile else c.get("gre_slot", 0)
+            profiles = sorted((p for p in status.get("pair_profiles", []) if p["gre_id"] == gre_for(c)["id"]),
+                              key=lambda p: p.get("enabled", True), reverse=True)
+            profile = profiles[0] if profiles else None
+            fixed = bool(profile and profile.get("enabled", True))
+            start = profile.get("slot", 0) if fixed else c.get("gre_slot", 0)
             routes = local + status.get("routes", [])
             blocked = [ipaddress.ip_network(r["dst"], strict=False) for r in routes
                        if r.get("dev") != gre_for(c)["tunnel"]]
@@ -138,8 +141,8 @@ class Controller:
                     if index > last:
                         return None
                 return index
-            chosen = available(preferred, preferred if profile else 262143)
-            if chosen is None and not profile:
+            chosen = available(preferred, preferred if fixed else 262143)
+            if chosen is None and not fixed:
                 chosen = available(0, preferred-1)
             if chosen is None:
                 raise PanelError("No free private GRE subnet was found on both endpoints.", "route_conflict")

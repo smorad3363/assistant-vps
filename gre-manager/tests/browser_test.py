@@ -64,7 +64,7 @@ with sync_playwright() as p:
     page.keyboard.press('Escape')
     row.locator('[data-action=delete]').click()
     page.locator("#confirm-submit").click()
-    page.get_by_text("Browser edited",exact=True).wait_for(state="detached")
+    row.wait_for(state="detached")
     page.locator('[data-page=direct]').click()
     page.locator('[data-page=direct][aria-current=page]').wait_for()
     assert page.locator("#page-title").inner_text()=="انتقال مستقیم"

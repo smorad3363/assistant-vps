@@ -147,7 +147,7 @@ def action(paths, request, engine=None):
         return {"version": __version__, "addresses": engine.interfaces(), "peers": len(peers),
                 "routes": engine.routes(),
                 "pair_profiles": [{"gre_id": x["gre"]["id"], "service_ip": x["service_ip"], "mtu": x["gre"]["mtu"],
-                                   "slot": x["gre"].get("slot", 0),
+                                   "slot": x["gre"].get("slot", 0), "enabled": x.get("enabled", True),
                                    "private_subnet": str(ipaddress.ip_network(x["gre"]["local_tun"] + "/30", strict=False))} for x in peers]}
     if operation == "cleanup":
         path, blob = management_key(request)
@@ -155,7 +155,7 @@ def action(paths, request, engine=None):
             raise PanelError("The management key was not found.")
         if list((paths.etc / "transactions").glob("*.json")):
             raise PanelError("A peer transaction is still pending.", "busy")
-        reason = ("peers" if peers else "panel" if paths.config.exists() else
+        reason = ("peers" if peers else "panel" if paths.config.exists() or Path("/opt/gremgr/current/panel/worker.py").exists() else
                   "legacy" if list((paths.etc / "pairs").glob("*.json")) else
                   "managers" if other_managers(path, blob) else "")
         if not reason:

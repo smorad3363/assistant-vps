@@ -92,6 +92,7 @@ class PortManagementTests(unittest.TestCase):
         c=self.make(enabled=False);cfg=self.store.config();cfg["connections"]=[c]
         subnet=str(ipaddress.ip_network(gre_for(c)["local_tun"]+"/30",strict=False))
         self.engine.routes=lambda:[{"dst":subnet,"dev":"new-vpn"}]
+        self.remote.call=lambda *args:{"pair_profiles":[{"gre_id":gre_for(c)["id"],"slot":0,"enabled":False}]}
         updated=copy.deepcopy(cfg);updated["connections"][0]["enabled"]=True
         self.controller.allocate_gre(updated,cfg)
         self.assertEqual(updated["connections"][0]["gre_slot"],1)
