@@ -13,6 +13,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   backend-network:
+    env:
+      GRE_PANEL_SKIP_ACME: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -31,7 +33,7 @@ jobs:
           python3 -m unittest discover -s gre-manager -p 'test_mtu.py' -v
           python3 -m unittest discover -s gre-manager -p 'test_docker_wireguard.py' -v
       - name: Install network test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod sshpass conntrack
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod sshpass conntrack strongswan xl2tpd ppp
       - name: Real kernel TCP and UDP in isolated namespaces
         run: |
           sudo mkdir -p /run/netns
@@ -39,10 +41,10 @@ jobs:
       - name: Full noninteractive install and update on disposable runner
         run: |
           python3 gre-manager/build-release.py WORKTREE
-          sudo bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
+          sudo --preserve-env=GRE_PANEL_SKIP_ACME bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
           sudo systemctl is-active gremgr-worker.service gremgr-web.service
-          sudo gremgr --version | grep -Fx 1.0.0
-          sudo bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
+          sudo gremgr --version | grep -Fx 1.1.0
+          sudo --preserve-env=GRE_PANEL_SKIP_ACME bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
           curl -kfSs https://127.0.0.1:8787/ | grep -F GRE
           sudo systemctl kill --kill-who=main --signal=SIGKILL gremgr-worker.service
           for i in {1..30}; do curl -kfSs https://127.0.0.1:8787/ >/dev/null 2>&1 && break || sleep 1; done

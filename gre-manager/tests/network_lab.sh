@@ -7,6 +7,8 @@ mount --make-rprivate /
 lab=$(mktemp -d)
 cleanup() {
   local result=$?
+  [[ -z ${ir_echo:-} ]] || kill "$ir_echo" 2>/dev/null || true
+  [[ -z ${fo_echo:-} ]] || kill "$fo_echo" 2>/dev/null || true
   if ((result)); then
     for role in ir fo; do
       echo "Network failure diagnostics: $role"
@@ -67,7 +69,7 @@ def listen(port,udp):
 ports=[22,6111,8787] if label==b'IRAN' else [80,1000,51820,51821,65535]
 for port in ports:
  for udp in (False,True): threading.Thread(target=listen,args=(port,udp),daemon=True).start()
-time.sleep(120)
+time.sleep(600)
 PY
 ip netns exec gm-ir python3 "$lab/echo.py" IRAN &
 ir_echo=$!
@@ -115,6 +117,12 @@ ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" gre
 ip netns exec gm-client python3 "$lab/client.py" 51821 FOREIGN
 ip netns exec gm-ir iptables-save | grep -F BASELINE-SSH
 ip netns exec gm-fo iptables-save | grep -F BASELINE-DIRECT
+modprobe ppp_generic
+[[ -c /dev/ppp ]] || mknod /dev/ppp c 108 0
+python3 "$PYTHONPATH/tests/ipsec_lab.py" "$lab" gre
+ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" direct
+python3 "$PYTHONPATH/tests/ipsec_lab.py" "$lab" direct
+ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" gre
 ip netns exec gm-ir python3 - "$lab/ir" <<'PY'
 from panel.engine import Engine
 from panel.store import Paths,Store

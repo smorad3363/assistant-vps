@@ -202,6 +202,8 @@ function renderEvents() {
 }
 function renderSettings() {
   const form=$('#settings-form');
+  const cert=state.certificate||{},labels={ready:'گواهی معتبر IP · تمدید خودکار فعال',pending:'صدور گواهی خودکار در انتظار اجرا',renewing:'در حال بررسی و تمدید گواهی',error:'صدور یا تمدید گواهی نیاز به بررسی دارد',manual:'گواهی دستی · تمدید خودکار غیرفعال'};
+  $('#certificate-status').textContent=(labels[cert.status]||labels.manual)+(cert.expires_at?' · اعتبار تا '+new Date(cert.expires_at*1000).toLocaleDateString('fa-IR'):'')+(cert.error?' · '+cert.error:'');
   if(!form.dataset.dirty && !form.contains(document.activeElement))for(const [key,value]of Object.entries(state.settings)){const el=form.elements[key];if(!el)continue;if(el.type==='checkbox')el.checked=value;else el.value=Array.isArray(value)?value.join(','):value;}
   $('#server-list').innerHTML=state.servers.length?state.servers.map(s=>`<div class="server-item" data-server="${s.id}"><div class="connection-avatar">${icon('server')}</div><div class="server-info"><strong>${esc(s.name)}</strong><small dir="ltr">${esc(s.host)}:${esc(s.port)} · ${esc(s.username)}</small><span class="status ${s.key_ready?'':'warning'}"><i></i>${s.key_ready?'کلید مدیریت آماده است':'نیاز به اتصال مجدد'}</span><details><summary>اثر انگشت سرور</summary><bdi dir="ltr">${(s.fingerprints||[]).map(esc).join('<br>')}</bdi></details></div><button class="icon-button" data-action="edit-server" aria-label="ویرایش اتصال سرور ${esc(s.name)}">${icon('edit')}</button><button class="icon-button" data-action="delete-server" aria-label="حذف سرور ${esc(s.name)}">${icon('trash')}</button></div>`).join(''):'<p class="empty-line">سروری برای مدیریت GRE اضافه نشده است.</p>';
   $('#backup-list').innerHTML=state.backups.length?state.backups.map(name=>`<div class="backup-row"><code dir="ltr">${esc(name)}</code><a class="button compact secondary" href="/api/backup.download?filename=${encodeURIComponent(name)}" download>${icon('down')}دانلود</a></div>`).join(''):'<p class="empty-line">بکاپ‌ها پس از اولین ثبت یا پشتیبان‌گیری روزانه اینجا نمایش داده می‌شوند.</p>';
@@ -331,6 +333,7 @@ document.addEventListener('click',async e=>{
     case 'restore':$('#backup-file').click();break;
     case 'password':$('#password-form').reset();$('.form-error',$('#password-form')).textContent='';$('#password-dialog').showModal();break;
     case 'tls':$('#tls-dialog').showModal();break;
+    case 'tls-auto':await runJob('tls.auto',{});break;
     case 'update':if(await confirmAction('به‌روزرسانی برنامه','فایل‌های نسخه جدید بررسی و نصب می‌شوند. پنل برای مدت کوتاهی دوباره راه‌اندازی می‌شود.','نصب نسخه جدید',false))await runJob('update',{});break;
   }
 });

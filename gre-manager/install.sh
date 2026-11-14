@@ -13,12 +13,14 @@ while (($#)); do
     *) echo "Unknown installation option: $1" >&2; exit 1 ;;
   esac
 done
-if [[ -n "$PANEL_PORT" && ! "$PANEL_PORT" =~ ^[0-9]{4,5}$ ]]; then
-  echo 'Panel port must be between 1024 and 65535.' >&2; exit 1
+if [[ -n "$PANEL_PORT" ]]; then
+  if [[ ! "$PANEL_PORT" =~ ^[0-9]{4,5}$ ]] || ((10#$PANEL_PORT < 1024 || 10#$PANEL_PORT > 65535)); then
+    echo 'Panel port must be between 1024 and 65535.' >&2; exit 1
+  fi
 fi
 if command -v apt-get >/dev/null; then
   missing=0
-  for binary in python3 ip iptables curl openssl ssh sshpass modprobe flock; do
+  for binary in python3 ip iptables ping curl openssl ssh sshpass modprobe flock; do
     command -v "$binary" >/dev/null || missing=1
   done
   if ((missing)); then
@@ -82,7 +84,7 @@ backup="/etc/gremgr/backups/install-$(date +%Y%m%d-%H%M%S)-$$"
 install -d -m 700 "$backup"
 old_release=""
 if [[ -e /opt/gremgr/current ]]; then old_release=$(readlink -f /opt/gremgr/current); fi
-for target in /usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-worker.service /etc/systemd/system/gremgr-web.service; do
+for target in /usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-worker.service /etc/systemd/system/gremgr-web.service /etc/systemd/system/gremgr-certificate.service /etc/systemd/system/gremgr-certificate.timer; do
   [[ ! -e "$target" ]] || cp -aL "$target" "$backup/$(basename "$target")"
 done
 if [[ -n "$old_release" ]]; then printf '%s\n' "$old_release" > "$backup/previous-release"; fi
@@ -92,6 +94,8 @@ install -m 755 "$release/gremgr.sh" /usr/local/sbin/gremgr
 install -m 755 "$release/pair.py" /usr/local/sbin/gremgr-pair
 install -m 644 "$release/gremgr-worker.service" /etc/systemd/system/gremgr-worker.service
 install -m 644 "$release/gremgr-web.service" /etc/systemd/system/gremgr-web.service
+install -m 644 "$release/gremgr-certificate.service" /etc/systemd/system/gremgr-certificate.service
+install -m 644 "$release/gremgr-certificate.timer" /etc/systemd/system/gremgr-certificate.timer
 if [[ -n "$PANEL_PORT" ]]; then
   (cd "$release" && python3 -m panel.cli init --port "$PANEL_PORT")
 else
@@ -117,7 +121,7 @@ if (( ! ready )); then
   if [[ -n "$old_release" && -d "$old_release" ]]; then
     ln -s "$old_release" /opt/gremgr/current.rollback
     mv -Tf /opt/gremgr/current.rollback /opt/gremgr/current
-    for target in /usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-worker.service /etc/systemd/system/gremgr-web.service; do
+    for target in /usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-worker.service /etc/systemd/system/gremgr-web.service /etc/systemd/system/gremgr-certificate.service /etc/systemd/system/gremgr-certificate.timer; do
       saved="$backup/$(basename "$target")"
       [[ ! -f "$saved" ]] || cp -a "$saved" "$target"
     done
@@ -126,6 +130,23 @@ if (( ! ready )); then
     echo 'Previous program release restored.' >&2
   fi
   exit 1
+fi
+if [[ ${GRE_PANEL_SKIP_ACME:-0} != 1 ]]; then
+  if (cd "$release" && python3 -m panel.certificates configure); then
+    if [[ ! -x /opt/gremgr/acme-venv/bin/certbot ]]; then
+      if command -v apt-get >/dev/null; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null
+      fi
+      python3 -m venv /opt/gremgr/acme-venv
+      /opt/gremgr/acme-venv/bin/pip install --disable-pip-version-check --quiet --timeout 30 'certbot==5.10.0'
+    fi
+    systemctl enable --now gremgr-certificate.timer >/dev/null
+    if ! systemctl start gremgr-certificate.service; then
+      echo 'Automatic IP certificate issuance is pending. See its status in Settings; renewal will retry.' >&2
+    fi
+  else
+    echo 'Automatic certificates require a public assigned IPv4. The panel remains available with its initial certificate.' >&2
+  fi
 fi
 echo "GRE Manager $VERSION installed. All management is in the web panel."
 python3 - <<'PY'
@@ -136,7 +157,10 @@ else:
  try: ips=[subprocess.check_output(['ip','-j','-4','route','get','1.1.1.1'],text=True)];ips=[json.loads(ips[0])[0].get('prefsrc','SERVER_IP')]
  except Exception: ips=['SERVER_IP']
 for ip in ips: print('Panel: https://'+ip+':'+str(c['port']))
-print('Initial HTTPS certificate is self-signed; replace it under Settings if needed.')
+from pathlib import Path
+try: t=json.loads(Path('/etc/gremgr/tls/automation.json').read_text())
+except (OSError, ValueError): t={}
+print('HTTPS: '+str(t.get('status','manual'))+'. Automatic certificate status is shown in Settings.')
 PY
 # Keep application rollbacks bounded; never removes configuration or history.
 python3 - <<'PY'

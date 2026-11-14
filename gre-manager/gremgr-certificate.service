@@ -1,0 +1,17 @@
+[Unit]
+Description=GRE Manager automatic IP certificate renewal
+Wants=network-online.target
+After=network-online.target gremgr-worker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/gremgr/current
+ExecStart=/usr/bin/python3 -m panel.certificates renew
+ExecStopPost=/usr/bin/python3 -m panel.certificates cleanup
+TimeoutStartSec=180
+TimeoutStopSec=30
+UMask=0077
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/gremgr /var/lib/gremgr /run
+ProtectHome=yes

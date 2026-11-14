@@ -7,10 +7,18 @@ forwarding**, and **Settings**. There are no interactive Bash management menus.
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre.sh | sudo bash
 ```
 
-The installer prints the HTTPS address and a randomly generated initial password.
+The installer prints the HTTPS address and randomly generated initial username and password.
 Save the password: it is printed only on first installation. The default port is
-8787. Initial TLS uses a self-signed certificate; Settings accepts a matching PEM
-certificate chain and private key. Use Settings to change the panel port, login
+8787. Public IPv4 installations automatically request a trusted Let's Encrypt IP
+certificate. A systemd timer checks renewal every six hours; expiry and errors
+are visible under Settings. IP certificates are short-lived (160 hours). During
+HTTP-01 validation, new TCP/80 connections on this IP are briefly redirected to
+an isolated challenge listener. Existing connections remain tracked; all-port
+forwarding resumes after validation, including timeout cleanup. Inbound TCP/80
+must be reachable from the public Internet. The initial self-signed certificate
+remains available if issuance fails. Settings also accepts a matching PEM
+certificate chain and private key, which disables automatic replacement until
+automatic IP certificates are explicitly re-enabled. Use Settings to change the panel port, login
 name/password, protected ports, telemetry retention and automatic checks.
 
 Supported initial targets: Linux with root, directly assigned IPv4, systemd, and
@@ -51,7 +59,9 @@ Exclude a port from an existing all-port connection before assigning it elsewher
 
 New automatic-MTU GRE connections test full-sized payloads, cap the result at
 the configured ceiling and leave 20 bytes of headroom. Saved imported MTUs are
-preserved. Manual MTU is available. IPv4 TCP MSS follows GRE MTU; reverse path
+preserved, including backup restores. Re-entering automatic mode probes both
+endpoints at the configured ceiling, so repeated restores do not reduce MTU.
+Manual MTU is available. IPv4 TCP MSS follows GRE MTU; reverse path
 checking uses loose mode only on owned GRE devices. IPv6, default routes and VPN
 applications are not changed.
 
@@ -79,6 +89,9 @@ GRE probe, TCP destination probe, and UDP application verification are separate.
 An open UDP port or successful ping is never reported as a successful application
 handshake. The generic UI leaves UDP unverified without a protocol response.
 The CI network lab independently verifies real bidirectional UDP payloads.
+IKE/NAT-T UDP/500 and UDP/4500 and authenticated decrypted IPsec traffic are
+excluded from the foreign wildcard-UDP reply fix. This preserves transport-mode
+IPsec selectors for L2TP/IPsec while retaining the fix for generic UDP services.
 
 ## Persistence, transactions and backups
 
@@ -90,6 +103,8 @@ have an independent systemd rollback timer. Local pending journals are recovered
 on service start; unreachable foreign recovery retries and remains visible in UI.
 Distributed changes depend on SSH availability: recovery is reported explicitly,
 not silently marked successful when a peer cannot be reached.
+The peer also retries expired transactions on its next authenticated request if
+a rollback timer failed, so a failed timer cannot permanently block new changes.
 
 Only own `GMP_*` chains and exact legacy pair rules are modified. No global
 iptables flush, policy reset, whole-firewall restore or global conntrack flush is
@@ -151,6 +166,14 @@ kernel limiter installation, restore and unrelated firewall preservation.
 GitHub Actions runs it and the full installer on disposable Ubuntu 22.04/24.04
 runners. Browser acceptance covers create/edit/delete, settings, keyboard escape,
 reduced motion and desktop/mobile overflow; screenshots are CI artifacts.
+
+The explicitly opt-in `tests/live_*` scripts are for disposable VPS acceptance.
+They install real WireGuard, OpenVPN TCP/UDP and L2TP/PPP/IPsec fixtures and a
+separate namespace client, check public TCP/UDP payloads and mappings, and measure
+aggregate and per-port upload/download limits. They require the peer to have
+already been added through the authenticated panel API and take its test SSH
+password only from `LAB_PEER_PASSWORD`. Never run these fixtures on a production
+VPN host. `GRE_PANEL_SKIP_ACME=1` skips public CA requests in isolated CI fixtures.
 
 Explicit local development fixture (no network mutations):
 

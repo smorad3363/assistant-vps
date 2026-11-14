@@ -22,6 +22,8 @@ def main():
     store = Store()
     cfg = store.config()
     if args.command == "init":
+        if not store.secret("password"):
+            cfg["settings"]["username"] = os.environ.get("GRE_PANEL_USERNAME") or "admin_" + secrets.token_hex(4)
         if args.port is not None:
             from .model import integer
             cfg["settings"]["port"] = integer(args.port, 1024, 65535, "port")
