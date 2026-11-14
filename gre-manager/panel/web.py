@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 MAX_REQUEST = 48 * 1024 * 1024
 STATIC = Path(__file__).parent / "static"
 GET_ROUTES = {"state", "stats", "job", "backup.download"}
-POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "update"}
+POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update"}
 
 
 class RPC:

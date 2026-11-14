@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GRE Manager IP certificate renewal every six hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+RandomizedDelaySec=600
+Persistent=yes
+Unit=gremgr-certificate.service
+
+[Install]
+WantedBy=timers.target

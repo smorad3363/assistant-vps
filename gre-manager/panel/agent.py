@@ -10,6 +10,7 @@ import time
 import uuid
 
 from .engine import Engine, pair_values, run
+from . import __version__
 from .model import DEFAULTS, PanelError, address, integer
 from .store import Paths, atomic_json
 
@@ -63,10 +64,15 @@ def recover(paths, transaction, engine):
 
 def action(paths, request, engine=None):
     engine = engine or Engine(paths)
+    # Reconcile expired leases even if a rollback unit failed or was killed.
+    # Active leases retain their full commit window.
+    for pending in (paths.etc / "transactions").glob("*.json"):
+        if json.loads(pending.read_text()).get("deadline", 0) <= time.time():
+            recover(paths, pending.stem, engine)
     peers = read_peers(paths)
     operation = request.get("action")
     if operation == "status":
-        return {"version": "1.0.0", "addresses": engine.interfaces(), "peers": len(peers),
+        return {"version": __version__, "addresses": engine.interfaces(), "peers": len(peers),
                 "pair_profiles": [{"gre_id": x["gre"]["id"], "service_ip": x["service_ip"], "mtu": x["gre"]["mtu"]} for x in peers]}
     if operation == "revoke-key":
         import pwd
@@ -111,7 +117,7 @@ def action(paths, request, engine=None):
             if not remove:
                 updated.append(peer)
         try:
-            run("systemd-run", "--quiet", "--unit=gremgr-peer-rollback-" + identity, "--on-active=120s",
+            run("systemd-run", "--quiet", "--unit=gremgr-peer-rollback-" + identity, "--on-active=120s", "--timer-property=AccuracySec=1s",
                 "/usr/local/sbin/gremgr-peer", "--recover", identity)
             engine.apply(combined(paths, updated), combined(paths, peers))
             atomic_json(paths.etc / "peers.json", updated)

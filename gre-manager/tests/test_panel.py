@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from panel.agent import validate_peer
+from panel.agent import validate_peer, action as peer_action
 from panel.controller import Controller
 from panel.demo import DemoEngine, DemoRemote, LocalBackend
 from panel.engine import Engine, build_rules, gre_for, pair_values
@@ -83,6 +83,28 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_remote_bootstrap_is_valid_python(self):
         compile(BOOTSTRAP, "<bootstrap>", "exec")
+
+    def test_peer_udp_reply_fix_preserves_ipsec_endpoint_and_decrypted_l2tp(self):
+        g=pair_values("203.0.113.10","192.0.2.10");g["mtu"]=1380
+        peer={"id":"abcdef0123","kind":"peer","enabled":True,"gre":g,"service_ip":"203.0.113.10"}
+        rules=build_rules({"settings":dict(DEFAULTS),"connections":[peer]},{"203.0.113.10":"wan0"})
+        local=[" ".join(r) for r in rules["nat"]["GMP_LOCAL"]]
+        self.assertTrue(any("! --dports 500,4500" in r and "--pol none" in r and "-j SNAT" in r for r in local))
+        self.assertTrue(any("--pol ipsec" in " ".join(r) and "--dport 1701" in " ".join(r) for r in rules["filter"]["GMP_INPUT"]))
+
+    def test_restore_keeps_inversion_as_a_rules_file_token(self):
+        import subprocess
+        calls=[]
+        with tempfile.TemporaryDirectory() as directory:
+            engine=Engine(Paths(directory))
+            def run(*args,**kw):
+                calls.append((args,kw))
+                return subprocess.CompletedProcess(args,0,"","")
+            engine.run=run
+            engine.restore_owned({"nat":{"GMP_LOCAL":[["-p","udp","-m","multiport","!","--dports","500,4500","-j","ACCEPT"]]}})
+        payload=next(kw["input"] for args,kw in calls if args[0]=="iptables-restore")
+        self.assertIn("multiport ! --dports",payload)
+        self.assertNotIn("'!'",payload)
 
 
 class StoreTests(unittest.TestCase):
@@ -185,12 +207,59 @@ class TransactionTests(StoreTests):
         self.assertEqual(self.store.config(), before)
         self.assertFalse(self.controller.pending.exists())
 
+    def test_peer_request_retries_expired_rollback_after_timer_failure(self):
+        from panel.store import atomic_json
+        pending=self.store.paths.etc/"transactions"/"0123456789abcdef.json"
+        atomic_json(pending,{"previous":[],"deadline":time.time()-1})
+        reply=peer_action(self.store.paths,{"action":"status"},self.engine)
+        self.assertEqual(reply["peers"],0)
+        self.assertFalse(pending.exists())
+
+    def test_panel_can_return_to_previous_port_with_time_wait_connections(self):
+        import socket
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            listener.bind(("127.0.0.1",0));port=listener.getsockname()[1];listener.listen()
+            with socket.socket() as client:
+                client.connect(("127.0.0.1",port));server,_=listener.accept()
+                server.close();client.recv(1)
+        self.controller.schedule_web_restart=lambda:None
+        self.controller.operation("settings.save",{"port":port},lambda *args:None)
+        self.assertEqual(self.store.config()["settings"]["port"],port)
+
+    def test_panel_still_rejects_an_actively_listening_port(self):
+        import socket
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            listener.bind(("127.0.0.1",0));port=listener.getsockname()[1];listener.listen()
+            with self.assertRaises(PanelError) as caught:
+                self.controller.operation("settings.save",{"port":port},lambda *args:None)
+            self.assertEqual(caught.exception.code,"port_in_use")
+
     def test_gre_peer_failure_does_not_leave_a_half_created_connection(self):
         cfg=self.store.config();server=self.remote.connect({"host":"203.0.113.10"});cfg["servers"].append(server);self.store.save(cfg)
         changed=copy.deepcopy(cfg);changed["connections"]=[make(kind="gre", server_id=server["id"])]
         self.engine.probe=lambda c: {"gre":False}
         with self.assertRaises(PanelError): self.controller.transaction(changed)
         self.assertEqual(self.store.config(),cfg)
+
+    def test_auto_mtu_starts_from_ceiling_and_restore_preserves_saved_mtu(self):
+        cfg=self.store.config();server=self.remote.connect({"host":"203.0.113.10"});cfg["servers"].append(server);self.store.save(cfg)
+        changed=copy.deepcopy(cfg)
+        changed["connections"]=[make(kind="gre",server_id=server["id"],mtu=1280)]
+        measurements=[]
+        def measure(c,ceiling):
+            self.assertEqual(c["mtu"],ceiling)
+            measurements.append(c["mtu"])
+            return ceiling-20
+        self.engine.choose_mtu=measure
+        self.controller.transaction(changed)
+        saved=self.store.config()
+        self.assertEqual(saved["connections"][0]["mtu"],cfg["settings"]["mtu"]-20)
+        self.controller.transaction(dict(saved,connections=[]))
+        self.controller.transaction(saved,measure_mtu=False)
+        self.assertEqual(self.store.config()["connections"][0]["mtu"],saved["connections"][0]["mtu"])
+        self.assertEqual(len(measurements),1)
 
 
 class HTTPTests(unittest.TestCase):

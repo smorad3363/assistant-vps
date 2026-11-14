@@ -52,7 +52,7 @@ class LocalBackend:
 class DemoController(Controller):
     def schedule_web_restart(self): pass
     def operation(self, operation, payload, progress):
-        if operation == "update": return {"scheduled": True}
+        if operation in ("update", "tls.auto"): return {"scheduled": True}
         return super().operation(operation, payload, progress)
 
 

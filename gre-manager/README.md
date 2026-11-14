@@ -1,4 +1,4 @@
-# GRE Manager 1.0
+# GRE Manager 1.1
 
 A compact Persian web panel for GRE and direct TCP/UDP port forwarding.
 All create, edit, delete, pause, test, speed-limit, statistics, backup/restore and
@@ -10,7 +10,8 @@ curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre
 ```
 
 Run on the Iran server. The installer prints the HTTPS URL (default port 8787)
-and first-install login credentials. Add the foreign server under Settings for
+and random first-install login credentials. Public IPv4 installations request a
+trusted IP certificate with automatic renewal. Add the foreign server under Settings for
 automatic GRE setup over SSH; direct forwarding does not require outside SSH.
 SSH and panel ports are protected. Existing pair profiles and saved MTU values
 are adopted without deleting live GRE interfaces. Updates retain configuration

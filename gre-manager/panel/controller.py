@@ -115,8 +115,19 @@ class Controller:
                     raise PanelError("Connect the foreign SSH server before changing this imported GRE route.", "ssh_key")
         return changes
 
-    def transaction(self, updated, progress=lambda p, m: None):
+    def transaction(self, updated, progress=lambda p, m: None, measure_mtu=True):
         previous = self.store.config()
+        measurements = set()
+        if measure_mtu:
+            for c in updated["connections"]:
+                old = next((x for x in previous["connections"] if x["id"] == c["id"]), None)
+                if c["kind"] == "gre" and c["enabled"] and c["mtu_mode"] == "auto" and (
+                        old is None or old.get("resolved_ip") != c["resolved_ip"] or old.get("mtu_mode") != "auto"):
+                    # Probe with both endpoints at the ceiling, then subtract
+                    # headroom once. Probing the saved reduced MTU shrinks it
+                    # again on every restore or manual-to-auto transition.
+                    c["mtu"] = updated["settings"]["mtu"]
+                    measurements.add(c["id"])
         validate_conflicts(updated["connections"], updated["settings"])
         self.engine.preflight(self.combined(updated))
         self.collect()
@@ -145,7 +156,7 @@ class Controller:
                     self.health[c["id"]] = health
                     if health["gre"] is not True:
                         raise PanelError("The GRE peer did not respond. Previous settings have been restored.", "gre_probe")
-                    if c["mtu_mode"] == "auto" and (old is None or old.get("resolved_ip") != c["resolved_ip"] or old.get("mtu_mode") != "auto"):
+                    if c["id"] in measurements:
                         c["mtu"] = self.engine.choose_mtu(c, updated["settings"]["mtu"])
             # Keep both sides at the measured MTU. The first stage used the ceiling.
             self.collect()
@@ -244,6 +255,10 @@ class Controller:
             identity = str(payload.get("id", ""))
             if any(x.get("server_id") == identity for x in cfg["connections"]):
                 raise PanelError("This server is still used by a GRE connection.", "in_use")
+            server = next((x for x in cfg["servers"] if x["id"] == identity), None)
+            public = self.paths.ssh / (identity + ".pub") if re.fullmatch(r"[0-9a-f]{10}", identity) else None
+            if server and public and public.is_file():
+                self.remote.call(server, {"action": "revoke-key", "username": server["username"], "key": public.read_text()})
             cfg["servers"] = [x for x in cfg["servers"] if x["id"] != identity]
             self.store.save(cfg)
             for suffix in ("", ".pub", ".known"):
@@ -276,6 +291,9 @@ class Controller:
                 cfg["settings"]["ssh_ports"] = sorted(set(cfg["settings"]["ssh_ports"] + discovered_ssh_ports()))
             if cfg["settings"]["port"] != previous["port"]:
                 with socket.socket() as probe:
+                    # Match HTTPServer's reuse behavior: TIME_WAIT from a
+                    # previous panel port must not look like a live listener.
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     try:
                         probe.bind(("0.0.0.0", cfg["settings"]["port"]))
                     except OSError:
@@ -313,7 +331,7 @@ class Controller:
             incoming["connections"] = normalized
             # Validate the database before any network state is changed.
             self.validate_telemetry(telemetry)
-            self.transaction(incoming, progress)
+            self.transaction(incoming, progress, measure_mtu=False)
             self.restore_telemetry(telemetry)
             return {"paused_gre": sum(x["kind"] == "gre" and not x["enabled"] for x in normalized)}
         if operation == "tls.save":
@@ -337,10 +355,21 @@ class Controller:
                     source.replace(destination)
                     os.chmod(destination, 0o640)
                 self.publish_web_config(cfg)
+                from .certificates import status, save
+                automation = status(self.paths)
+                automation.update(enabled=False, status="manual")
+                save(self.paths, automation)
             self.schedule_web_restart()
             return {}
+        if operation == "tls.auto":
+            from .certificates import configure, save
+            automation = configure(self.store)
+            automation.update(enabled=True, status="pending", error="")
+            save(self.paths, automation)
+            run("systemctl", "start", "--no-block", "gremgr-certificate.service")
+            return {"scheduled": True}
         if operation == "update":
-            run("systemd-run", "--quiet", "--unit=gremgr-update-" + uuid.uuid4().hex[:8], "--on-active=3s",
+            run("systemd-run", "--quiet", "--unit=gremgr-update-" + uuid.uuid4().hex[:8], "--on-active=3s", "--timer-property=AccuracySec=1s",
                 "/bin/bash", "/opt/gremgr/current/install.sh", "--update-only")
             self.store.event("info", "Update scheduled. The management services will restart after package verification.")
             return {"scheduled": True}
@@ -424,7 +453,7 @@ class Controller:
 
     def schedule_web_restart(self):
         self.publish_web_config()
-        run("systemd-run", "--quiet", "--unit=gremgr-web-reload-" + uuid.uuid4().hex[:8], "--on-active=2s",
+        run("systemd-run", "--quiet", "--unit=gremgr-web-reload-" + uuid.uuid4().hex[:8], "--on-active=2s", "--timer-property=AccuracySec=1s",
             "/bin/systemctl", "restart", "gremgr-web.service")
 
     def state(self, session):
@@ -443,7 +472,8 @@ class Controller:
             addresses = self.engine.interfaces()
         except PanelError:
             addresses = {}
-        return dict(cfg, version=__version__, csrf=session["csrf"], addresses=addresses,
+        from .certificates import status
+        return dict(cfg, version=__version__, csrf=session["csrf"], addresses=addresses, certificate=status(self.paths),
                     stats=self.stats_cache, events=self.store.events(), sampled_at=self.last_sample,
                     recovering=self.pending.exists(), backups=[p.name for p in sorted(self.paths.backups.glob("backup-*.zip"), reverse=True)])
 
@@ -484,7 +514,7 @@ class Controller:
             config, _ = self.store.read_backup(base64.b64decode(payload.get("content", ""), validate=True))
             return {"connections": len(config["connections"]), "servers": len(config["servers"]),
                     "addresses": sorted({x["listen_ip"] for x in config["connections"]})}
-        if route in {"connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "update"}:
+        if route in {"connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update"}:
             return self.submit(route, copy.deepcopy(payload))
         raise PanelError("Endpoint not found.", "not_found")
 

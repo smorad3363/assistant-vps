@@ -127,10 +127,18 @@ def build_rules(config, interfaces, docker_udp=False):
                 add("filter", "GMP_INPUT", "-i", t, "-s", peer, "-d", c["service_ip"], "-p", proto,
                     "-m", "conntrack", "--ctstate", "DNAT", "-j", "ACCEPT")
                 if proto == "udp" and c["service_ip"] in interfaces:
+                    add("filter", "GMP_INPUT", "-i", t, "-s", peer, "-d", c["service_ip"], "-p", "udp",
+                        "--dport", "1701", "-m", "policy", "--dir", "in", "--pol", "ipsec", "-j", "ACCEPT")
                     # The owned GRE local route prefers the service IP below.
                     # INPUT SNAT to that GRE address lets wildcard UDP replies
                     # select the service source and match the tracked DNAT tuple.
+                    # IKE/NAT-T uses explicit source addressing. Rewriting its
+                    # peer to our own local GRE address breaks transport-mode
+                    # XFRM selectors. Decrypted IPsec payloads must also retain
+                    # their authenticated endpoints and ports.
                     add("nat", "GMP_LOCAL", "-i", t, "-s", peer, "-d", c["service_ip"], "-p", "udp",
+                        "-m", "multiport", "!", "--dports", "500,4500",
+                        "-m", "policy", "--dir", "in", "--pol", "none",
                         "-m", "conntrack", "--ctstate", "DNAT", "-j", "SNAT", "--to-source", g["local_tun"])
                 add("filter", "GMP_FWD", "-i", t, "-s", peer, "-p", proto, "-m", "conntrack", "--ctstate", "DNAT", "-j", "ACCEPT")
                 add("filter", "GMP_FWD", "-o", t, "-d", peer, "-p", proto, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
@@ -269,7 +277,9 @@ class Engine:
             lines = ["*" + table]
             lines += ["-F " + name for name in chains]
             for name, rules in chains.items():
-                lines += ["-A " + name + " " + shlex.join(rule) for rule in rules]
+                # iptables-restore parses a rules file, not a shell command.
+                # Inversion must remain a bare token; shlex.join quotes '!'.
+                lines += ["-A " + name + " " + " ".join("!" if x == "!" else shlex.quote(x) for x in rule) for rule in rules]
             lines.append("COMMIT")
             self.run("iptables-restore", "-w", "10", "--noflush", input="\n".join(lines) + "\n")
         for table, parent, own in HOOKS:
@@ -314,6 +324,11 @@ class Engine:
             # Public service-address routes and the default route are untouched.
             self.run("ip", "route", "replace", "local", g["local_tun"] + "/32", "dev", g["tunnel"],
                      "table", "local", "src", source, "proto", "kernel")
+            # IPsec transport-mode replies retain their real GRE peer rather
+            # than INPUT SNAT. A wildcard L2TP socket must select the service
+            # source so its reply matches the authenticated XFRM selector.
+            self.run("ip", "route", "replace", g["peer_tun"] + "/32", "dev", g["tunnel"],
+                     "src", source, "proto", "static")
 
     @staticmethod
     def gre_devices(config):
