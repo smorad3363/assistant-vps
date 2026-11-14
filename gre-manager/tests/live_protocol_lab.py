@@ -44,7 +44,8 @@ def stop():
  run('ip','netns','del',NS,check=False)
  for dev in ('gml-host','gml-wgs','gml-ovs','gml-ovts'):run('ip','link','del',dev,check=False)
  rule=['-s','10.233.0.0/30','-o','eth0','-m','comment','--comment','gremgr-disposable-test','-j','MASQUERADE']
- while run('iptables','-t','nat','-C','POSTROUTING',*rule,check=False).returncode==0:run('iptables','-t','nat','-D','POSTROUTING',*rule)
+ for variant in (rule,rule+['--random-fully']):
+  while run('iptables','-t','nat','-C','POSTROUTING',*variant,check=False).returncode==0:run('iptables','-t','nat','-D','POSTROUTING',*variant)
 def prepare(front,l2tp=True):
  if records.exists():stop()
  run('apt-get','update','-qq',timeout=180)
@@ -57,7 +58,7 @@ def prepare(front,l2tp=True):
  run('ip','addr','add','10.233.0.1/30','dev','gml-host');run('ip','link','set','gml-host','up')
  for args in [('link','set','lo','up'),('addr','add','10.233.0.2/30','dev','gml-uplink'),('link','set','gml-uplink','up'),('route','add','default','via','10.233.0.1')]:run('ip','-n',NS,*args)
  run('sysctl','-w','net.ipv4.ip_forward=1')
- run('iptables','-t','nat','-I','POSTROUTING','1','-s','10.233.0.0/30','-o','eth0','-m','comment','--comment','gremgr-disposable-test','-j','MASQUERADE')
+ run('iptables','-t','nat','-I','POSTROUTING','1','-s','10.233.0.0/30','-o','eth0','-m','comment','--comment','gremgr-disposable-test','-j','MASQUERADE','--random-fully')
  # WireGuard: real separate namespace client, public frontend endpoint.
  sk=run('wg','genkey').stdout.strip();ck=run('wg','genkey').stdout.strip()
  def public(key):return subprocess.run(['wg','pubkey'],input=key,text=True,capture_output=True,check=True).stdout.strip()
@@ -132,6 +133,7 @@ def verify():
    time.sleep(.3)
    up=json.loads(run('ip','netns','exec',NS,'iperf3','-c',ip,'-p',str(port),'-t','2','-b','10M','-J',timeout=15).stdout)
    down=json.loads(run('ip','netns','exec',NS,'iperf3','-c',ip,'-p',str(port),'-t','2','-b','10M','-R','-J',timeout=15).stdout)
+   assert up['end']['sum_received']['bytes']>65536 and down['end']['sum_received']['bytes']>65536
    results[name]={'passed':True,'up_bytes':up['end']['sum_received']['bytes'],'down_bytes':down['end']['sum_received']['bytes']}
   except Exception as error:results[name]={'passed':False,'error':str(error)}
  results['wg_handshake']=run('wg','show','gml-wgs','latest-handshakes',check=False).stdout.strip().split('\t')[-1]
@@ -167,6 +169,10 @@ def main():
     if result.returncode:
         print(result.stderr[-5000:], file=sys.stderr)
         raise SystemExit(result.returncode)
+    if args.action == "verify":
+        answer = json.loads(result.stdout)
+        if any(isinstance(value, dict) and not value.get("passed") for value in answer.values()):
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

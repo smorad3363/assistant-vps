@@ -123,6 +123,7 @@ python3 "$PYTHONPATH/tests/ipsec_lab.py" "$lab" gre
 ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" direct
 python3 "$PYTHONPATH/tests/ipsec_lab.py" "$lab" direct
 ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" gre
+ip netns exec gm-client python3 "$lab/client.py" 51821 FOREIGN
 ip netns exec gm-ir python3 - "$lab/ir" <<'PY'
 from panel.engine import Engine
 from panel.store import Paths,Store
