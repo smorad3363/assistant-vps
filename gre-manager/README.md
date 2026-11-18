@@ -26,3 +26,12 @@ The old original installation URL is also retained:
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre-manager/install.sh | sudo bash
 ```
 
+## Idle TCP state on a GRE ingress
+
+Run `sudo bash gre-manager/ingress-conntrack.sh` from a repository checkout on
+an ingress host that accumulates idle TCP NAT entries. It applies a two-hour
+idle TCP conntrack timeout, preserves a stricter live timeout, and arranges for
+the kernel module to load before the boot-time sysctl service. Existing entries
+age out on their current timers or pick up the setting when traffic resumes.
+The provider manages its upstream connection tracking separately.
+
