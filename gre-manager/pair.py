@@ -130,45 +130,104 @@ def change_rules(c, up):
                 exists = run(*prefix, "-C", chain, *args, check=False).returncode == 0
 
 
-def docker_wireguard_rule(c):
-    """Narrow bridge between GRE ingress and Docker's published WG UDP port."""
+def docker_wireguard_rule(c, published_port=51820):
+    """Scoped forwarding to Docker for one verified published WireGuard UDP port."""
     if c["role"] != "foreign":
         return None
+    if not isinstance(published_port, int) or isinstance(published_port, bool) or not 1 <= published_port <= 65535:
+        raise ValueError("Invalid published WireGuard UDP port.")
     return [
         "-i", c["tunnel"], "-s", c["peer_tun"] + "/32",
-        "-d", c["local_tun"] + "/32", "-p", "udp", "--dport", "51820",
+        "-d", c["local_tun"] + "/32", "-p", "udp", "--dport", str(published_port),
         "-m", "comment", "--comment", "gmp:" + c["id"] + ":docker-wg",
         "-j", "DOCKER",
     ]
 
 
+def docker_udp_publications(stdout):
+    """Parse exact Docker UDP DNAT rules, no inference from a panel TCP port."""
+    result = set()
+    for line in stdout.splitlines():
+        try:
+            args = shlex.split(line)
+            if not args or args[:2] != ["-A", "DOCKER"]:
+                continue
+            def value(flag):
+                return args[args.index(flag) + 1]
+            if value("-p") != "udp" or value("-j") != "DNAT":
+                continue
+            public = int(value("--dport"))
+            target_ip, inner = value("--to-destination").rsplit(":", 1)
+            ipaddress.IPv4Address(target_ip)
+            inside = int(inner)
+            if 1 <= public <= 65535 and 1 <= inside <= 65535:
+                result.add((public, inside))
+        except (ValueError, IndexError, AttributeError):
+            continue
+    return result
+
+
+def _owned_docker_rules(c, stdout):
+    """Return only rules with our exact identity and tunnel source/destination."""
+    tag = "gmp:" + c["id"] + ":docker-wg"
+    result = []
+    for line in stdout.splitlines():
+        try:
+            args = shlex.split(line)
+            if args[:2] != ["-A", "PREROUTING"]:
+                continue
+            body = args[2:]
+            def value(flag):
+                return body[body.index(flag) + 1]
+            if (value("--comment") == tag and value("-i") == c["tunnel"]
+                    and value("-s") == c["peer_tun"] + "/32"
+                    and value("-d") == c["local_tun"] + "/32"):
+                result.append(body)
+        except (ValueError, IndexError):
+            continue
+    return result
+
+
 def sync_docker_wireguard(c, enable=True):
-    """Restore the Docker DNAT path; never alter other ports or Docker rules."""
-    args = docker_wireguard_rule(c)
-    if args is None:
+    """Restore the Docker route only when its UDP target matches live wg0."""
+    if c["role"] != "foreign":
         return
     prefix = ("iptables", "-w", "10", "-t", "nat")
     published = run(*prefix, "-S", "DOCKER", check=False)
-    # Docker may start after GRE; the periodic sync retries harmlessly.
-    if published.returncode != 0:
+    existing = run(*prefix, "-S", "PREROUTING", check=False)
+    if existing.returncode != 0:
         return
-    active = any(
-        "-p udp" in line and "--dport 51820" in line
-        and "-j DNAT" in line and "--to-destination " in line
-        for line in published.stdout.splitlines()
-    )
-    present = run(*prefix, "-C", "PREROUTING", *args, check=False).returncode == 0
-    if not enable or not active:
-        if present:
-            run(*prefix, "-D", "PREROUTING", *args)
-        return
-    rules_now = run(*prefix, "-S", "PREROUTING").stdout.splitlines()
-    first = next((line for line in rules_now if line.startswith("-A PREROUTING ")), "")
-    if present and ("gmp:" + c["id"] + ":docker-wg") in first:
-        return
-    if present:
-        run(*prefix, "-D", "PREROUTING", *args)
-    run(*prefix, "-I", "PREROUTING", "1", *args)
+    owned = _owned_docker_rules(c, existing.stdout)
+    candidates = docker_udp_publications(published.stdout) if published.returncode == 0 else set()
+    # A single WireDash wg0 publication can be mapped to any host UDP port.
+    # Multiple UDP services are ambiguous; never hijack a different listener.
+    target = next(iter(candidates)) if len(candidates) == 1 else None
+    active = False
+    if enable and target:
+        public, internal = target
+        try:
+            live = run("docker", "exec", "wgdashboard", "wg", "show", "wg0",
+                       "listen-port", check=False)
+            live_port = int(live.stdout.strip()) if live.returncode == 0 and live.stdout.strip() else None
+        except (OSError, ValueError):
+            live_port = None
+        # Preserve the proven legacy 51820 default on minimal Docker hosts.
+        # For a live mismatch, defer to WireDash's explicit host DNAT instead
+        # of jumping into an obsolete Docker destination.
+        active = (live_port == internal or
+                  (live_port is None and target == (51820, 51820)))
+        expected = docker_wireguard_rule(c, public)
+    else:
+        expected = None
+    if active and len(owned) == 1 and owned[0] == expected:
+        first = next((line for line in existing.stdout.splitlines()
+                      if line.startswith("-A PREROUTING ")), "")
+        if "gmp:" + c["id"] + ":docker-wg" in first:
+            return
+    for old in owned:
+        run(*prefix, "-D", "PREROUTING", *old)
+    if active:
+        run(*prefix, "-I", "PREROUTING", "1", *expected)
 
 
 def owned_device(c, device):
@@ -473,4 +532,3 @@ if __name__ == "__main__":
         details = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
         print("ERROR:", details, file=sys.stderr)
         sys.exit(1)
-
