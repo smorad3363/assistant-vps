@@ -111,6 +111,13 @@ def gre_for(c):
     return result
 
 
+def restore_token(value):
+    """Render an argument for iptables-restore's double-quoted rules format."""
+    if value and not any(letter.isspace() or letter in '\"\\' for letter in value):
+        return value
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
 def match_port(low, high):
     return str(low) if low == high else f"{low}:{high}"
 
@@ -337,21 +344,27 @@ class Engine:
             for chain in reversed(present):
                 self.run("iptables", "-w", "5", "-t", table, "-X", chain)
 
-    def check_vxlan(self, links, interfaces):
+    def check_udp_overlays(self, links, interfaces):
         if not links:
             return
+        method = links[0]["method"]
+        name = method.upper()
         identifiers, ports, devices = {}, set(), {}
         for link in links:
             interface = interfaces.get(link["outer_local"])
             if not interface:
-                raise PanelError("The configured VXLAN source address is unavailable.", "local_ip", "outer_ip")
+                raise PanelError(f"The configured {name} source address is unavailable.", "local_ip", "outer_ip")
+            if method == "geneve":
+                if driver_for(link).preferred_source(link, self.run) != (link["outer_local"], interface):
+                    raise PanelError("Select the source address and interface used by the route to the GENEVE endpoint.", "route", "outer_ip")
             if interface not in devices:
                 devices[interface] = json.loads(self.run("ip", "-j", "link", "show", "dev", interface).stdout)[0]
             if link["mtu"] + driver_for(link).overhead > devices[interface]["mtu"]:
-                raise PanelError("Lower the VXLAN MTU for this underlay interface.", "link_policy", "mtu")
-            identity = link["listen_port"], link["vni"]
+                raise PanelError(f"Lower the {name} MTU for this underlay interface.", "link_policy", "mtu")
+            peer = link["outer_peer"] if method == "geneve" else None
+            identity = link["listen_port"], link["vni"], peer
             if identifiers.setdefault(identity, link)["tunnel"] != link["tunnel"]:
-                raise PanelError("Two VXLAN links on this node cannot share both VNI and UDP port.", "device_conflict", "vni")
+                raise PanelError(f"Two {name} links use the same endpoint, VNI and UDP port.", "device_conflict", "vni")
             ports.add(link["listen_port"])
         kernel_ports = set()
         for row in driver_for(links[0]).inspect(self.run):
@@ -359,14 +372,15 @@ class Engine:
             port = data.get("port")
             if port not in ports:
                 continue
-            expected = identifiers.get((port, data.get("id")))
+            peer = data.get("remote") if method == "geneve" else None
+            expected = identifiers.get((port, data.get("id"), peer))
             if expected and (row.get("ifname") != expected["tunnel"] or not self.owns_link(expected, row)):
-                raise PanelError("An existing VXLAN interface uses the requested VNI and UDP port.", "device_conflict", "vni")
-            if expected and (data.get("link") != interfaces[expected["outer_local"]] or data.get("learning") is not False):
+                raise PanelError(f"An existing {name} interface uses the requested VNI and UDP port.", "device_conflict", "vni")
+            if method == "vxlan" and expected and (data.get("link") != interfaces[expected["outer_local"]] or data.get("learning") is not False):
                 raise PanelError("The VXLAN underlay or learning setting was changed outside the panel.", "device_conflict", "outer_ip")
             managed = expected and self.owns_link(expected, row)
             if not managed and not row.get("ifalias", "").startswith("gremgr:v2:"):
-                raise PanelError("An existing VXLAN interface already uses this UDP port.", "device_conflict", "port")
+                raise PanelError(f"An existing {name} interface already uses this UDP port.", "device_conflict", "port")
             kernel_ports.add(port)
         unused = ports - kernel_ports
         if unused:
@@ -374,7 +388,7 @@ class Engine:
                 fields = row.split()
                 port = fields[3].rsplit(":", 1)[-1] if len(fields) > 3 else ""
                 if port.isdecimal() and int(port) in unused:
-                    raise PanelError("An existing UDP socket already uses the VXLAN port.", "device_conflict", "port")
+                    raise PanelError(f"An existing UDP socket already uses the {name} port.", "device_conflict", "port")
 
     def check_wireguard(self, links, interfaces):
         if not links:
@@ -420,7 +434,7 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs, keyed_pairs, vxlan, wg_links = {}, {}, [], []
+        unkeyed_pairs, keyed_pairs, vxlan, wg_links, geneve = {}, {}, [], [], []
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
@@ -428,6 +442,8 @@ class Engine:
                     raise PanelError("IPIP cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
             if link.get("method") == "vxlan":
                 vxlan.append(link)
+            if link.get("method") == "geneve":
+                geneve.append(link)
             if link.get("method") == "wireguard":
                 wg_links.append(link)
             if link.get("method") == "gretap":
@@ -449,10 +465,13 @@ class Engine:
                 link = keyed_pairs.get((data.get("local"), data.get("remote"), gre_key(data.get("ikey", 0))))
                 if link and (row.get("ifname") != link["tunnel"] or not self.owns_link(link, row)):
                     raise PanelError("An existing GRETAP interface uses that endpoint pair and key.", "device_conflict", "key")
-        self.check_vxlan(vxlan, interfaces)
+        self.check_udp_overlays(vxlan, interfaces)
+        self.check_udp_overlays(geneve, interfaces)
         self.check_wireguard(wg_links, interfaces)
-        if {x["listen_port"] for x in vxlan} & {x["listen_port"] for x in wg_links}:
-            raise PanelError("VXLAN and WireGuard require different UDP ports on this node.", "device_conflict", "port")
+        transports = {}
+        for link in [*vxlan, *wg_links, *geneve]:
+            if transports.setdefault(link["listen_port"], link["method"]) != link["method"]:
+                raise PanelError("Different UDP tunnel types require separate ports on this node.", "device_conflict", "port")
         for c in forwarding:
             if not c.get("enabled", True):
                 continue
@@ -462,7 +481,7 @@ class Engine:
             if c["kind"] == "direct" and c["resolved_ip"] in interfaces:
                 raise PanelError("A direct destination cannot be the input server itself.", "loop")
         existing = self.run("iptables-save", "-t", "nat").stdout
-        for link in [*vxlan, *wg_links]:
+        for link in [*vxlan, *wg_links, *geneve]:
             if external_carrier_forward(existing, link, interfaces[link["outer_local"]]):
                 raise PanelError("An external port forward already handles this tunnel endpoint.", "external_conflict", "port")
         for line in existing.splitlines():
@@ -554,7 +573,7 @@ class Engine:
                 and bool(saved.get("mac")) and driver.owns(link, dict(row, ifalias=driver.marker(link))))
 
     def inspect_link(self, link, driver):
-        if driver.method == "vxlan":
+        if driver.method in ("vxlan", "geneve"):
             rows = driver.inspect(self.run, link["tunnel"])
         else:
             result = self.run("ip", "-j", "-d", "link", "show", link["tunnel"], check=False)
@@ -574,8 +593,7 @@ class Engine:
             lines += ["-F " + name for name in chains]
             for name, rules in chains.items():
                 # iptables-restore parses a rules file, not a shell command.
-                # Inversion must remain a bare token; shlex.join quotes '!'.
-                lines += ["-A " + name + " " + " ".join("!" if x == "!" else shlex.quote(x) for x in rule) for rule in rules]
+                lines += ["-A " + name + " " + " ".join(map(restore_token, rule)) for rule in rules]
             lines.append("COMMIT")
             self.run("iptables-restore", "-w", "10", "--noflush", input="\n".join(lines) + "\n")
         for table, parent, own in HOOKS:

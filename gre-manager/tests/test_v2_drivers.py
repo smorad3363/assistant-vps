@@ -18,6 +18,43 @@ from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_a_saved_geneve_route_loss_leaves_other_methods_ready(self):
+        group = data([{"id": key(4), "node_id": key(5), "method": "geneve", "service_ip": "203.0.113.20", "geneve": {"vni": 800}},
+                      {"id": key(6), "node_id": key(7), "method": "gre", "service_ip": "203.0.113.21"}])
+        state = {"groups": {group["id"]: {"active": True, "owner": key(3), "group": group}}, "operations": {}}
+        settings = {"settings": DEFAULTS, "connections": []}
+        with tempfile.TemporaryDirectory() as root:
+            paths = Paths(root)
+            with patch("panel.engine.run", side_effect=PanelError("route missing")):
+                restored = topology_views(settings, state, key(3), paths=paths)
+            self.assertEqual(restored["v2_driver_unavailable"], {group["id"] + ":" + key(4): "geneve_route"})
+            self.assertEqual([driver_for(link).method for link in restored["v2_devices"]], ["gre"])
+            self.assertTrue(group["listeners"][0]["members"][0]["enabled"])
+            with patch("panel.engine.run", return_value=subprocess.CompletedProcess([], 0, '[{"prefsrc":"192.0.2.11","dev":"eth1"}]', "")):
+                recovered = topology_views(settings, state, key(3), paths=paths)
+            self.assertEqual([driver_for(link).method for link in recovered["v2_devices"]], ["geneve", "gre"])
+
+    def test_geneve_validates_the_route_source_and_owns_its_vni(self):
+        group = data([{"id": key(4), "node_id": key(5), "method": "geneve", "service_ip": "203.0.113.20",
+                       "geneve": {"vni": 15000}}])
+        listener = group["listeners"][0]
+        link = gre_link(key(3), listener, listener["members"][0])
+        driver = driver_for(link)
+        self.assertEqual(link["listen_port"], 6081)
+        self.assertNotIn("local", driver.create(link, "eth1"))
+        attrs = {"id": 15000, "port": 6081, "remote": link["outer_peer"]}
+        row = {"ifalias": driver.marker(link), "linkinfo": {"info_kind": "geneve", "info_data": attrs}}
+        self.assertTrue(driver.owns(link, row))
+        self.assertFalse(driver.owns(dict(link, outer_peer="203.0.113.21"), row))
+
+        def tool(*args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, '[{"prefsrc":"192.0.2.10","dev":"eth1"}]', "")
+
+        with tempfile.TemporaryDirectory() as root:
+            engine = Engine(Paths(root), tool)
+            with self.assertRaisesRegex(PanelError, "route to the GENEVE endpoint"):
+                engine.check_udp_overlays([link], {link["outer_local"]: "eth1"})
+
     def test_vxlan_falls_back_to_kernel_text_when_detailed_json_is_malformed(self):
         driver = driver_for({"method": "vxlan"})
         def tool(*args, **kwargs):
