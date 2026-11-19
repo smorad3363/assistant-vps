@@ -33,14 +33,31 @@ class L2TPv3:
         return {"session_id": link["session_id"], "tunnel_id": link["tunnel_id"], "peer_session_id": link["peer_session_id"],
                 "peer_tunnel_id": link["peer_tunnel_id"], "interface": link["tunnel"]}
 
-    def receipt(self, link):
-        return {"id": link["id"], "tunnel": self.expected(link), "session": self.session(link)}
+    def receipt(self, link, phase="ready"):
+        return {"id": link["id"], "tunnel": self.expected(link), "session": self.session(link), "phase": phase}
 
-    def recorded(self, paths, link):
+    def phase(self, paths, link):
         try:
-            return json.loads(self.journal(paths, link).read_text()) == self.receipt(link)
+            observed = json.loads(self.journal(paths, link).read_text())
         except (OSError, ValueError):
+            return None
+        if not isinstance(observed, dict):
+            return None
+        phase = observed.get("phase", "ready")
+        if phase in ("pending", "ready", "removing") and dict(observed, phase=phase) == self.receipt(link, phase):
+            return phase
+
+    @staticmethod
+    def device(link, run):
+        result = run("ip", "-j", "-d", "link", "show", "dev", link["tunnel"], check=False)
+        rows = json.loads(result.stdout) if result.returncode == 0 else []
+        return rows[0] if rows else None
+
+    def session_owned(self, link, phase, run):
+        row = self.device(link, run)
+        if not row or row.get("ifname") != link["tunnel"] or row.get("link_type") != "ether":
             return False
+        return self.owns(link, row) or (phase == "pending" and not row.get("ifalias"))
 
     @staticmethod
     def reads(run, kind, allow_empty=False):
@@ -64,6 +81,7 @@ class L2TPv3:
         sessions = self.reads(run, "session", allow_empty=True)
         ids, session_ids, ports = {}, {}, {}
         for link in links:
+            phase = self.phase(paths, link)
             if link["outer_local"] not in interfaces:
                 raise PanelError("The L2TPv3 source address is unavailable.", "local_ip", "outer_ip")
             for claims, field in ((ids, "tunnel_id"), (session_ids, "session_id"), (ports, "listen_port")):
@@ -71,11 +89,11 @@ class L2TPv3:
                     raise PanelError("Choose a separate L2TPv3 tunnel ID, session ID and local UDP port.", "device_conflict", field)
             for row in tunnels:
                 if row.get("tunnel_id") == link["tunnel_id"] or row.get("local_port") == link["listen_port"]:
-                    if not self.recorded(paths, link) or not self.matches(self.expected(link), row):
+                    if not phase or not self.matches(self.expected(link), row):
                         raise PanelError("A different L2TP tunnel uses this ID or port.", "device_conflict", "l2tpv3")
             for row in sessions:
                 if row.get("session_id") == link["session_id"] or row.get("interface") == link["tunnel"]:
-                    if not self.recorded(paths, link) or not self.matches(self.session(link), row):
+                    if not phase or not self.matches(self.session(link), row) or not self.session_owned(link, phase, run):
                         raise PanelError("A different L2TP session uses this ID.", "device_conflict", "l2tpv3")
         kernel_ports = {row.get("local_port") for row in tunnels}
         for line in run("ss", "-H", "-una").stdout.splitlines():
@@ -86,16 +104,19 @@ class L2TPv3:
 
     def configure(self, link, paths, run):
         run("modprobe", "l2tp_netlink", check=False)
-        known = self.recorded(paths, link)
+        phase = self.phase(paths, link)
         tunnels = self.reads(run, "tunnel")
         sessions = self.reads(run, "session")
         current = next((row for row in tunnels if row.get("tunnel_id") == link["tunnel_id"]), None)
         existing = next((row for row in sessions if row.get("session_id") == link["session_id"]), None)
-        if current and (not known or not self.matches(self.expected(link), current)):
+        if current and (not phase or not self.matches(self.expected(link), current)):
             raise PanelError("L2TPv3 tunnel ownership changed before apply.", "device_conflict")
-        if existing and (not known or not self.matches(self.session(link), existing)):
+        if existing and (not phase or not self.matches(self.session(link), existing) or not self.session_owned(link, phase, run)):
             raise PanelError("L2TPv3 session ownership changed before apply.", "device_conflict")
-        atomic_json(self.journal(paths, link), self.receipt(link))
+        if not existing:
+            if self.device(link, run):
+                raise PanelError("A different interface uses the L2TPv3 device name.", "device_conflict")
+            atomic_json(self.journal(paths, link), self.receipt(link, "pending"))
         if not current:
             run("ip", "l2tp", "add", "tunnel", "tunnel_id", link["tunnel_id"], "peer_tunnel_id", link["peer_tunnel_id"],
                 "encap", "udp", "local", link["outer_local"], "remote", link["outer_peer"], "udp_sport", link["listen_port"],
@@ -110,9 +131,11 @@ class L2TPv3:
                         self.remove(link, paths, run)
                 raise
         run("ip", "link", "set", "dev", link["tunnel"], "alias", self.marker(link))
+        atomic_json(self.journal(paths, link), self.receipt(link))
 
     def remove(self, link, paths, run):
-        if not self.recorded(paths, link):
+        phase = self.phase(paths, link)
+        if not phase:
             return
         existing = next((row for row in self.reads(run, "tunnel", allow_empty=True) if row.get("tunnel_id") == link["tunnel_id"]), None)
         if not existing:
@@ -123,8 +146,13 @@ class L2TPv3:
         sessions = [row for row in self.reads(run, "session") if row.get("tunnel_id") == link["tunnel_id"]]
         ours = next((row for row in sessions if self.matches(self.session(link), row)), None)
         if ours:
+            if not self.session_owned(link, phase, run):
+                return
+            if phase != "pending":
+                phase = "removing"
+                atomic_json(self.journal(paths, link), self.receipt(link, phase))
             run("ip", "l2tp", "del", "session", "tunnel_id", link["tunnel_id"], "session_id", link["session_id"])
-            sessions.remove(ours)
-        if not sessions:
+            sessions = [row for row in self.reads(run, "session") if row.get("tunnel_id") == link["tunnel_id"]]
+        if not sessions and phase in ("pending", "removing"):
             run("ip", "l2tp", "del", "tunnel", "tunnel_id", link["tunnel_id"])
             self.journal(paths, link).unlink(missing_ok=True)

@@ -120,7 +120,8 @@ def render(home, node, with_panel, crash=None):
 
     def execute(*args, **kwargs):
         result = run(*args, **kwargs)
-        if crash and args[:3] == ("ip", "link", "add") and "type" in args and args[args.index("type") + 1] == crash:
+        created = args[:3] == ("ip", "link", "add") and "type" in args and args[args.index("type") + 1] == crash
+        if crash and (created or (crash == "l2tpv3" and args[:4] == ("ip", "l2tp", "add", "session"))):
             os.kill(os.getpid(), signal.SIGKILL)
         return result
 
@@ -555,6 +556,11 @@ def lab(root):
         l2tp = listener("gm-ir", [first_target], "l2tpv3", [1])
         l2tp["members"][0]["l2tpv3"] = {"ingress": {"tunnel_id": 21701, "session_id": 21711, "port": 37001},
                                       "destination": {"tunnel_id": 21702, "session_id": 21712, "port": 37002}}
+        group = normalize_group({"id": group_id, "name": "Interrupted L2TPv3 creation", "listeners": [l2tp]})
+        state = {"groups": {group_id: {"active": True, "owner": owner, "group": group}}, "operations": {}}
+        crashed = subprocess.run(namespace("gm-ir", "render", Path(root) / "gm-ir", owner, 1, "l2tpv3"),
+                                 input=json.dumps(state), capture_output=True, text=True, timeout=30)
+        assert crashed.returncode == -signal.SIGKILL, crashed.stderr
         normalized = apply([l2tp])
         member = normalized["members"][0]
         for (host, local_ip, peer_ip, local_id, peer_id), receiving in (
@@ -578,7 +584,19 @@ def lab(root):
         apply([weighted])
         neighbor = json.loads(command(*namespace("gm-ir", "sample", "198.19.200.2", 5, "tcp", 5699), capture_output=True).stdout)
         assert neighbor == {"L": 5}
-        print("v2 L2TPv3 carried mapped TCP/UDP and preserved a second Ethernet session on the same tunnel.", flush=True)
+        apply([l2tp])
+        link = gre_link(owner, normalized, member)
+        prefix = ("ip", "netns", "exec", "gm-ir")
+        tunnel, session = str(link["tunnel_id"]), str(link["session_id"])
+        command(*prefix, "ip", "l2tp", "del", "session", "tunnel_id", tunnel, "session_id", session)
+        command(*prefix, "ip", "l2tp", "add", "session", "tunnel_id", tunnel, "session_id", session,
+                "peer_session_id", str(link["peer_session_id"]), "name", link["tunnel"])
+        command(*prefix, "ip", "link", "set", "dev", link["tunnel"], "alias", "outside-gremgr")
+        apply([weighted])
+        foreign = json.loads(command(*prefix, "ip", "-j", "link", "show", "dev", link["tunnel"], capture_output=True).stdout)
+        assert foreign[0]["ifalias"] == "outside-gremgr", foreign
+        assert json.loads(command(*namespace("gm-ir", "sample", "198.19.200.2", 5, "tcp", 5699), capture_output=True).stdout) == {"L": 5}
+        print("v2 L2TPv3 recovered interrupted creation, carried TCP/UDP and preserved neighboring and foreign sessions.", flush=True)
         wg = listener("gm-ir", [first_target], "wireguard", [1])
         sides = {}
         for name, host, port in (("ingress", "gm-ir", 35379), ("destination", first_target, 35389)):

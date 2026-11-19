@@ -31,10 +31,13 @@ class DriverTests(unittest.TestCase):
         self.assertIn("0x00000065", driver.firewall(left)[-1])
         known = [driver.session(left), dict(driver.session(left), session_id=999, interface="adjacent")]
         calls = []
+        interface = {"ifname": left["tunnel"], "link_type": "ether", "ifalias": "external-owner"}
 
         def tool(*args, **kwargs):
             calls.append(args)
-            rows = [driver.expected(left)] if args[-1] == "tunnel" else known if args[-1] == "session" else []
+            rows = [driver.expected(left)] if args[-1] == "tunnel" else known if args[-1] == "session" else [interface]
+            if "del" in args:
+                known.pop(0)
             return subprocess.CompletedProcess(args, 0, json.dumps(rows), "")
 
         with tempfile.TemporaryDirectory() as home:
@@ -43,6 +46,13 @@ class DriverTests(unittest.TestCase):
             driver.remove(left, paths, tool)
             self.assertEqual(calls, [])
             atomic_json(driver.journal(paths, left), driver.receipt(left))
+            driver.remove(left, paths, tool)
+            self.assertFalse(any("del" in call for call in calls))
+            interface["ifalias"] = ""
+            driver.remove(left, paths, tool)
+            self.assertFalse(any("del" in call for call in calls))
+            # Only a pending creation receipt can claim an unmarked kernel session.
+            atomic_json(driver.journal(paths, left), driver.receipt(left, "pending"))
             driver.remove(left, paths, tool)
             deletes = [call for call in calls if "del" in call]
             self.assertEqual(deletes, [("ip", "l2tp", "del", "session", "tunnel_id", 100, "session_id", 101)])
