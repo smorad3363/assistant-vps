@@ -61,6 +61,16 @@ class Router:
         log = self.call(f"/tool/fetch url=http://{INNER_LINUX}:25244/payload output=user")
         assert PAYLOAD in log, log[-350:]
 
+    def wait_tunnel(self):
+        expires = time.monotonic() + 35
+        while time.monotonic() < expires:
+            state = self.call(':put [/interface/get [find name="gm-eoip"] running]')
+            if re.search(r"[\r\n]true[\r\n]", state):
+                return
+            time.sleep(1)
+        details = self.call('/interface/eoip/print detail without-paging')
+        raise AssertionError("RouterOS EoIP did not become operational: " + details[-800:])
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -113,6 +123,8 @@ def main(image, directory):
             router.call(f"/ip/address/add address={ROUTER}/24 interface=ether1")
             router.call(f"/interface/eoip/add name=gm-eoip remote-address={LINUX} local-address={ROUTER} tunnel-id=22411 mtu=1280")
             router.call(f"/ip/address/add address={INNER_ROUTER}/30 interface=gm-eoip")
+            run("ping", "-c", "2", "-W", "4", "-I", tap, ROUTER)
+            router.wait_tunnel()
             with ThreadingHTTPServer((INNER_LINUX, 25244), Handler) as service:
                 control = threading.Thread(target=service.serve_forever, daemon=True)
                 control.start()
@@ -124,6 +136,7 @@ def main(image, directory):
                     guest.send("y\r")
                     time.sleep(5)
                     router.login()
+                    router.wait_tunnel()
                     router.fetch()
                     run("ping", "-c", "2", "-W", "4", "-I", device, INNER_ROUTER)
                 finally:

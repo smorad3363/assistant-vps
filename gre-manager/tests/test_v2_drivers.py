@@ -44,15 +44,16 @@ class DriverTests(unittest.TestCase):
 
     def test_eoip_does_not_stop_for_a_path_mtu_error(self):
         class Socket:
-            def send(self, packet):
+            def sendto(self, packet, endpoint):
                 if len(packet) > 1400:
                     raise OSError(errno.EMSGSIZE, "too large")
-                self.packet = packet
+                self.sent = (packet, endpoint)
 
         carrier = Socket()
-        send_frame(carrier, 2800, b"a" * 1500)
-        send_frame(carrier, 2800, b"b" * 1280)
-        self.assertEqual(carrier.packet, encode_frame(2800, b"b" * 1280))
+        endpoint = ("192.0.2.1", 0)
+        send_frame(carrier, endpoint, 2800, b"a" * 1500)
+        send_frame(carrier, endpoint, 2800, b"b" * 1280)
+        self.assertEqual(carrier.sent, (encode_frame(2800, b"b" * 1280), endpoint))
 
     def test_eoip_encoding_and_input_validation(self):
         rng = random.Random(6400)

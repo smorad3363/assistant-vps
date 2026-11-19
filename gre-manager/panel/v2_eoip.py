@@ -132,11 +132,12 @@ def ready():
             notification.sendto(b"READY=1", address)
 
 
-def send_frame(carrier, tunnel_id, frame):
+def send_frame(carrier, endpoint, tunnel_id, frame):
     try:
-        carrier.send(encode_frame(tunnel_id, frame))
+        carrier.sendto(encode_frame(tunnel_id, frame), endpoint)
     except OSError as error:
-        if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.ECONNREFUSED, errno.EMSGSIZE):
+        if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.ECONNREFUSED, errno.EMSGSIZE,
+                               errno.EPROTONOSUPPORT, errno.EHOSTUNREACH, errno.ENETUNREACH):
             raise
 
 
@@ -145,6 +146,7 @@ def run_link(link):
 
     local, peer = [ipaddress.IPv4Address(link[field]).packed for field in ("outer_local", "outer_peer")]
     name, tunnel_id = link["tunnel"], link["eoip_id"]
+    endpoint = (link["outer_peer"], 0)
     maximum = link["mtu"] + 18
     run("modprobe", "tun", check=False)
     tap = os.open("/dev/net/tun", os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC)
@@ -157,14 +159,15 @@ def run_link(link):
         with socket.socket(socket.AF_INET, socket.SOCK_RAW, GRE_PROTOCOL) as carrier:
             carrier.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, link["interface"].encode() + b"\0")
             carrier.bind((link["outer_local"], 0))
-            carrier.connect((link["outer_peer"], 0))
+            # An unconnected raw socket avoids asynchronous ICMP errors while
+            # the other agent is still committing its end of the link.
             carrier.setblocking(False)
             ready()
             next_keepalive = 0.0
             while True:
                 now = time.monotonic()
                 if now >= next_keepalive:
-                    send_frame(carrier, tunnel_id, b"")
+                    send_frame(carrier, endpoint, tunnel_id, b"")
                     next_keepalive = now + 3
                 readable, _, _ = select.select([carrier, tap], [], [], max(0, next_keepalive - now))
                 if carrier in readable:
@@ -176,7 +179,7 @@ def run_link(link):
                     with suppress(BlockingIOError, ConnectionRefusedError):
                         frame = os.read(tap, maximum + 1)
                         if 14 <= len(frame) <= maximum:
-                            send_frame(carrier, tunnel_id, frame)
+                            send_frame(carrier, endpoint, tunnel_id, frame)
     finally:
         os.close(tap)
 
