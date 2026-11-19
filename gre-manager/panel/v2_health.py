@@ -12,7 +12,7 @@ import time
 
 from .model import PanelError, ranges_for
 from .v2_drivers import DRIVERS
-from .v2_forwarding import LINK_PROBE_PROTOCOL, checks_admission, gre_link, health_signature
+from .v2_forwarding import LINK_PROBE_PROTOCOL, checks_admission, gre_link, health_signature, topology_views
 from .v2_resources import admission_pressure, boot_id, pressure_file
 
 PROBE_REQUEST = b"gremgr2?"
@@ -136,6 +136,7 @@ class Watchdog:
         self.management_pool = None
         self.management_lock = threading.Lock()
         self.management_checks = {}
+        self.driver_unavailable = {}
 
     def management_state(self, record, member):
         if self.management_pool is None or not member["managed"]:
@@ -167,11 +168,11 @@ class Watchdog:
             target = listener["port_map"].get(str(probe["port"]), listener["target_port"] or probe["port"])
             host = link["peer_tun"] if link else member["service_ip"]
             service = service_probe(host, target, probe, link, source=listener["ip"])
-        link_state = (True if service else link_probe(link)) if link else None
+        link_state = (True if service else link_probe(link)) if link and member["method"] != "sit" else None
         management = self.management_state(record, member)
         return {"management": management, "link": link_state, "service": service, "icmp": ping,
                 "admission": service if probe else link_state,
-                "checked": self.clock(), "reason": "service_probe" if probe else "link_probe" if link else "no_service_probe"}
+                "checked": self.clock(), "reason": "service_probe" if probe else "link_probe" if link_state is not None else "no_service_probe"}
 
     def paths(self, state):
         targets, peers = {}, {}
@@ -186,7 +187,7 @@ class Watchdog:
                         continue
                     if listener["node_id"] == local:
                         targets[group_id + ":" + member["id"]] = (record, listener, member)
-                    if member["node_id"] == local and member["method"] in DRIVERS:
+                    if member["node_id"] == local and member["method"] in DRIVERS and member["method"] != "sit":
                         link = gre_link(record["owner"], listener, member, receiving=True)
                         peers[(link["local_tun"], link["peer_tun"])] = link
         return targets, peers
@@ -223,9 +224,12 @@ class Watchdog:
             current, _ = self.paths(state)
             before = copy.deepcopy(state)
             health = state.setdefault("health", {})
-            settings = self.config()["settings"]
+            config = self.config()
+            settings = config["settings"]
+            unavailable = topology_views(dict(config, connections=config.get("connections", [])), state, self.participant.node_id,
+                                         paths=self.participant.paths)["v2_driver_unavailable"]
             was_busy = pressure_file(self.participant.paths).exists()
-            changed = admission_pressure(settings, was_busy) != was_busy
+            changed = admission_pressure(settings, was_busy) != was_busy or unavailable != self.driver_unavailable
             for key in list(health):
                 if key not in current:
                     del health[key]
@@ -243,6 +247,7 @@ class Watchdog:
                     changed = True
             if changed:
                 self.participant.materialize(state, before)
+                self.driver_unavailable = unavailable
 
     def serve(self, stop, report):
         threading.Thread(target=link_responses, args=(lambda: self.peer_links, stop), daemon=True).start()

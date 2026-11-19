@@ -36,6 +36,12 @@ jobs:
           python3 -m unittest discover -s gre-manager -p 'test_docker_wireguard.py' -v
       - name: Install network test dependencies
         run: bash gre-manager/tests/install_ci_deps.sh iptables iproute2 iputils-ping kmod openssh-server sshpass conntrack strongswan xl2tpd ppp wireguard-tools
+      - name: Install the matching Ethernet pseudowire kernel module
+        run: |
+          if ! sudo modprobe -nq l2tp_eth; then
+            bash gre-manager/tests/install_ci_deps.sh "linux-modules-extra-$(uname -r)"
+          fi
+          sudo modprobe l2tp_eth
       - name: Real kernel TCP and UDP in isolated namespaces
         env:
           GREMGR_BENCH_LONG: ${{ matrix.os == 'ubuntu-24.04' }}
@@ -88,11 +94,17 @@ jobs:
   reboot-debian:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [gre, gretap, geneve, l2tpv3, sit]
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual machine dependencies
         run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils
       - name: Genuine Debian boot and saved flow acceptance
+        env:
+          GREMGR_REBOOT_METHOD: ${{ matrix.transport }}
         run: bash gre-manager/tests/qemu_reboot_lab.sh
   release-fedora:
     runs-on: ubuntu-24.04

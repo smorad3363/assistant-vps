@@ -9,6 +9,13 @@ import os
 import tempfile
 
 from .model import PanelError
+from .v2_l2tp import L2TPv3
+
+
+def gre_key(value):
+    if isinstance(value, str) and "." in value:
+        return int(ipaddress.IPv4Address(value))
+    return int(value)
 
 
 @dataclass(frozen=True)
@@ -34,10 +41,7 @@ class IPTunnel:
             return False
         if not self.keyed:
             return row.get("ifalias") == self.marker(link)
-        key = data.get("ikey", 0)
-        if isinstance(key, str):
-            key = int(ipaddress.IPv4Address(key)) if "." in key else int(key)
-        return key == link["key"]
+        return gre_key(data.get("ikey", 0)) == link["key"]
 
     def refresh(self, link, info, interface):
         if not self.keyed and info.get("info_data", {}).get("ttl", 0) != link.get("ttl", 64):
@@ -51,6 +55,46 @@ class IPTunnel:
 
     def firewall(self, link):
         return ["-p", self.protocol]
+
+
+class GreTap(IPTunnel):
+    staged_marker = True
+
+    def create(self, link, interface):
+        return ["ip", "link", "add", "dev", link["tunnel"], "type", self.method,
+                "local", link["outer_local"], "remote", link["outer_peer"], "key", link["key"], "ttl", 64, "dev", interface]
+
+    def marker(self, link):
+        return "gremgr:v2:" + link["id"]
+
+    def owns(self, link, row):
+        return (row.get("ifalias") == self.marker(link) and super().owns(link, row)
+                and gre_key(row["linkinfo"]["info_data"].get("okey", 0)) == link["key"])
+
+    def delete(self, link):
+        return ["ip", "link", "del", "dev", link["tunnel"]]
+
+    def firewall(self, link):
+        header = "0>>22&0x3C"
+        match = f"{header}@0&0xF000FFFF=0x20006558 && {header}@4=0x{link['key']:08x}"
+        return ["-p", self.protocol, "-m", "u32", "--u32", match]
+
+
+class Sit(IPTunnel):
+    def create(self, link, interface):
+        return ["ip", "link", "add", "dev", link["tunnel"], "alias", self.marker(link), "type", self.method,
+                "local", link["outer_local"], "remote", link["outer_peer"], "ttl", 64, "dev", interface]
+
+    def refresh(self, link, info, interface):
+        return None
+
+    def delete(self, link):
+        return ["ip", "link", "del", "dev", link["tunnel"]]
+
+
+def ipv6_enabled(run):
+    result = run("sysctl", "-n", "net.ipv6.conf.all.disable_ipv6", "net.ipv6.conf.default.disable_ipv6", check=False)
+    return result.returncode == 0 and result.stdout.split() == ["0", "0"]
 
 
 def wireguard_public_key(value):
@@ -120,6 +164,7 @@ class WireGuard:
 
 class Vxlan:
     method = module = "vxlan"
+    staged_marker = True
     overhead = 50
 
     def create(self, link, interface):
@@ -141,7 +186,7 @@ class Vxlan:
             details = {}
             for line in plain.splitlines():
                 index = re.match(r"\s*(\d+):", line)
-                data = re.search(r"(?:\\\s+|\s{2,})vxlan\s+id\s+(\d+)\b(.*)", line)
+                data = re.search(r"(?:\\\s+|\s{2,})" + self.method + r"\s+id\s+(\d+)\b(.*)", line)
                 if not index or not data:
                     continue
                 attrs = {"id": int(data[1]), "learning": "nolearning" not in data[2].split()}
@@ -154,7 +199,7 @@ class Vxlan:
                 if row["ifindex"] in details:
                     row["linkinfo"] = {"info_kind": self.method, "info_data": details[row["ifindex"]]}
                 elif not name:
-                    raise PanelError("The installed iproute2 could not describe an existing VXLAN interface.", "device_conflict")
+                    raise PanelError(f"The installed iproute2 could not describe an existing {self.method.upper()} interface.", "device_conflict")
             return basic
 
     def marker(self, link):
@@ -177,7 +222,28 @@ class Vxlan:
         return ["-p", "udp", "--dport", link["listen_port"]]
 
 
-DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan()}
+class Geneve(Vxlan):
+    method = module = "geneve"
+
+    def create(self, link, interface):
+        return ["ip", "link", "add", "dev", link["tunnel"], "type", self.method, "id", link["vni"],
+                "remote", link["outer_peer"], "dstport", link["listen_port"]]
+
+    def owns(self, link, row):
+        info = row.get("linkinfo", {})
+        data = info.get("info_data", {})
+        return (info.get("info_kind") == self.method and row.get("ifalias") == self.marker(link)
+                and (data.get("id"), data.get("remote"), data.get("port")) == (link["vni"], link["outer_peer"], link["listen_port"]))
+
+    def preferred_source(self, link, run):
+        rows = json.loads(run("ip", "-j", "-4", "route", "get", link["outer_peer"], "ipproto", "udp",
+                              "dport", link["listen_port"]).stdout)
+        route = rows[0] if rows else {}
+        return route.get("prefsrc"), route.get("dev")
+
+
+DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan(),
+           "gretap": GreTap("gretap", "ip_gre", "gre", True), "geneve": Geneve(), "l2tpv3": L2TPv3(), "sit": Sit("sit", "sit", "41")}
 
 
 def driver_for(link):
