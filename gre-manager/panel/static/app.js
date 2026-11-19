@@ -510,6 +510,7 @@ async function refreshGroups() {
   v2Local = topology.local_node_id;
   v2Nodes = [{id:v2Local,name:'این پنل'}, ...topology.paired_nodes.map(node => ({id:node.id,name:node.hostname})),
     ...state.servers.filter(node => node.v2_node_id && node.key_ready).map(node => ({id:node.v2_node_id,name:node.name}))];
+  benchNodeOptions();
   v2Groups = groups;
   const status = value => value === true ? 'سالم' : value === false ? 'قطع' : 'نامشخص';
   const evidence = record => record.group.listeners.flatMap(listener => listener.members.filter(member => member.enabled).map(member => {
@@ -524,6 +525,128 @@ async function refreshGroups() {
     `<button class="button secondary" type="button" data-group-id="${esc(record.id)}">ویرایش</button>` : ''}</div>`).join('');
   openGroup();
 }
+const benchForm = $('#v2-bench-form');
+const benchStart = $('#v2-bench-start');
+const benchCancel = $('#v2-bench-cancel');
+let benchPreview, benchJob, benchPoll, benchEdit = 0;
+
+function benchNodeOptions() {
+  for (const side of ['first','second']) {
+    const select = benchForm.elements[side + '_node'];
+    const selected = select.value;
+    select.replaceChildren(new Option('انتخاب سرور', ''), ...v2Nodes.map(node => new Option(node.name, node.id)));
+    if (v2Nodes.some(node => node.id === selected)) select.value = selected;
+  }
+}
+function resetBenchmark() {
+  benchEdit++;
+  benchPreview = undefined;
+  benchStart.disabled = true;
+  $('#v2-bench-estimate').textContent = '';
+}
+async function benchAddresses(side, node) {
+  const select = benchForm.elements[side];
+  select.replaceChildren();
+  if (!node) return;
+  const result = await api('v2/benchmark.capabilities', {node_id:node});
+  if (benchForm.elements[side + '_node'].value !== node) return;
+  select.replaceChildren(...result.addresses.map(address => new Option(address,address)));
+  benchForm.elements.duration_s.setAttribute('aria-describedby', 'v2-bench-estimate');
+  $('#v2-bench-estimate').textContent = `حداکثر مدت روی این سرور ${fa.format(result.max_seconds)} ثانیه است.`;
+}
+function benchmarkSeconds(value) {
+  const plain = value.trim().replace(/[۰-۹]/g, digit => digit.charCodeAt(0) - 1776)
+    .replace(/[٠-٩]/g, digit => digit.charCodeAt(0) - 1632);
+  if (!/^\d+$/.test(plain)) throw new Error('مدت تست باید به ثانیه و عدد صحیح باشد.');
+  return Number(plain);
+}
+function benchNumbers(row) {
+  const volume = row?.received_bytes == null ? '—' : `${fa.format(row.received_bytes / 1000000)} MB`;
+  const rate = row?.peak_mbps == null ? '—' : `${fa.format(row.peak_mbps)} Mbps (${row.peak_direction === 'inbound' ? 'برگشت' : 'رفت'})`;
+  return `${volume} · اوج ${rate}`;
+}
+function renderBenchmark(job) {
+  const names = {queued:'در صف',running:'در حال سنجش',cancelling:'در حال لغو',cancelled:'لغو شد',done:'پایان یافت',partial:'ناتمام',interrupted:'پس از راه‌اندازی دوباره متوقف شد'};
+  const reasons = {byte_budget:'سقف حجم پر شد',connection_lost:'جریان TCP قطع شد',receiver_unavailable:'گیرنده آماده نشد',
+    no_peer:'داده‌ای از سرور مقابل دریافت نشد',device_conflict:'تداخل با رابط موجود',transport:'ارتباط مدیریت قطع شد',cancelled:'لغو شد'};
+  const active = ['queued','running','cancelling'].includes(job.phase);
+  benchCancel.hidden = !active;
+  const result = $('#v2-bench-result');
+  const rows = job.plan.methods.map(method => {
+    const row = job.results?.[method.method];
+    const details = ['outbound','inbound'].map((name,index) => {
+      const sample = row?.directions?.[name];
+      const duration = sample ? fa.format(sample.elapsed_ns / 1000000000) : '—';
+      const bytes = sample ? `${fa.format(sample.received_bytes / 1000000)} MB` : '—';
+      const peak = sample?.peak_second_bytes == null ? '—' : `${fa.format(sample.peak_second_bytes * 8 / 1000000)} Mbps`;
+      const reason = reasons[sample?.reason || row?.reasons?.[index]];
+      return `<div>${index ? 'برگشت' : 'رفت'} · ${duration} از ${fa.format(method.directions[index])} ثانیه · <bdi>${bytes}</bdi> · اوج <bdi>${peak}</bdi>${reason ? ' · ' + reason : ''}</div>`;
+    }).join('');
+    return `<details><summary><bdi>${esc(method.method.toUpperCase())}</bdi> · ${benchNumbers(row)}${!active && !row?.finished ? ' · ناتمام' : ''}</summary>${details}</details>`;
+  }).join('');
+  result.innerHTML = `<p>${esc(names[job.phase] || job.phase)}${job.plan.request.parallel ? ' · پهنای باند مشترک' : ''}</p>${rows}`;
+  return active;
+}
+async function pollBenchmark(id) {
+  clearTimeout(benchPoll);
+  if (benchJob !== id) return;
+  try {
+    const job = await api('v2/benchmark.status', undefined, {query:{id}});
+    if (benchJob === id && renderBenchmark(job)) benchPoll = setTimeout(() => pollBenchmark(id), 1000);
+  } catch (error) {
+    if (benchJob === id && error.status !== 401 && error.status !== 404) benchPoll = setTimeout(() => pollBenchmark(id), 2000);
+  }
+}
+$('#v2-bench').addEventListener('toggle', async event => {
+  if (!event.target.open) return;
+  try {
+    if (!v2Nodes.length) await refreshGroups();
+    benchJob ??= sessionStorage.getItem('gremgr-benchmark');
+    if (benchJob) pollBenchmark(benchJob);
+  } catch (error) { setError(benchForm,error); }
+});
+benchForm.addEventListener('input', resetBenchmark);
+benchForm.addEventListener('change', event => {
+  for (const side of ['first','second']) if (event.target.name === side + '_node')
+    benchAddresses(side, event.target.value).catch(error => setError(benchForm,error));
+});
+benchForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  resetBenchmark();
+  const version = benchEdit;
+  $('.form-error', benchForm).textContent = '';
+  setBusy(benchForm, true);
+  try {
+    const fields = benchForm.elements;
+    const duration_s = benchmarkSeconds(fields.duration_s.value);
+    const methods = ['gre','ipip'].filter(method => fields[method].checked).map(method => ({method,
+      duration_s:fields[method + '_time'].value.trim() ? benchmarkSeconds(fields[method + '_time'].value) : duration_s}));
+    const requested = {nodes:[fields.first_node.value,fields.second_node.value], first:fields.first.value, second:fields.second.value,
+      methods, duration_s, parallel:fields.parallel.checked};
+    const plan = await api('v2/benchmark.plan', requested);
+    if (version !== benchEdit) return;
+    benchPreview = {...requested, id:topologyId(), digest:plan.digest};
+    $('#v2-bench-estimate').textContent = `انتقال ${fa.format(plan.transfer_seconds)} ثانیه · سقف هر روش ${fa.format(plan.max_seconds)} ثانیه · ${fa.format(plan.rate * 8 / 1000000)} Mbps · حداکثر ${fa.format(plan.estimated_bytes / 1000000)} MB`;
+    benchStart.disabled = false;
+  } catch (error) { setError(benchForm,error); }
+  finally { setBusy(benchForm,false); }
+});
+benchStart.addEventListener('click', async () => {
+  if (!benchPreview) return;
+  const preview = benchPreview;
+  benchStart.disabled = true;
+  try {
+    const job = await api('v2/benchmark.start', preview);
+    benchJob = job.id;
+    sessionStorage.setItem('gremgr-benchmark', benchJob);
+    renderBenchmark(job);
+    pollBenchmark(benchJob);
+  } catch (error) { setError(benchForm,error); if (benchPreview === preview) benchStart.disabled = false; }
+});
+benchCancel.addEventListener('click', async () => {
+  try { renderBenchmark(await api('v2/benchmark.cancel', {id:benchJob})); }
+  catch (error) { setError(benchForm,error); }
+});
 $('#v2-groups-refresh').addEventListener('click', () => refreshGroups().catch(error => showToast(failText(error))));
 $('#v2-group-list').addEventListener('click', event => {
   const button = event.target.closest('[data-group-id]');
