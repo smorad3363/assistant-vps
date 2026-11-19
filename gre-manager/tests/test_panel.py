@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 from pathlib import Path
+import random
 import sqlite3
 import tempfile
 import threading
@@ -40,6 +41,29 @@ class ConfigurationTests(unittest.TestCase):
         for ports in ("22", "8787", "1-65535", "65536", "-1", "443,,80", "443;touch /tmp/oops"):
             with self.subTest(ports=ports), self.assertRaises(PanelError):
                 make(ports=ports)
+
+    def test_generated_ranges_match_port_set_with_exclusions(self):
+        seed = 1205100
+        rng = random.Random(seed)
+        settings = dict(DEFAULTS, ssh_ports=[22, 6111], reserved_ports=[2096])
+        protected = {22, 2096, 6111, 8787}
+        for case in range(192):
+            bounds = [(1, 23), (65533, 65535)]
+            for _ in range(rng.randint(1, 12)):
+                start = rng.randint(1, 65535)
+                bounds.append((start, min(65535, start + rng.randint(0, 16))))
+            rng.shuffle(bounds)
+            ports = ",".join(f"{start}-{end}" for start, end in bounds)
+            if case % 16 == 0:
+                ports, bounds = "all", [(1, 65535)]
+            selected = {p for start, end in bounds for p in range(start, end + 1)}
+            excluded = rng.sample(sorted(selected), rng.randint(0, 12))
+            with self.subTest(seed=seed, case=case):
+                effective = ranges_for({"ports": ports, "exclude_ports": excluded}, settings)
+                self.assertEqual(
+                    [p for start, end in effective for p in range(start, end + 1)],
+                    sorted(selected.difference(protected, excluded)),
+                )
 
     def test_conflict_is_shared_between_methods(self):
         gre = make(kind="gre", ports="all", server_id="abcdef0123")
@@ -288,6 +312,68 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(status,200);self.cookie=headers["Set-Cookie"].split(";")[0];self.csrf=json.loads(raw)["csrf"]
         self.assertIn("HttpOnly",headers["Set-Cookie"]);self.assertIn("SameSite=Strict",headers["Set-Cookie"])
 
+    def submit_job(self, route, payload):
+        status, _, body = self.call("/api/" + route, payload)
+        self.assertEqual(status, 200, body)
+        identity = json.loads(body)["job"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status, _, body = self.call("/api/job?id=" + identity)
+            self.assertEqual(status, 200, body)
+            result = json.loads(body)
+            if result["status"] in ("done", "failed", "interrupted"):
+                return result
+            time.sleep(0.02)
+        self.fail(f"Job did not terminate: {route}")
+
+    def capture_release_api(self, requests):
+        self.login()
+        server = self.submit_job("server.connect", requests["server"])
+        self.assertEqual(server["status"], "done", server)
+        server_id = server["result"]["server"]
+        ids = {}
+        for kind, payload in requests["connections"].items():
+            if kind == "gre":
+                payload = dict(payload, server_id=server_id)
+            job = self.submit_job("connection.save", payload)
+            self.assertEqual(job["status"], "done", job)
+            ids[kind] = job["result"]["id"]
+
+        rejected = {}
+        for name, payload in requests["rejected"].items():
+            job = self.submit_job("connection.save", payload)
+            self.assertEqual(job["status"], "failed", job)
+            rejected[name] = job["result"]
+
+        status, _, body = self.call("/api/state")
+        self.assertEqual(status, 200, body)
+        state = json.loads(body)
+        self.assertCountEqual([c["id"] for c in state["connections"]], ids.values())
+        connections = {}
+        for item in state["connections"]:
+            kind = item["kind"]
+            self.assertEqual(item["id"], ids[kind])
+            if kind == "gre":
+                self.assertEqual(item["server_id"], server_id)
+            # Omit generated IDs, sample rates and health timestamps.
+            fields = ("kind", "name", "listen_ip", "target_host", "resolved_ip", "target_port",
+                      "ports", "port_map", "protocols", "enabled", "exclude_ports", "monitor_ports",
+                      "port_limits", "upload_mbps", "download_mbps", "mtu", "mtu_mode", "service_ip")
+            connections[kind] = {key: item[key] for key in fields if key in item}
+
+        backup = self.submit_job("backup.create", {})
+        self.assertEqual(backup["status"], "done", backup)
+        status, _, body = self.call("/api/backup.download?filename=" + backup["result"]["filename"])
+        self.assertEqual(status, 200, body)
+        status, _, body = self.call("/api/backup.preview", {"content": base64.b64encode(body).decode()})
+        self.assertEqual(status, 200, body)
+        return state["version"], {"connections": connections, "rejected": rejected, "backup_preview": json.loads(body)}
+
+    def test_v2_release_api_fixture(self):
+        fixture = json.loads((Path(__file__).parent / "fixtures" / "v1.2.0-api.json").read_text())
+        _, response = self.capture_release_api(fixture["requests"])
+        self.assertEqual(response, fixture["response"])
+
     def test_auth_csp_and_traversal(self):
         status,headers,body=self.call("/");self.assertEqual(status,200);self.assertIn("frame-ancestors 'none'",headers["Content-Security-Policy"])
         self.assertEqual(self.call("/api/state")[0],401)
@@ -296,22 +382,14 @@ class HTTPTests(unittest.TestCase):
 
     def test_login_create_edit_delete_without_a_shell(self):
         self.login()
-        status,_,body=self.call("/api/connection.save",{"kind":"direct","name":"test","listen_ip":"192.0.2.10","target_host":"203.0.113.10","ports":"1000"})
-        self.assertEqual(status,200,body)
-        identity=json.loads(body)["job"]
-        for _ in range(100):
-            job=self.controller.store.job(identity)
-            if job["status"] in ("done","failed"):break
-            time.sleep(.01)
+        job = self.submit_job("connection.save", {"kind": "direct", "name": "test", "listen_ip": "192.0.2.10",
+                                                  "target_host": "203.0.113.10", "ports": "1000"})
         self.assertEqual(job["status"],"done",job)
         c=self.controller.store.config()["connections"][0]
         self.assertEqual(c["name"],"test")
         self.assertEqual(self.call("/api/state")[0],200)
-        status,_,body=self.call("/api/connection.delete",{"id":c["id"]})
-        job_id=json.loads(body)["job"]
-        for _ in range(100):
-            if self.controller.store.job(job_id)["status"]=="done":break
-            time.sleep(.01)
+        job = self.submit_job("connection.delete", {"id": c["id"]})
+        self.assertEqual(job["status"], "done", job)
         self.assertEqual(self.controller.store.config()["connections"],[])
 
     def test_cross_origin_and_missing_csrf_are_rejected(self):
