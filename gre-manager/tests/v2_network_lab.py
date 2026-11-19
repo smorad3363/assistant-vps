@@ -368,6 +368,50 @@ def lab(root):
         command("ip", "-n", "gm-ir", "link", "show", "gm-other-ipip", stdout=subprocess.DEVNULL)
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
 
+        wg = listener("gm-ir", [first_target], "wireguard", [1])
+        sides = {}
+        for name, host, port in (("ingress", "gm-ir", 35379), ("destination", first_target, 35389)):
+            public = command(*namespace(host, "wg-key", Path(root) / host), capture_output=True).stdout.strip()
+            sides[name] = {"public_key": public, "port": port}
+        wg["members"][0]["wireguard"] = dict(sides, keepalive=5)
+        command("ip", "netns", "exec", first_target, "ip", "link", "add", "gm-existing-wg", "type", "wireguard")
+        sentinel = ["ip", "netns", "exec", first_target, "wg"]
+        command(*sentinel, "set", "gm-existing-wg", "listen-port", "35390")
+        command("ip", "-n", first_target, "link", "set", "gm-existing-wg", "up")
+        conflicting = copy.deepcopy(wg)
+        conflicting["members"][0]["wireguard"]["destination"]["port"] = 35390
+        revision = normalize_group({"id": group_id, "name": "WireGuard conflict", "listeners": [conflicting]})
+        candidate = {"groups": {group_id: {"active": True, "owner": owner, "group": revision}}, "operations": {}}
+        rejected = subprocess.run(namespace(first_target, "render", Path(root) / first_target, nodes[first_target][1], 0),
+                                  input=json.dumps(candidate), capture_output=True, text=True, timeout=30)
+        assert rejected.returncode and "already listens on this UDP port" in rejected.stderr, rejected.stderr
+        compiled_wg = apply([wg])
+        link = gre_link(owner, compiled_wg, compiled_wg["members"][0])
+        remote_link = gre_link(owner, compiled_wg, compiled_wg["members"][0], receiving=True)
+        responder = start_process(processes, namespace(first_target, "link-respond", json.dumps(remote_link)), stdout=subprocess.PIPE)
+        assert receive_line(responder) == "ready"
+        deadline = time.monotonic() + 14
+        while True:
+            response = command(*namespace("gm-ir", "link-probe", json.dumps(link)), capture_output=True).stdout.strip()
+            handshakes = [command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], "latest-handshakes",
+                                  capture_output=True).stdout.split() for host in ("gm-ir", first_target)]
+            if response == "true" and all(len(row) == 2 and int(row[-1]) > 0 for row in handshakes):
+                break
+            if time.monotonic() >= deadline:
+                for host in ("gm-ir", first_target):
+                    command("ip", "netns", "exec", host, "iptables", "-nvL", "GMP_INPUT")
+                    for field in ("endpoints", "latest-handshakes", "transfer"):
+                        command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], field)
+                raise AssertionError("WireGuard did not negotiate a handshake at both endpoints.")
+            time.sleep(.2)
+        for proto in ("tcp", "udp"):
+            assert exchanges("gm-ir", 6, proto) == {"0": 6}
+        apply([weighted])
+        assert command(*sentinel, "show", "gm-existing-wg", "listen-port", capture_output=True).stdout.strip() == "35390"
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
+        print("v2 WireGuard proved the handshake and TCP/UDP payload in both namespaces. A separate interface survived removal.", flush=True)
+
 
 if __name__ == "__main__":
     action, *args = sys.argv[1:]
@@ -387,9 +431,18 @@ if __name__ == "__main__":
         link = json.loads(args[0])
         print("ready", flush=True)
         link_responses(lambda: {(link["local_tun"], link["peer_tun"]): link}, threading.Event())
+    elif action == "link-probe":
+        from panel.v2_health import link_probe
+
+        print(json.dumps(link_probe(json.loads(args[0]))))
     elif action == "health":
         from panel.engine import run
 
         listener = json.loads(args[1])
         watchdog = Watchdog(None, None, run)
         print(json.dumps(watchdog.measure({"owner": args[0]}, listener, listener["members"][int(args[2])])))
+    elif action == "wg-key":
+        from panel.engine import run
+        from panel.v2_drivers import local_wireguard_key
+
+        print(local_wireguard_key(Paths(args[0]), run, create=True))

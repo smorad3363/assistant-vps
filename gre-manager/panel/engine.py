@@ -15,7 +15,7 @@ import uuid
 
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
-from .v2_drivers import driver_for
+from .v2_drivers import driver_for, local_wireguard_key
 from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology, require_ssh_protection
 from .v2_resources import admission_pressure, pressure_file
 
@@ -145,6 +145,10 @@ def build_rules(config, interfaces, docker_udp=False):
                 add("nat", "GMP_PRE", "-i", interfaces[ip], "-d", ip, "-p", proto, "--dport", p, "-j", "ACCEPT")
         if panel_enabled:
             add("filter", "GMP_INPUT", "-i", interfaces[ip], "-d", ip, "-p", "tcp", "--dport", config["settings"]["port"], "-j", "ACCEPT")
+    for link in Engine.gre_devices(config):
+        if "listen_port" in link:
+            add("nat", "GMP_PRE", "-i", interfaces[link["outer_local"]], "-s", link["outer_peer"],
+                "-d", link["outer_local"], *driver_for(link).firewall(link), "-j", "ACCEPT")
 
     def limiter(base, identity, direction, speed, port="all", minimum=1000):
         if not speed:
@@ -278,6 +282,40 @@ class Engine:
             for chain in reversed(present):
                 self.run("iptables", "-w", "5", "-t", table, "-X", chain)
 
+    def check_wireguard(self, links, interfaces):
+        if not links:
+            return
+        local_key = local_wireguard_key(self.paths, self.run)
+        ports = {}
+        for link in links:
+            if local_key != link["public_key"]:
+                raise PanelError("The public key does not match this WireGuard host.", "wireguard_key")
+            route = json.loads(self.run("ip", "-j", "-4", "route", "get", link["outer_peer"]).stdout)[0]
+            if (route.get("prefsrc"), route.get("dev")) != (link["outer_local"], interfaces.get(link["outer_local"])):
+                raise PanelError("Select the source address and interface used by the route to the WireGuard endpoint.", "route", "outer_ip")
+            if ports.setdefault(link["listen_port"], link["tunnel"]) != link["tunnel"]:
+                raise PanelError("Two WireGuard links cannot share this UDP port.", "device_conflict")
+            known = self.run("wg", "show", link["tunnel"], "peers", check=False)
+            if known.returncode == 0 and any(key != link["peer_public_key"] for key in known.stdout.split()):
+                raise PanelError("Pause this group before replacing its WireGuard peer key.", "device_conflict", "public_key")
+        claimed = set()
+        for row in self.run("wg", "show", "all", "listen-port").stdout.splitlines():
+            fields = row.split()
+            if len(fields) != 2 or not fields[1].isdecimal():
+                continue
+            port = int(fields[1])
+            if port in ports:
+                if ports[port] != fields[0]:
+                    raise PanelError("An existing WireGuard interface already listens on this UDP port.", "device_conflict")
+                claimed.add(port)
+        for row in self.run("ss", "-H", "-lun").stdout.splitlines():
+            fields = row.split()
+            if len(fields) < 4:
+                continue
+            port = fields[3].rsplit(":", 1)[-1]
+            if port.isdecimal() and int(port) in ports.keys() - claimed:
+                raise PanelError("An existing UDP socket already listens on the WireGuard port.", "device_conflict", "port")
+
     def preflight(self, config):
         interfaces = self.interfaces()
         forwarding = list(config["connections"])
@@ -289,11 +327,14 @@ class Engine:
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
         unkeyed_pairs = {}
+        wg_links = []
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
                 if unkeyed_pairs.setdefault(pair, link)["tunnel"] != link["tunnel"]:
                     raise PanelError("IPIP cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
+            if link.get("method") == "wireguard":
+                wg_links.append(link)
         if unkeyed_pairs:
             inspected = self.run("ip", "-j", "-d", "link", "show", "type", "ipip", check=False)
             if inspected.returncode == 0:
@@ -302,6 +343,7 @@ class Engine:
                     link = unkeyed_pairs.get((data.get("local"), data.get("remote")))
                     if link and (row.get("ifname") != link["tunnel"] or not driver_for(link).owns(link, row)):
                         raise PanelError("An existing IPIP interface uses the requested outer addresses.", "device_conflict")
+        self.check_wireguard(wg_links, interfaces)
         for c in forwarding:
             if not c.get("enabled", True):
                 continue
@@ -318,6 +360,19 @@ class Engine:
                 continue
             parts = shlex.split(line)
             destination = parts[parts.index("-d") + 1] if "-d" in parts else None
+            protocol = parts[parts.index("-p") + 1] if "-p" in parts else None
+            if wg_links and protocol in (None, "udp", "17"):
+                origin = parts[parts.index("-s") + 1] if "-s" in parts and parts[parts.index("-s") - 1] != "!" else None
+                raw = parts[parts.index("--dport") + 1] if "--dport" in parts else parts[parts.index("--dports") + 1] if "--dports" in parts else "1:65535"
+                try:
+                    intervals = [tuple(int(n) for n in item.split(":")) for item in raw.split(",")]
+                except ValueError:
+                    intervals = [(1, 65535)]
+                for link in wg_links:
+                    addresses = ((link["outer_local"], destination), (link["outer_peer"], origin))
+                    if (all(not network or ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(network, strict=False)
+                            for ip, network in addresses) and any(x[0] <= link["listen_port"] <= x[-1] for x in intervals)):
+                        raise PanelError("An external forward already handles traffic on the WireGuard endpoint.", "external_conflict", "port")
             for c in forwarding:
                 if not c.get("enabled", True) or c["kind"] == "peer":
                     continue
@@ -364,6 +419,8 @@ class Engine:
                     with contextlib.suppress(PanelError):
                         self.run(*driver.delete(g))
                     raise
+        if driver.method == "wireguard":
+            driver.configure(g, self.paths, self.run)
         self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
         self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
         self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
