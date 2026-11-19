@@ -16,11 +16,11 @@ from .model import DEFAULTS, PanelError, address, integer
 from .store import Paths, atomic_json, topology_node_id
 from .transactions import fingerprint, identity
 from .v2_benchmark import open_receiver, receive, send
-from .v2_drivers import driver_for
+from .v2_drivers import driver_for, ipv6_enabled
 from .v2_forwarding import gre_link
 from .v2_resources import boot_id
 
-METHODS = ("gre", "ipip")
+METHODS = ("gre", "ipip", "sit")
 MAX_SECONDS = 300
 MAX_RATE = 12_500_000
 MAX_BYTES = 1_000_000_000
@@ -74,6 +74,8 @@ def validate(payload, engine, paths):
     direction, method = payload.get("direction"), payload.get("method")
     if direction not in (0, 1) or type(direction) is not int or method not in METHODS:
         raise PanelError("This test method or direction is unavailable.", "method")
+    if method == "sit" and not ipv6_enabled(engine.run):
+        raise PanelError("IPv6 is required for the SIT benchmark.", "ipv6_disabled", "sit")
     return {"job_id": identity(payload.get("job_id")), "method": method, "direction": direction,
             "local": (here, other)[side], "remote": (other, here)[side], "side": side,
             "receiver": side != direction, "nodes": nodes, "first": here, "second": other,
@@ -86,8 +88,9 @@ def configure(paths, engine, owner, action, payload):
     node_id = topology_node_id(paths)
     if action == "benchmark/capabilities":
         return {"node_id": node_id, "addresses": sorted(engine.interfaces()),
-                "methods": [method for method in METHODS if engine.run("modprobe", "-nq", driver_for({"method": method}).module,
-                                                                        check=False).returncode == 0], **policy(paths)}
+                "methods": [method for method in METHODS if (method != "sit" or ipv6_enabled(engine.run)) and
+                            engine.run("modprobe", "-nq", driver_for({"method": method}).module, check=False).returncode == 0],
+                **policy(paths)}
     if not isinstance(payload, dict) or action not in {"benchmark/offer", "benchmark/start", "benchmark/status", "benchmark/cancel"}:
         raise PanelError("Unsupported benchmark action.", "benchmark")
     key = key_for(payload)
@@ -186,14 +189,18 @@ def valid_approval(value, node, task, now):
             and re.fullmatch(r"[a-f0-9]{64}", value["nonce"]))
 
 
-def exact_rule(engine, args):
-    engine.run("iptables", "-w", "5", "-I", "INPUT", "1", *args)
+def exact_rule(engine, args, family=4):
+    engine.run("ip6tables" if family == 6 else "iptables", "-w", "5", "-I", "INPUT", "1", *args)
 
 
 def test_link(owner, request):
     local, remote = request["first"], request["second"]
     scope = fingerprint([owner, request["job_id"], request["direction"]])[:32]
-    return gre_link(scope, {"ip": local}, {"method": request["method"], "service_ip": remote}, receiving=bool(request["side"]))
+    member = {"method": request["method"], "service_ip": remote}
+    if request["method"] == "sit":
+        subnet = ":".join(("fd" + scope[:2], scope[2:6], scope[6:10], scope[10:14]))
+        member["sit"] = {"ingress": subnet + "::1/64", "destination": subnet + "::2/64"}
+    return gre_link(scope, {"ip": local}, member, receiving=bool(request["side"]))
 
 
 def pending_for_owner(paths, owner=None):
@@ -210,18 +217,20 @@ def cleanup(paths, key, engine, outcome=None):
     failures = []
     with (paths.etc / "kernel-apply.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            output = engine.run("iptables-save", "-t", "filter").stdout
-            for line in output.splitlines():
-                if line.startswith("-A INPUT ") and "gmpbench:" + key in line:
-                    rule = shlex.split(line)
-                    if "--comment" in rule and rule[rule.index("--comment") + 1] == "gmpbench:" + key:
-                        try:
-                            engine.run("iptables", "-w", "5", "-D", *rule[1:])
-                        except PanelError:
-                            failures.append("rule")
-        except (PanelError, OSError):
-            failures.append("firewall")
+        tools = ("iptables", "ip6tables") if task["request"]["method"] == "sit" else ("iptables",)
+        for firewall in tools:
+            try:
+                output = engine.run(firewall + "-save", "-t", "filter").stdout
+                for line in output.splitlines():
+                    if line.startswith("-A INPUT ") and "gmpbench:" + key in line:
+                        rule = shlex.split(line)
+                        if "--comment" in rule and rule[rule.index("--comment") + 1] == "gmpbench:" + key:
+                            try:
+                                engine.run(firewall, "-w", "5", "-D", *rule[1:])
+                            except PanelError:
+                                failures.append("rule")
+            except (PanelError, OSError):
+                failures.append("firewall")
         try:
             engine.remove_gre(test_link(task["owner"], task["request"]))
         except (PanelError, OSError):
@@ -280,28 +289,30 @@ def execute(paths, key, engine=None):
             with (paths.etc / "kernel-apply.lock").open("a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 interfaces = engine.preflight({"settings": DEFAULTS, "connections": [], "v2_devices": [link]})
-                if request["method"] == "ipip":
-                    observed_links = json.loads(engine.run("ip", "-j", "-d", "link", "show", "type", "ipip").stdout)
+                method = request["method"]
+                if method in ("ipip", "sit"):
+                    observed_links = json.loads(engine.run("ip", "-j", "-d", "link", "show", "type", method).stdout)
                     for row in observed_links:
                         data = row.get("linkinfo", {}).get("info_data", {})
                         if "UP" in row.get("flags", []) and (data.get("local") in (None, "0.0.0.0")
                                                              or data.get("remote") in (None, "0.0.0.0")):
-                            raise PanelError("An active wildcard IPIP interface already uses this host.", "device_conflict")
+                            raise PanelError(f"An active wildcard {method.upper()} interface already uses this host.", "device_conflict")
                 engine.ensure_gre(link, interfaces)
                 exact_rule(engine, ["-i", interfaces[request["local"]], "-s", request["remote"], "-d", request["local"],
                                     *carrier_filter(link), *label])
             incoming = ["-i", link["tunnel"], "-s", link["peer_tun"], "-d", link["local_tun"], "-p", "tcp"]
+            family = link.get("family", 4)
             if request["receiver"]:
                 listener = owned.enter_context(open_receiver(link["local_tun"], link["tunnel"]))
                 port = listener.getsockname()[1]
-                exact_rule(engine, [*incoming, "--dport", str(port), *label])
+                exact_rule(engine, [*incoming, "--dport", str(port), *label], family)
                 change(phase="ready", port=port)
                 receipt = receive(listener, link["peer_tun"], token, request["seconds"], request["budget"],
                                   lambda value: change(phase="active", receipt=value), cancelled)
                 outcome = {"phase": "done" if receipt else "failed", "receipt": receipt,
                            "error": None if receipt else "no_peer"}
             else:
-                exact_rule(engine, [*incoming, "--sport", str(request["port"]), "-m", "conntrack", "--ctstate", "ESTABLISHED", *label])
+                exact_rule(engine, [*incoming, "--sport", str(request["port"]), "-m", "conntrack", "--ctstate", "ESTABLISHED", *label], family)
                 change(phase="active")
                 send(link["local_tun"], link["peer_tun"], request["port"], token, request["seconds"], request["rate"],
                      request["budget"], device=link["tunnel"], cancelled=cancelled)

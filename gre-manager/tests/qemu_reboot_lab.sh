@@ -4,6 +4,7 @@ set -euo pipefail
 [[ "${GITHUB_ACTIONS:-}" == true ]]
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 lab=$(mktemp -d)
+method=${GREMGR_REBOOT_METHOD:-gre}
 suffix=${lab: -5}
 bridge=gmb${suffix}
 taps=()
@@ -85,9 +86,15 @@ ready() {
 }
 
 install_side() {
-  local side=$1 port=$2 mac address
+  local side=$1 port=$2 mac address attempt status
   read -r mac address <"$lab/$side/link"
-  guest "$port" sudo cloud-init status --wait
+  for ((attempt=1; attempt<=6; attempt++)); do
+    status=0
+    guest "$port" sudo cloud-init status --wait || status=$?
+    if ((status != 255)); then break; fi
+    sleep 3
+  done
+  ((status == 0))
   tar -C "$repo" -cf - gre-manager | guest "$port" tar -xf -
   guest "$port" sudo bash -s -- "$mac" "$address" <<'GUEST'
 set -euo pipefail
@@ -132,22 +139,28 @@ install_side out 25223 &
 setup_out=$!
 wait "$setup_in"
 wait "$setup_out"
-guest 25223 sudo bash -s <<'GUEST'
+guest 25223 sudo bash -s -- "$method" <<'GUEST'
 set -euo pipefail
 cat >/usr/local/sbin/gremgr-fixture-echo.py <<'PY'
-import socketserver
+import socket, socketserver, sys
 class Echo(socketserver.BaseRequestHandler):
     def handle(self):
         self.request.sendall(b"reboot:" + self.request.recv(128))
-with socketserver.ThreadingTCPServer(("198.51.100.51", 25244), Echo) as server:
+class Echo6(socketserver.ThreadingTCPServer):
+    address_family = socket.AF_INET6
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        super().server_bind()
+listener = Echo6(("::", 25244), Echo) if sys.argv[1] == "sit" else socketserver.ThreadingTCPServer(("198.51.100.51", 25244), Echo)
+with listener as server:
     server.serve_forever()
 PY
-cat >/etc/systemd/system/gremgr-fixture-echo.service <<'UNIT'
+cat >/etc/systemd/system/gremgr-fixture-echo.service <<UNIT
 [Unit]
 Requires=gremgr-fixture-network.service
 After=gremgr-fixture-network.service
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/sbin/gremgr-fixture-echo.py
+ExecStart=/usr/bin/python3 /usr/local/sbin/gremgr-fixture-echo.py $1
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -158,7 +171,6 @@ GUEST
 node() {
   guest "$1" 'cd /opt/gremgr/current && sudo python3 -c "from panel.store import Paths, topology_node_id; print(topology_node_id(Paths()))"'
 }
-method=${GREMGR_REBOOT_METHOD:-gre}
 owner=$(node 25222)
 receiver=$(node 25223)
 PYTHONPATH="$repo/gre-manager" python3 - "$owner" "$receiver" "$method" >"$lab/change.json" <<'PY'
@@ -167,10 +179,15 @@ from panel.v2_config import normalize_group
 src, dst, method = sys.argv[1:]
 def identity(): return uuid.uuid4().hex
 group_id = identity()
-group = normalize_group({"id": group_id, "name": method.upper() + " reboot", "limits": {"up": 10, "down": 20}, "listeners": [{
-    "id": identity(), "node_id": src, "ip": "10.0.2.15", "outer_ip": "198.51.100.50", "protocols": ["tcp"],
-    "ports": "all", "port_map": {"5100": 25244}, "members": [{"id": identity(), "node_id": dst, "method": method,
-    "service_ip": "198.51.100.51", "outer_ip": "198.51.100.51", "mtu": 1280}],
+member = {"id": identity(), "node_id": dst, "method": method, "service_ip": "198.51.100.51",
+          "outer_ip": "198.51.100.51", "mtu": 1280}
+forwarding = {"protocols": ["tcp"], "ports": "all", "port_map": {"5100": 25244}}
+group_policy = {"limits": {"up": 10, "down": 20}}
+if method == "sit":
+    member["sit"] = {"ingress": "fd49:1e81:7ca::1/64", "destination": "fd49:1e81:7ca::2/64"}
+    forwarding, group_policy = {}, {}
+group = normalize_group({"id": group_id, "name": method.upper() + " reboot", **group_policy, "listeners": [{
+    "id": identity(), "node_id": src, "ip": "10.0.2.15", "outer_ip": "198.51.100.50", **forwarding, "members": [member],
 }]})
 print(json.dumps({"id": identity(), "owner": src, "group_id": group_id, "group": group, "expected_revision": 0,
                   "participants": [dst, src], "joining": [dst]}))
@@ -183,6 +200,15 @@ for stage in prepare commit; do
 done
 
 verify_flow() {
+  if [[ $method == sit ]]; then
+    guest 25222 python3 - <<'PY'
+import socket
+with socket.create_connection(("fd49:1e81:7ca::2", 25244), timeout=5) as connection:
+    connection.sendall(b"fresh")
+    assert connection.recv(64) == b"reboot:fresh"
+PY
+    return
+  fi
   python3 - <<'PY'
 import socket
 with socket.create_connection(("127.0.0.1", 25251), timeout=5) as connection:
@@ -211,6 +237,11 @@ ready 25222 "$boot_in" >/dev/null
 ready 25223 "$boot_out" >/dev/null
 verify_restored
 guest 25222 sudo iptables-save -t filter >"$lab/restored-filter"
+if [[ $method == sit ]]; then
+  grep -Eq -- '-s 198\.51\.100\.51/32 -d 198\.51\.100\.50/32 .* -p (41|ipv6) -j ACCEPT' "$lab/restored-filter"
+  echo 'PASS: both Debian 12 boot IDs changed. Fresh SSH and SIT IPv6 payload passed after each reboot and the joint reboot.'
+  exit 0
+fi
 python3 - "$lab/restored-filter" <<'PY'
 import re, sys
 from pathlib import Path

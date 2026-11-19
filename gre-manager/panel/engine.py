@@ -16,7 +16,7 @@ import uuid
 
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
-from .v2_drivers import driver_for, gre_key, local_wireguard_key
+from .v2_drivers import driver_for, gre_key, ipv6_enabled, local_wireguard_key
 from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology, require_ssh_protection
 from .v2_resources import admission_pressure, pressure_file
 
@@ -210,6 +210,9 @@ def build_rules(config, interfaces, docker_udp=False):
     for link in Engine.gre_devices(config):
         if "listen_port" in link:
             add("nat", "GMP_PRE", "-i", interfaces[link["outer_local"]], "-s", link["outer_peer"],
+                "-d", link["outer_local"], *driver_for(link).firewall(link), "-j", "ACCEPT")
+        if link.get("family") == 6:
+            add("filter", "GMP_INPUT", "-i", interfaces[link["outer_local"]], "-s", link["outer_peer"],
                 "-d", link["outer_local"], *driver_for(link).firewall(link), "-j", "ACCEPT")
 
     def limiter(base, identity, direction, speed, port="all", minimum=1000):
@@ -426,13 +429,13 @@ class Engine:
             forwarding.append(dict(listener, listen_ip=listener["ip"], kind="v2"))
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
-                raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
+                raise PanelError("The selected tunnel outer address is unavailable on this node.", "local_ip")
         unkeyed_pairs, keyed_pairs, vxlan, wg_links = {}, {}, [], []
         for link in self.gre_devices(config):
-            if link.get("method") == "ipip":
+            if (method := link.get("method")) in ("ipip", "sit"):
                 pair = link["outer_local"], link["outer_peer"]
-                if unkeyed_pairs.setdefault(pair, link)["tunnel"] != link["tunnel"]:
-                    raise PanelError("IPIP cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
+                if unkeyed_pairs.setdefault(method, {}).setdefault(pair, link)["tunnel"] != link["tunnel"]:
+                    raise PanelError(f"{method.upper()} cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
             if link.get("method") == "vxlan":
                 vxlan.append(link)
             if link.get("method") == "wireguard":
@@ -441,14 +444,16 @@ class Engine:
                 key = link["outer_local"], link["outer_peer"], link["key"]
                 if keyed_pairs.setdefault(key, link)["tunnel"] != link["tunnel"]:
                     raise PanelError("Choose a different GRETAP key for this endpoint pair.", "device_conflict", "key")
-        if unkeyed_pairs:
-            inspected = self.run("ip", "-j", "-d", "link", "show", "type", "ipip", check=False)
+        if "sit" in unkeyed_pairs and not ipv6_enabled(self.run):
+            raise PanelError("Enable IPv6 on this host and new interfaces before creating a SIT link.", "ipv6_disabled", "sit")
+        for method, pairs in unkeyed_pairs.items():
+            inspected = self.run("ip", "-j", "-d", "link", "show", "type", method, check=False)
             if inspected.returncode == 0:
                 for row in json.loads(inspected.stdout):
                     data = row.get("linkinfo", {}).get("info_data", {})
-                    link = unkeyed_pairs.get((data.get("local"), data.get("remote")))
+                    link = pairs.get((data.get("local"), data.get("remote")))
                     if link and (row.get("ifname") != link["tunnel"] or not self.owns_link(link, row)):
-                        raise PanelError("An existing IPIP interface uses the requested outer addresses.", "device_conflict")
+                        raise PanelError(f"An existing {method.upper()} interface uses the requested outer addresses.", "device_conflict")
         if keyed_pairs:
             observed = self.run("ip", "-j", "-d", "link", "show", "type", "gretap").stdout
             for row in json.loads(observed):
@@ -503,6 +508,8 @@ class Engine:
     def ensure_gre(self, g, interfaces):
         driver = driver_for(g)
         interface = interfaces[g["outer_local"]]
+        v6 = g.get("family") == 6
+        subnet = ipaddress.ip_interface(g["local_tun"] + "/" + str(g.get("prefix_length", 30)))
         self.run("modprobe", driver.module, check=False)
         row = self.inspect_link(g, driver)
         stage = self.staging_path(g) if getattr(driver, "staged_marker", False) else None
@@ -517,8 +524,12 @@ class Engine:
             if refresh:
                 self.run(*refresh)
         else:
-            for route in json.loads(self.run("ip", "-j", "-4", "route", "show").stdout):
-                if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
+            for route in json.loads(self.run("ip", "-j", "-6" if v6 else "-4", "route", "show").stdout):
+                destination = route.get("dst")
+                if destination in (None, "default"):
+                    continue
+                existing = ipaddress.ip_network(destination, strict=False)
+                if (subnet.network.overlaps(existing) if v6 else subnet.ip in existing):
                     raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
             create = driver.create(g, interface)
             if stage:
@@ -540,9 +551,11 @@ class Engine:
                 stage.unlink(missing_ok=True)
         if driver.method == "wireguard":
             driver.configure(g, self.paths, self.run)
-        self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
+        addr = ["ip", "-6", "addr"] if v6 else ["ip", "addr"]
+        self.run(*addr, "replace", str(subnet), "dev", g["tunnel"])
         self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
-        self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
+        if not v6:
+            self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
 
     def staging_path(self, link):
         return self.paths.var / "link-staging" / (link["tunnel"] + ".json")

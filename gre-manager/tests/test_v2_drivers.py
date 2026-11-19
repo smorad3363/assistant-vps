@@ -11,13 +11,58 @@ from unittest.mock import patch
 from panel.engine import Engine, build_rules, external_carrier_forward, udp_carrier_matches
 from panel.model import DEFAULTS, PanelError
 from panel.store import Paths
-from panel.v2_config import normalize_group
+from panel.v2_bench_agent import test_link
+from panel.v2_config import normalize_group, sit_settings
 from panel.v2_drivers import driver_for, local_wireguard_key
 from panel.v2_forwarding import gre_link, topology_views
 from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_sit_keeps_ipv6_and_its_exact_outer_filter_separate_from_ipv4_forwarding(self):
+        member = {"id": key(4), "node_id": key(5), "method": "sit", "outer_ip": "203.0.113.20",
+                  "sit": {"ingress": "fd00:1234::1/64", "destination": "fd00:1234::2/64"}}
+        group = data([dict(member, method="gre", service_ip=member["outer_ip"])])
+        listener = group["listeners"][0]
+        listener.update(ports="all", protocols=[], target_port=None, port_map={}, members=[member])
+        group = normalize_group(group)
+        self.assertEqual(group, normalize_group(group))
+        state = {"groups": {group["id"]: {"active": True, "owner": key(3), "group": group}}, "operations": {}}
+        config = {"settings": DEFAULTS, "connections": []}
+        first, second = [topology_views(config, state, node) for node in (key(3), key(5))]
+        left, right = [view["v2_devices"][0] for view in (first, second)]
+        self.assertEqual((left["local_tun"], left["prefix_length"], left["peer_tun"]), ("fd00:1234::1", 64, right["local_tun"]))
+        for view, link in ((first, left), (second, right)):
+            self.assertEqual((view["connections"], view["v2_listeners"]), ([], []))
+            rules = build_rules(view, {link["outer_local"]: "eth0"})
+            self.assertEqual(rules["nat"]["GMP_PRE"], [])
+            self.assertEqual(rules["filter"]["GMP_INPUT"], [["-i", "eth0", "-s", link["outer_peer"], "-d",
+                                                            link["outer_local"], "-p", "41", "-j", "ACCEPT"]])
+        with tempfile.TemporaryDirectory() as root, patch("panel.v2_forwarding.ipv6_enabled", return_value=False):
+            restored = topology_views(config, state, key(3), paths=Paths(root))
+            self.assertEqual(restored["v2_devices"], [])
+            self.assertEqual(restored["v2_driver_unavailable"], {group["id"] + ":" + key(4): "ipv6_disabled"})
+            self.assertEqual(topology_views(config, state, key(3), paths=Paths(root), require_keys_for=group["id"])["v2_devices"], [left])
+
+    def test_sit_address_canonicalization_and_invalid_subnets(self):
+        randomizer = random.Random(6141)
+        for _ in range(250):
+            subnet = "fd25:" + format(randomizer.randrange(65536), "x")
+            endpoints = {"ingress": subnet + "::1/64", "destination": subnet + "::2/64"}
+            self.assertEqual(sit_settings({side: ip.upper() for side, ip in endpoints.items()}), endpoints)
+            with self.assertRaises(PanelError):
+                sit_settings(dict(endpoints, destination=endpoints["ingress"]))
+        for endpoint in ("ff02::1/64", "fd00::2%eth0/64", "fd00::2/48", "fd00::2/64", "fe80::2/64", "fd25::1/64", 42):
+            with self.subTest(endpoint=endpoint), self.assertRaises(PanelError):
+                sit_settings({"ingress": "fd25::1/64", "destination": endpoint})
+
+    def test_sit_benchmark_derives_a_temporary_ipv6_subnet_per_direction(self):
+        request = {"job_id": key(1), "method": "sit", "direction": 0, "first": "192.0.2.1", "second": "192.0.2.2"}
+        left, right = [test_link(key(2), dict(request, side=side)) for side in (0, 1)]
+        self.assertEqual(left["peer_tun"], right["local_tun"])
+        self.assertEqual(left["family"], 6)
+        self.assertNotEqual(left["local_tun"], test_link(key(2), dict(request, side=0, direction=1))["local_tun"])
+
     def test_vxlan_falls_back_to_kernel_text_when_detailed_json_is_malformed(self):
         driver = driver_for({"method": "vxlan"})
         def tool(*args, **kwargs):

@@ -79,6 +79,23 @@ class GreTap(IPTunnel):
         return ["-p", self.protocol, "-m", "u32", "--u32", match]
 
 
+class Sit(IPTunnel):
+    def create(self, link, interface):
+        return ["ip", "link", "add", "dev", link["tunnel"], "alias", self.marker(link), "type", self.method,
+                "local", link["outer_local"], "remote", link["outer_peer"], "ttl", 64, "dev", interface]
+
+    def refresh(self, link, info, interface):
+        return None
+
+    def delete(self, link):
+        return ["ip", "link", "del", "dev", link["tunnel"]]
+
+
+def ipv6_enabled(run):
+    result = run("sysctl", "-n", "net.ipv6.conf.all.disable_ipv6", "net.ipv6.conf.default.disable_ipv6", check=False)
+    return result.returncode == 0 and result.stdout.split() == ["0", "0"]
+
+
 def wireguard_public_key(value):
     try:
         decoded = base64.b64decode(value, validate=True)
@@ -205,7 +222,7 @@ class Vxlan:
 
 
 DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan(),
-           "gretap": GreTap("gretap", "ip_gre", "gre", True)}
+           "gretap": GreTap("gretap", "ip_gre", "gre", True), "sit": Sit("sit", "sit", "41")}
 
 
 def driver_for(link):

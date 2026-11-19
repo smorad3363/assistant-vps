@@ -167,11 +167,11 @@ class Watchdog:
             target = listener["port_map"].get(str(probe["port"]), listener["target_port"] or probe["port"])
             host = link["peer_tun"] if link else member["service_ip"]
             service = service_probe(host, target, probe, link, source=listener["ip"])
-        link_state = (True if service else link_probe(link)) if link else None
+        link_state = (True if service else link_probe(link)) if link and member["method"] != "sit" else None
         management = self.management_state(record, member)
         return {"management": management, "link": link_state, "service": service, "icmp": ping,
                 "admission": service if probe else link_state,
-                "checked": self.clock(), "reason": "service_probe" if probe else "link_probe" if link else "no_service_probe"}
+                "checked": self.clock(), "reason": "service_probe" if probe else "link_probe" if link_state is not None else "no_service_probe"}
 
     def paths(self, state):
         targets, peers = {}, {}
@@ -186,7 +186,7 @@ class Watchdog:
                         continue
                     if listener["node_id"] == local:
                         targets[group_id + ":" + member["id"]] = (record, listener, member)
-                    if member["node_id"] == local and member["method"] in DRIVERS:
+                    if member["node_id"] == local and member["method"] in DRIVERS and member["method"] != "sit":
                         link = gre_link(record["owner"], listener, member, receiving=True)
                         peers[(link["local_tun"], link["peer_tun"])] = link
         return targets, peers

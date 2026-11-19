@@ -207,10 +207,10 @@ GRETAP members use a separate Ethernet interface to carry IPv4 between the
 two configured outer addresses. The panel generates matching keys on both
 ends unless a key is supplied. The link stays separate from the WAN bridge.
 
-Under Settings → Path test, select two paired nodes and their outer IPv4
-addresses. The preview shows the effective time and volume budget. The test
-prepares a separate GRE or IPIP link and measures two TCP streams over that
-link in each direction. A 37-second test transfers for 18 seconds from A to
+In Path test, select two paired nodes and their outer IPv4 addresses. The
+preview shows the effective time and volume budget. The test prepares a
+separate GRE, IPIP or SIT link and measures two TCP streams over that link
+in each direction. A 37-second test transfers for 18 seconds from A to
 B and 19 seconds from B to A. Preparation is separate from that duration.
 
 Every method reports delivered application bytes and the fastest complete
@@ -218,8 +218,17 @@ second observed at a receiver. Parallel methods share the effective host
 rate and total volume budget. The default ceiling is 100 Mbps and 1 GB, with
 the rate reduced to respect a lower configured host policy. Cancelling
 requests cleanup on both nodes. After a restart, saved receipts remain
-available and active leases expire without replaying traffic. An IPIP test
-requires an outer endpoint pair free of another IPIP device.
+available and active leases expire without replaying traffic. IPIP and SIT
+tests require an outer endpoint pair free of another device of that
+type. The SIT test carries TCP over temporary inner IPv6 addresses.
+
+For a persistent SIT / 6in4 link, create a separate listener using SIT
+members. Select the two outer IPv4 endpoints and two distinct inner IPv6
+addresses in the same /64 to /126 subnet. IPv6 must be enabled on both hosts
+and on new interfaces. Use an MTU of at least 1280. Applications reach the
+other host at its inner IPv6 address, subject to its existing IPv6 firewall.
+To replace inner addresses on the same outer pair, stop the member before
+changing its configuration.
 
 For a VXLAN member, select the outer IPv4 address at each end, set the VNI and
 choose a shared UDP destination port (4789 by default). Separate VNIs can share
