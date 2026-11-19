@@ -71,7 +71,11 @@ def main():
             return None
         try:
             reply = controller.v2_coordinator._response(node, "status", change, fingerprint(change))
-            return reply["phase"] == "committed" and reply["revision"] == record["revision"]
+            healthy = reply["phase"] == "committed" and reply["revision"] == record["revision"]
+            observations = reply.get("health", {})
+            if healthy and isinstance(observations, dict):
+                controller.v2_remote_health[(record["group"]["id"], node)] = observations
+            return healthy
         except (PanelError, OSError, KeyError):
             return False
 

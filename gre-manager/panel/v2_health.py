@@ -2,6 +2,8 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 import copy
+import errno
+import fcntl
 import os
 import select
 import socket
@@ -9,20 +11,21 @@ import threading
 import time
 
 from .model import PanelError, ranges_for
-from .v2_forwarding import LINK_PROBE_PROTOCOL, gre_link
+from .v2_forwarding import LINK_PROBE_PROTOCOL, checks_admission, gre_link, health_signature
 
 PROBE_REQUEST = b"gremgr2?"
 PROBE_REPLY = b"gremgr2!"
 TIMEOUT = 2
 INTERVAL = 5
 PARALLEL = 8
+PATH_DOWN = {errno.ENODEV, errno.ENETDOWN, errno.ENETUNREACH, errno.EADDRNOTAVAIL, errno.EHOSTUNREACH}
 
 
 def transition(previous, sample, now):
     """Three real failures withdraw admission. Three stable successes restore it."""
     previous = previous or {}
     result = dict(sample, successes=0, failures=0, since=None, available=previous.get("available", False))
-    service = sample["service"]
+    service = sample.get("admission", sample["service"])
     if service is True:
         result["successes"] = previous.get("successes", 0) + 1
         result["since"] = previous.get("since") if previous.get("successes") else now
@@ -37,13 +40,15 @@ def transition(previous, sample, now):
     return result
 
 
-def bound_socket(link, kind, protocol=0):
+def bound_socket(link, kind, protocol=0, source=None):
     sock = socket.socket(socket.AF_INET, kind, protocol)
     try:
         sock.settimeout(TIMEOUT)
         if link:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, link["tunnel"].encode() + b"\0")
             sock.bind((link["local_tun"], 0))
+        elif source:
+            sock.bind((source, 0))
         return sock
     except OSError:
         sock.close()
@@ -71,8 +76,8 @@ def link_probe(link):
                     return True
     except TimeoutError:
         return False
-    except OSError:
-        return None
+    except OSError as error:
+        return False if error.errno in PATH_DOWN else None
     return False
 
 
@@ -91,14 +96,14 @@ def link_responses(links, stop):
                 reply.sendto(PROBE_REPLY + data[len(PROBE_REQUEST):], (source[0], 0))
 
 
-def service_probe(host, port, definition, link):
+def service_probe(host, port, definition, link, source=None):
     udp = definition["protocol"] == "udp"
     request = definition["request"].encode()
     response = definition["response"].encode()
     try:
-        sock = bound_socket(link, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM)
-    except OSError:
-        return None
+        sock = bound_socket(link, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM, source=source)
+    except OSError as error:
+        return False if link and error.errno in PATH_DOWN else None
     try:
         with sock:
             deadline = time.monotonic() + TIMEOUT
@@ -158,11 +163,12 @@ class Watchdog:
         if probe:
             target = listener["port_map"].get(str(probe["port"]), listener["target_port"] or probe["port"])
             host = link["peer_tun"] if link else member["service_ip"]
-            service = service_probe(host, target, probe, link)
+            service = service_probe(host, target, probe, link, source=listener["ip"])
         link_state = (True if service else link_probe(link)) if link else None
         management = self.management_state(record, member)
         return {"management": management, "link": link_state, "service": service, "icmp": ping,
-                "checked": self.clock(), "reason": "service_probe" if probe else "no_service_probe"}
+                "admission": service if probe else link_state,
+                "checked": self.clock(), "reason": "service_probe" if probe else "link_probe" if link else "no_service_probe"}
 
     def paths(self, state):
         targets, peers = {}, {}
@@ -183,7 +189,14 @@ class Watchdog:
         return targets, peers
 
     def round(self, pool):
-        targets, self.peer_links = self.paths(self.participant.journal.read())
+        snapshot = self.participant.journal.read()
+        targets, self.peer_links = self.paths(snapshot)
+        if self.management_pool:
+            for record in snapshot["groups"].values():
+                if record["active"] and record["owner"] == self.participant.node_id:
+                    for listener in record["group"]["listeners"]:
+                        if listener["node_id"] != self.participant.node_id:
+                            self.management_state(record, {"node_id": listener["node_id"], "managed": True})
         keys = sorted(targets)
         selected = (keys[self.offset:] + keys[:self.offset])[:PARALLEL]
         self.offset = (self.offset + PARALLEL) % len(keys) if keys else 0
@@ -198,6 +211,11 @@ class Watchdog:
             return self.measure(record, listener, member)
 
         samples = dict(zip(selected, pool.map(check, (targets[k] for k in selected))))
+        with self.participant.network_lock.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.publish(samples, targets)
+
+    def publish(self, samples, targets):
         with self.participant.journal.edit() as state:
             current, _ = self.paths(state)
             before = copy.deepcopy(state)
@@ -209,13 +227,14 @@ class Watchdog:
             for key, sample in samples.items():
                 if current.get(key) != targets[key]:
                     continue
-                record, listener, _ = targets[key]
+                record, listener, member = targets[key]
                 previous = health.get(key, {})
-                if previous.get("revision") != record["revision"]:
+                path = health_signature(record["owner"], listener, member)
+                if previous.get("path") != path:
                     previous = {}
                 following = transition(previous, sample, self.clock())
-                health[key] = dict(following, revision=record["revision"])
-                if "probe" in listener and previous.get("available", False) != following["available"]:
+                health[key] = dict(following, path=path, revision=record["revision"])
+                if checks_admission(listener, member) and previous.get("available", False) != following["available"]:
                     changed = True
             if changed:
                 self.participant.materialize(state, before)

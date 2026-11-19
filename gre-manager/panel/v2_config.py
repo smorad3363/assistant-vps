@@ -91,6 +91,8 @@ def normalize_group(raw):
             "exclude_ports": profile["exclude_ports"], "port_map": profile["port_map"],
             "target_port": profile["target_port"], "members": normalized_members,
         })
+        if listener.get("watch_link") is not None:
+            result["listeners"][-1]["watch_link"] = enabled(listener["watch_link"])
         probe = listener.get("probe")
         if probe is not None:
             if not isinstance(probe, dict) or probe.get("protocol") not in profile["protocols"]:

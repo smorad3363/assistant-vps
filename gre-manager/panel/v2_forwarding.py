@@ -5,7 +5,7 @@ import json
 
 from .model import DEFAULTS, PanelError, ranges_for, subtract
 from .store import atomic_json, topology_node_id
-from .transactions import Journal
+from .transactions import Journal, fingerprint
 
 LINK_PROBE_PROTOCOL = 253
 
@@ -45,22 +45,34 @@ def active_members(listener, selection):
     return tier if selection == "weighted" else tier[:1]
 
 
+def checks_admission(listener, member):
+    return "probe" in listener or (listener.get("watch_link", False) and member["method"] == "gre")
+
+
+def health_signature(owner, listener, member):
+    path = [listener.get(key) for key in ("id", "node_id", "ip", "outer_ip", "ports", "exclude_ports", "port_map",
+                                          "target_port", "protocols", "probe", "watch_link")]
+    peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled")]
+    return fingerprint([owner, path, peer])
+
+
 def topology_views(config, state, node_id):
     listeners, devices, receivers = [], {}, {}
     settings = dict(DEFAULTS, **config["settings"])
 
-    def add_group(owner, group, staged, revision=None):
+    def add_group(owner, group, staged):
         if not group or not group["enabled"]:
             return
         for listener in group["listeners"]:
             ingress = listener["node_id"] == node_id
             if ingress and not staged:
-                if "probe" in listener:
+                if "probe" in listener or listener.get("watch_link"):
                     observed = state.get("health", {})
                     members = []
                     for member in listener["members"]:
                         sample = observed.get(group["id"] + ":" + member["id"], {})
-                        members.append(dict(member, available=sample.get("revision") == revision and sample.get("available", False)))
+                        verified = sample.get("path") == health_signature(owner, listener, member) and sample.get("available", False)
+                        members.append(dict(member, available=verified or not checks_admission(listener, member)))
                     listener = dict(listener, members=members)
                 listeners.append((group, owner, listener))
             for member in listener["members"]:
@@ -87,7 +99,7 @@ def topology_views(config, state, node_id):
 
     for record in state["groups"].values():
         if record["active"]:
-            add_group(record["owner"], record["group"], False, record.get("revision"))
+            add_group(record["owner"], record["group"], False)
     for record in state["operations"].values():
         if record["phase"] == "prepared" and record.get("change"):
             add_group(record["owner"], record["change"]["group"], True)
@@ -127,8 +139,12 @@ def require_ssh_protection(config, previous=None):
     if not error:
         return
     def incoming(view):
-        return [(group.get("selection") if group else None, owner, listener)
-                for group, owner, listener in view.get("v2_listeners", []) if "tcp" in listener["protocols"]]
+        items = []
+        for group, owner, listener in view.get("v2_listeners", []):
+            if "tcp" in listener["protocols"]:
+                members = [{key: value for key, value in m.items() if key != "available"} for m in listener.get("members", [])]
+                items.append((group.get("selection") if group else None, owner, dict(listener, members=members)))
+        return items
 
     def receiving(view):
         return {(peer["gre"]["tunnel"], peer["service_ip"], lo, hi)
@@ -194,6 +210,14 @@ def add_listener_rules(add, config, interfaces):
                 for interface_flag in ("-i", "-o"):
                     add("mangle", "GMP_MSS", interface_flag, gre["tunnel"], "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
                         "-j", "TCPMSS", "--set-mss", gre["mtu"] - 40)
+            probe = listener.get("probe")
+            if probe:
+                origin = gre["local_tun"] if gre else listener["ip"]
+                endpoint = gre["peer_tun"] if gre else member["service_ip"]
+                target = listener["port_map"].get(str(probe["port"]), listener["target_port"] or probe["port"])
+                device = ["-i", gre["tunnel"]] if gre else []
+                add("filter", "GMP_INPUT", *device, "-s", endpoint, "-d", origin, "-p", probe["protocol"],
+                    "--sport", target, "-m", "conntrack", "--ctstate", "ESTABLISHED", "--ctdir", "REPLY", "-j", "ACCEPT")
         for proto in listener["protocols"]:
             for low, high, translated in segments(listener, config["settings"]):
                 port = format_port(low, high)

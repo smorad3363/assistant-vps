@@ -1,4 +1,5 @@
 [Unit]
+Conflicts=gremgr-peer-monitor.service
 Description=GRE Manager network control and telemetry
 Wants=network-online.target gremgr-web.service
 After=network-online.target

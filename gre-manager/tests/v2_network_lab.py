@@ -20,7 +20,7 @@ from panel.model import DEFAULTS
 from panel.store import Paths, atomic_json
 from panel.v2_config import normalize_group
 from panel.v2_forwarding import topology_views, with_ssh_protection
-from panel.v2_forwarding import gre_link
+from panel.v2_forwarding import gre_link, health_signature
 from panel.v2_health import Watchdog, link_responses, transition
 
 
@@ -284,7 +284,8 @@ def lab(root):
             sample = json.loads(command(*namespace("gm-ir", "health", owner, json.dumps(compiled), position),
                                         capture_output=True).stdout)
             identity = group_id + ":" + member["id"]
-            evidence[identity] = dict(transition(evidence.get(identity), sample, time_value), revision=1)
+            evidence[identity] = dict(transition(evidence.get(identity), sample, time_value), revision=1,
+                                      path=health_signature(owner, compiled, member))
             return sample
 
         for index in (0, 1):

@@ -39,6 +39,7 @@ class Controller:
         self.lock = threading.RLock()
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="network-job")
         self.rates, self.health, self.failures = {}, {}, {}
+        self.v2_remote_health = {}
         self.last_sample, self.last_probe, self.last_backup = 0, 0, 0
         self.live_counters, self.live_epoch, self.last_persist = {}, None, 0
         self.pending = self.paths.etc / "pending.json"
@@ -149,12 +150,25 @@ class Controller:
 
     def v2_group_state(self):
         saved = self.v2_agent.journal.read()
-        return [
-            {"id": key, "owner": record["owner"], "revision": record["revision"], "group": record["group"],
-             "health": {identity.split(":", 1)[1]: sample for identity, sample in saved.get("health", {}).items()
-                        if identity.startswith(key + ":") and sample.get("revision") == record["revision"]}}
-            for key, record in sorted(saved["groups"].items()) if record["active"]
-        ]
+        result = []
+        remote = self.v2_remote_health.copy()
+        for key, record in sorted(saved["groups"].items()):
+            if not record["active"]:
+                continue
+            revision = record["revision"]
+            health = {}
+            for listener in record["group"]["listeners"]:
+                node = listener["node_id"]
+                samples = remote.get((key, node), {})
+                for member in listener["members"]:
+                    identity = member["id"]
+                    sample = (saved.get("health", {}).get(key + ":" + identity, {}) if node == self.v2_agent.node_id
+                              else samples.get(identity, {}))
+                    if isinstance(sample, dict) and sample.get("revision") == revision:
+                        health[identity] = sample
+            result.append({"id": key, "owner": record["owner"], "revision": revision,
+                           "group": record["group"], "health": health})
+        return result
 
     def v2_uses_node(self, node_id):
         if not node_id:

@@ -422,6 +422,7 @@ function listenerForm(listener = {}) {
     <label>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
       <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label></div>
     <details ${listener.probe ? 'open' : ''}><summary>سنجش سلامت سرویس</summary><div class="form-grid">
+      <label><input data-value="watch-link" type="checkbox" ${(listener.watch_link ?? !listener.id) ? 'checked' : ''}> پذیرش بر اساس سلامت لینک GRE</label>
       <label>روش سنجش<select data-value="probe-protocol"><option value="">تنظیم نشده</option>
         <option value="tcp" ${listener.probe?.protocol === 'tcp' ? 'selected' : ''}>TCP</option>
         <option value="udp" ${listener.probe?.protocol === 'udp' ? 'selected' : ''}>UDP</option></select></label>
@@ -490,6 +491,7 @@ function groupRequest() {
     id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
     ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
     protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')],
+    watch_link:$('[data-value="watch-link"]', row).checked,
     ...(value(row,'probe-protocol') && {probe:{protocol:value(row,'probe-protocol'), port:Number(value(row,'probe-port')),
       request:$('[data-value="probe-request"]', row).value, response:$('[data-value="probe-response"]', row).value}}),
     members:$$('[data-v2-member]', row).map(member => ({

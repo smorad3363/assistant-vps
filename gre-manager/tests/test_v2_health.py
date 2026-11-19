@@ -86,6 +86,9 @@ class WatchdogTests(unittest.TestCase):
             watchdog.round(pool)
             priorities, before = selected()
             self.assertEqual(priorities, [0])
+            replies = [rule for rule in before["filter"]["GMP_INPUT"] if "--ctdir" in rule]
+            self.assertEqual(len(replies), 2)
+            self.assertTrue(all("REPLY" in rule and "ESTABLISHED" in rule and "5000" in rule for rule in replies))
             results[0] = False
             for moment in (5, 10):
                 now[0] = moment
