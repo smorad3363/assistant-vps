@@ -3,6 +3,7 @@ from collections import defaultdict
 
 from .model import DEFAULTS, PanelError, address, bandwidth_limits, connection, integer, port_ranges, ranges_for
 from .transactions import identity, overlaps
+from .v2_drivers import DRIVERS
 from .v2_forwarding import segments
 
 
@@ -84,12 +85,12 @@ def normalize_group(raw):
             method = member.get("method")
             managed = enabled(member.get("managed", method != "direct"))
             egress = identity(member.get("node_id"))
-            if method not in ("gre", "direct") or (method != "direct" and not managed):
+            if not isinstance(method, str) or method not in {"direct", *DRIVERS} or (method != "direct" and not managed):
                 raise PanelError("An unmanaged destination needs direct forwarding.")
             if managed:
                 edges[ingress].add(egress)
             service_ip = address(member.get("service_ip", ""))
-            target_outer = address(member.get("outer_ip") or service_ip) if method == "gre" else None
+            target_outer = address(member.get("outer_ip") or service_ip) if method in DRIVERS else None
             is_enabled = enabled(member.get("enabled", True))
             draining = enabled(member.get("draining", False))
             if target_outer == outer_ip or method == "direct" and service_ip == listen_ip:
@@ -99,7 +100,7 @@ def normalize_group(raw):
             normalized_members.append({
                 "id": member_id, "method": method, "managed": managed, "node_id": egress,
                 "service_ip": service_ip, "outer_ip": target_outer,
-                "mtu": integer(member.get("mtu", 1280), 576, 1476, "mtu") if method == "gre" else None,
+                "mtu": integer(member.get("mtu", 1280), 576, 1476, "mtu") if method in DRIVERS else None,
                 "weight": integer(member.get("weight", 1), 1, 1000, "weight"),
                 "priority": integer(member.get("priority", 0), 0, 1000, "priority"),
                 "enabled": is_enabled, "draining": draining,
@@ -107,9 +108,11 @@ def normalize_group(raw):
             if "limits" in member:
                 normalized_members[-1]["limits"] = bandwidth_limits(member["limits"])
             if "link_settings" in member:
-                if method != "gre":
-                    raise PanelError("Only GRE has link MTU and MSS settings.", field="link_settings")
+                if method not in DRIVERS:
+                    raise PanelError("Set link MTU and MSS on a tunnel member.", field="link_settings")
                 normalized_members[-1]["link_settings"] = link_settings(member["link_settings"])
+            if method == "ipip":
+                normalized_members[-1]["ttl"] = integer(member.get("ttl", 64), 0, 255, "ttl")
         first = normalized_members[0]
         profile = listener_profile(dict(listener, ip=listen_ip), neutral, first["service_ip"])
         result["listeners"].append({
@@ -174,9 +177,9 @@ def local_claims(change, node_id, config, addresses):
     for listener in group["listeners"]:
         for member in listener["members"]:
             if member["enabled"] and member["managed"] and member["node_id"] == node_id:
-                if member["method"] == "gre" and member["outer_ip"] not in addresses:
-                    raise PanelError("The GRE destination address is unavailable on this node.", "local_ip")
-                if member["method"] == "gre" and protected.intersection([listener["target_port"], *listener["port_map"].values()]):
+                if member["method"] in DRIVERS and member["outer_ip"] not in addresses:
+                    raise PanelError("The tunnel destination address is unavailable on this node.", "local_ip")
+                if member["method"] in DRIVERS and protected.intersection([listener["target_port"], *listener["port_map"].values()]):
                     raise PanelError("The translated destination uses a protected port.", "reserved", "port_map")
                 if member["method"] == "direct" and member["service_ip"] in addresses and "tcp" in listener["protocols"]:
                     if config.get("ssh_discovery_error"):
@@ -190,8 +193,8 @@ def local_claims(change, node_id, config, addresses):
             continue
         if listener["ip"] not in addresses:
             raise PanelError("The listener address is unavailable on this node.", "listen_ip")
-        if any(member["enabled"] and member["method"] == "gre" for member in listener["members"]) and listener["outer_ip"] not in addresses:
-            raise PanelError("The GRE source address is unavailable on this node.", "local_ip")
+        if any(member["enabled"] and member["method"] in DRIVERS for member in listener["members"]) and listener["outer_ip"] not in addresses:
+            raise PanelError("The tunnel source address is unavailable on this node.", "local_ip")
         profile = listener_profile(listener, settings, listener["members"][0]["service_ip"])
         incoming = [(listener["ip"], proto, lo, hi) for proto in listener["protocols"]
                     for lo, hi in ranges_for(profile, settings)]

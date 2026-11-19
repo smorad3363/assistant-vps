@@ -11,6 +11,7 @@ import threading
 import time
 
 from .model import PanelError, ranges_for
+from .v2_drivers import DRIVERS
 from .v2_forwarding import LINK_PROBE_PROTOCOL, checks_admission, gre_link, health_signature
 from .v2_resources import admission_pressure, boot_id, pressure_file
 
@@ -154,7 +155,7 @@ class Watchdog:
         return None
 
     def measure(self, record, listener, member):
-        link = gre_link(record["owner"], listener, member) if member["method"] == "gre" else None
+        link = gre_link(record["owner"], listener, member) if member["method"] in DRIVERS else None
         ping = None
         if link:
             with suppress(PanelError):
@@ -185,7 +186,7 @@ class Watchdog:
                         continue
                     if listener["node_id"] == local:
                         targets[group_id + ":" + member["id"]] = (record, listener, member)
-                    if member["node_id"] == local and member["method"] == "gre":
+                    if member["node_id"] == local and member["method"] in DRIVERS:
                         link = gre_link(record["owner"], listener, member, receiving=True)
                         peers[(link["local_tun"], link["peer_tun"])] = link
         return targets, peers
