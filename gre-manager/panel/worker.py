@@ -37,10 +37,10 @@ def main():
         raise SystemExit("The network worker requires root.")
     controller = Controller()
     controller.store.interrupt_jobs()
-    controller.adopt()
     with open(controller.paths.etc / "network.lock", "a") as lock:
         import fcntl
         fcntl.flock(lock, fcntl.LOCK_EX)
+        controller.adopt()
         controller.collect()
         controller.recover()
         cfg = controller.store.config()
