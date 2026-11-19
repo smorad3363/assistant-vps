@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.2.0",
-  "revision": "d05e9edd40e0efac2293b98ef23c4071f5e7a36d",
+  "revision": "d760bb43635214f934cf3f5ceace737a373ee563",
   "files": {
     "gremgr-certificate.service": "ecaad1b0a845d02eda7dc0072d5fb9bbbdea4b874047e6c4401f5c441cec37b5",
     "gremgr-certificate.timer": "717a6d83996fdf54d8485b597bdfe339d6fff823feec19b1337ab400b70d6dc9",
