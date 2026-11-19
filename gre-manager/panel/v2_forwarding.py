@@ -6,6 +6,7 @@ import json
 from .model import DEFAULTS, PanelError, ranges_for, subtract
 from .store import atomic_json, topology_node_id
 from .transactions import Journal, fingerprint
+from .v2_drivers import DRIVERS, driver_for
 from .v2_resources import boot_id
 
 LINK_PROBE_PROTOCOL = 253
@@ -16,7 +17,9 @@ def gre_link(owner, listener, member, receiving=False):
     source = listener.get("outer_ip") or listener["ip"]
     target = member.get("outer_ip") or member["service_ip"]
     mtu = member.get("mtu") or 1280
-    identity = hashlib.sha256(f"{owner}|{source}|{target}|{member['service_ip']}|{mtu}".encode()).hexdigest()
+    method = member["method"]
+    base = f"{owner}|{source}|{target}|{member['service_ip']}"
+    identity = hashlib.sha256((f"{base}|{mtu}" if method == "gre" else f"{method}|{base}").encode()).hexdigest()
     start = int(ipaddress.IPv4Address("10.224.0.0")) + 4 * (int(identity[12:20], 16) % 262144)
     addresses = [str(ipaddress.IPv4Address(start + offset)) for offset in (1, 2)]
     if receiving:
@@ -24,10 +27,11 @@ def gre_link(owner, listener, member, receiving=False):
         addresses.reverse()
     parameters = member.get("link_settings", {}).get("destination" if receiving else "ingress", {})
     return {
-        "id": identity[:10], "tunnel": "g2-" + identity[:12],
+        "id": identity[:10], "tunnel": ("g2-" if method == "gre" else "i2-") + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
         "peer_tun": addresses[1], "key": int(identity[20:28], 16) or 1, "mtu": parameters.get("mtu", mtu),
         **({"mss_mode": parameters["mss_mode"], "mss": parameters.get("mss")} if parameters else {}),
+        **({"method": method, "ttl": member.get("ttl", 64)} if method != "gre" else {}),
     }
 
 
@@ -51,7 +55,7 @@ def active_members(listener, selection):
 
 
 def checks_admission(listener, member):
-    return "probe" in listener or (listener.get("watch_link", False) and member["method"] == "gre")
+    return "probe" in listener or (listener.get("watch_link", False) and member["method"] in DRIVERS)
 
 
 def health_signature(owner, listener, member):
@@ -68,7 +72,7 @@ def topology_views(config, state, node_id):
 
     def reconcile_link(link, group_id, staged):
         name = link["tunnel"]
-        settings = (link["mtu"], link.get("mss_mode", "mtu"), link.get("mss"))
+        settings = (link["mtu"], link.get("mss_mode", "mtu"), link.get("mss"), link.get("ttl", 64))
         if name in policies:
             old, claimed, owner, prepared = policies[name]
             if claimed != settings and (owner != group_id or prepared == staged):
@@ -94,7 +98,7 @@ def topology_views(config, state, node_id):
                     listener = dict(listener, members=members)
                 listeners.append((group, owner, listener))
             for member in listener["members"]:
-                if member["method"] != "gre" or not (member["enabled"] or member.get("draining")):
+                if member["method"] not in DRIVERS or not (member["enabled"] or member.get("draining")):
                     continue
                 receiving = member["node_id"] == node_id
                 if not ingress and not receiving:
@@ -255,14 +259,14 @@ def add_listener_rules(add, config, interfaces, limit):
         for member in listener["members"]:
             if not member["enabled"] and not member.get("draining"):
                 continue
-            gre = gre_link(owner, listener, member) if member["method"] == "gre" else None
+            gre = gre_link(owner, listener, member) if member["method"] in DRIVERS else None
             targets[member["id"]] = (gre["peer_tun"] if gre else member["service_ip"], gre)
             destination, link = targets[member["id"]]
             path_members.setdefault((destination, link["tunnel"] if link else ""), []).append(member)
             if gre and gre["tunnel"] not in links_seen:
                 links_seen.add(gre["tunnel"])
                 add("filter", "GMP_INPUT", "-i", interfaces[gre["outer_local"]], "-s", gre["outer_peer"],
-                    "-d", gre["outer_local"], "-p", "gre", "-j", "ACCEPT")
+                    "-d", gre["outer_local"], *driver_for(gre).firewall(gre), "-j", "ACCEPT")
                 add("filter", "GMP_INPUT", "-i", gre["tunnel"], "-s", gre["peer_tun"], "-d", gre["local_tun"],
                     "-p", LINK_PROBE_PROTOCOL, "-j", "ACCEPT")
                 mss_rules(add, gre)

@@ -21,7 +21,7 @@ from .v2_config import local_claims
 from .v2_forwarding import require_ssh_protection, topology_views, with_ssh_protection
 
 PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
-                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py", "v2_resources.py")
+                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py", "v2_resources.py", "v2_drivers.py")
 
 
 def validate_peer(data):

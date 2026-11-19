@@ -344,6 +344,24 @@ def lab(root):
             assert 210000 < measured["bytes"] < 610000, (direction, measured)
             print(f"v2 four destinations shared the 1 Mbps {direction} aggregate: {measured['bytes']} bytes over 4 seconds.", flush=True)
 
+        ipip = listener("gm-ir", [first_target], "ipip", [1])
+        ipip["members"][0]["ttl"] = 43
+        normalized = apply([ipip])
+        link = gre_link(owner, normalized, normalized["members"][0])
+        for host in ("gm-ir", first_target):
+            details = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", link["tunnel"], capture_output=True).stdout)[0]
+            assert details["linkinfo"]["info_kind"] == "ipip", details
+            assert details["linkinfo"]["info_data"]["ttl"] == 43, details
+        for proto in ("tcp", "udp"):
+            assert exchanges("gm-ir", 6, proto) == {"0": 6}
+        ipip["members"][0]["ttl"] = 55
+        apply([ipip])
+        assert exchanges("gm-ir", 6) == {"0": 6}
+        apply([weighted])
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
+        print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
+
 
 if __name__ == "__main__":
     action, *args = sys.argv[1:]

@@ -426,10 +426,12 @@ function memberForm(parent, member = {}) {
       <label>عدد MSS ${title}<input data-value="${side}-mss" type="number" min="64" max="1436" value="${esc(options.mss)}"></label>`;
   };
   row.innerHTML = `<label>سرور مقصد<select data-value="node">${nodeOptions(member.node_id, true)}</select></label>
-    <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option></select></label>
+    <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option>
+      <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
-    <label>IP بیرونی GRE<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
-    <label>MTU در GRE<input data-value="mtu" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
+    <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
+    <label>MTU تونل<input data-value="mtu" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
+    <label>TTL در IPIP<input data-value="ttl" type="number" min="0" max="255" value="${esc(member.ttl ?? 64)}" required></label>
     <label>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
     <label>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
     ${rateFields(member.limits)}
@@ -553,7 +555,8 @@ function groupRequest() {
       id:member.dataset.v2Member, node_id:value(member,'node') || member.dataset.unmanaged, managed:!!value(member,'node'),
       method:value(member,'method'), service_ip:value(member,'service'), outer_ip:value(member,'outer'),
       mtu:Number(value(member,'mtu')),
-      ...(value(member,'method') === 'gre' && {link_settings:linkSettings(member)}),
+      ...(value(member,'method') !== 'direct' && {link_settings:linkSettings(member)}),
+      ...(value(member,'method') === 'ipip' && {ttl:Number(value(member,'ttl'))}),
       weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
       limits:readRateFields(member),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',

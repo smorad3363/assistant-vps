@@ -15,6 +15,7 @@ import uuid
 
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
+from .v2_drivers import driver_for
 from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology, require_ssh_protection
 from .v2_resources import admission_pressure, pressure_file
 
@@ -166,7 +167,8 @@ def build_rules(config, interfaces, docker_udp=False):
             g = c["gre"]
             t, peer = g["tunnel"], g["peer_tun"]
             wan = interfaces[g["outer_local"]]
-            add("filter", "GMP_INPUT", "-i", wan, "-s", g["outer_peer"], "-d", g["outer_local"], "-p", "gre", "-j", "ACCEPT")
+            add("filter", "GMP_INPUT", "-i", wan, "-s", g["outer_peer"], "-d", g["outer_local"],
+                *driver_for(g).firewall(g), "-j", "ACCEPT")
             add("filter", "GMP_INPUT", "-i", t, "-s", peer, "-d", g["local_tun"], "-p", "icmp", "-j", "ACCEPT")
             if "v2_ports" in c:
                 add_receiver_rules(add, c, interfaces, config["settings"])
@@ -286,6 +288,12 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
+        unkeyed_pairs = {}
+        for link in self.gre_devices(config):
+            if link.get("method") == "ipip":
+                pair = link["outer_local"], link["outer_peer"]
+                if unkeyed_pairs.setdefault(pair, link["tunnel"]) != link["tunnel"]:
+                    raise PanelError("IPIP cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
         for c in forwarding:
             if not c.get("enabled", True):
                 continue
@@ -324,21 +332,22 @@ class Engine:
         return interfaces
 
     def ensure_gre(self, g, interfaces):
-        self.run("modprobe", "ip_gre", check=False)
+        driver = driver_for(g)
+        interface = interfaces[g["outer_local"]]
+        self.run("modprobe", driver.module, check=False)
         current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
         if current.returncode == 0:
             details = json.loads(current.stdout)[0].get("linkinfo", {})
-            data = details.get("info_data", {})
-            key = data.get("ikey", 0)
-            if isinstance(key, str):
-                key = int(ipaddress.IPv4Address(key)) if "." in key else int(key)
-            if details.get("info_kind") != "gre" or data.get("local") != g["outer_local"] or data.get("remote") != g["outer_peer"] or key != g["key"]:
-                raise PanelError("Another program owns this GRE interface.", "device_conflict")
+            if not driver.owns(g, details):
+                raise PanelError("Another program owns this tunnel interface.", "device_conflict")
+            refresh = driver.refresh(g, details, interface)
+            if refresh:
+                self.run(*refresh)
         else:
             for route in json.loads(self.run("ip", "-j", "-4", "route", "show").stdout):
                 if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
-                    raise PanelError("The private GRE subnet overlaps an existing route.", "route_conflict")
-            self.run("ip", "tunnel", "add", g["tunnel"], "mode", "gre", "local", g["outer_local"], "remote", g["outer_peer"], "key", g["key"], "ttl", "64", "dev", interfaces[g["outer_local"]])
+                    raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
+            self.run(*driver.create(g, interface))
         self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
         self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
         self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
@@ -438,12 +447,9 @@ class Engine:
         if current.returncode:
             return
         details = json.loads(current.stdout)[0].get("linkinfo", {})
-        data = details.get("info_data", {})
-        key = data.get("ikey", 0)
-        if isinstance(key, str):
-            key = int(ipaddress.IPv4Address(key)) if "." in key else int(key)
-        if details.get("info_kind") == "gre" and data.get("local") == g["outer_local"] and data.get("remote") == g["outer_peer"] and key == g["key"]:
-            self.run("ip", "tunnel", "del", g["tunnel"])
+        driver = driver_for(g)
+        if driver.owns(g, details):
+            self.run(*driver.delete(g))
 
     def retire_legacy(self, config):
         """Adopt only matching pair profiles, after their replacement is active."""
