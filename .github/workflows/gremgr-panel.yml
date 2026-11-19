@@ -33,7 +33,7 @@ jobs:
           python3 -m unittest discover -s gre-manager -p 'test_mtu.py' -v
           python3 -m unittest discover -s gre-manager -p 'test_docker_wireguard.py' -v
       - name: Install network test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod openssh-server sshpass conntrack strongswan xl2tpd ppp
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod openssh-server sshpass conntrack strongswan xl2tpd ppp wireguard-tools
       - name: Real kernel TCP and UDP in isolated namespaces
         run: |
           sudo mkdir -p /run/netns

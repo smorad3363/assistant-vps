@@ -25,10 +25,10 @@ if command -v apt-get >/dev/null; then
   done
   if ((missing)); then
     apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 iproute2 iptables iputils-ping curl openssl openssh-client sshpass kmod util-linux ca-certificates tzdata >/dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 iproute2 iptables iputils-ping curl openssl openssh-client sshpass kmod util-linux ca-certificates tzdata wireguard-tools >/dev/null
   fi
 elif command -v dnf >/dev/null; then
-  dnf install -y -q python3 iproute iptables iputils curl openssl openssh-clients sshpass kmod util-linux ca-certificates tzdata
+  dnf install -y -q python3 iproute iptables iputils curl openssl openssh-clients sshpass kmod util-linux ca-certificates tzdata wireguard-tools
 else
   echo 'Supported installers: Debian/Ubuntu apt, or dnf-based Linux.' >&2; exit 1
 fi

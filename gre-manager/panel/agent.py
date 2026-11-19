@@ -18,6 +18,7 @@ from .store import Paths, atomic_json, topology_node_id
 from .transactions import Journal, Participant
 from .v2_access import Access
 from .v2_config import local_claims
+from .v2_drivers import local_wireguard_key
 from .v2_forwarding import require_ssh_protection, topology_views, with_ssh_protection
 
 PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
@@ -272,6 +273,9 @@ def main():
     if os.geteuid() != 0:
         raise SystemExit("Run the peer helper as root.")
     paths = Paths()
+    if sys.argv[1:] == ["--wireguard-key"]:
+        print(local_wireguard_key(paths, run, create=True))
+        return
     if sys.argv[1:] == ["--watch"]:
         import threading
         from .v2_health import Watchdog

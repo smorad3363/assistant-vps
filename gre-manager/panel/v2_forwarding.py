@@ -19,19 +19,29 @@ def gre_link(owner, listener, member, receiving=False):
     mtu = member.get("mtu") or 1280
     method = member["method"]
     base = f"{owner}|{source}|{target}|{member['service_ip']}"
-    identity = hashlib.sha256((f"{base}|{mtu}" if method == "gre" else f"{method}|{base}").encode()).hexdigest()
+    identity_input = f"{base}|{mtu}" if method == "gre" else f"{method}|{base}"
+    if method == "wireguard":
+        identity_input += "|" + member["id"]
+    identity = hashlib.sha256(identity_input.encode()).hexdigest()
     start = int(ipaddress.IPv4Address("10.224.0.0")) + 4 * (int(identity[12:20], 16) % 262144)
     addresses = [str(ipaddress.IPv4Address(start + offset)) for offset in (1, 2)]
     if receiving:
         source, target = target, source
         addresses.reverse()
     parameters = member.get("link_settings", {}).get("destination" if receiving else "ingress", {})
+    extra = {}
+    if method == "wireguard":
+        settings = member["wireguard"]
+        here, there = ("destination", "ingress") if receiving else ("ingress", "destination")
+        extra = {"public_key": settings[here]["public_key"], "peer_public_key": settings[there]["public_key"],
+                 "listen_port": settings[here]["port"], "peer_port": settings[there]["port"], "keepalive": settings["keepalive"]}
     return {
-        "id": identity[:10], "tunnel": ("g2-" if method == "gre" else "i2-") + identity[:12],
+        "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "wireguard": "w2-"}[method] + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
         "peer_tun": addresses[1], "key": int(identity[20:28], 16) or 1, "mtu": parameters.get("mtu", mtu),
         **({"mss_mode": parameters["mss_mode"], "mss": parameters.get("mss")} if parameters else {}),
         **({"method": method, "ttl": member.get("ttl", 64)} if method != "gre" else {}),
+        **extra,
     }
 
 
@@ -61,7 +71,7 @@ def checks_admission(listener, member):
 def health_signature(owner, listener, member):
     path = [listener.get(key) for key in ("id", "node_id", "ip", "outer_ip", "ports", "exclude_ports", "port_map",
                                           "target_port", "protocols", "probe", "watch_link")]
-    peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled")]
+    peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled", "wireguard")]
     return fingerprint([owner, path, peer])
 
 

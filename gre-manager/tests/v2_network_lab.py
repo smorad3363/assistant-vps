@@ -368,6 +368,27 @@ def lab(root):
         command("ip", "-n", "gm-ir", "link", "show", "gm-other-ipip", stdout=subprocess.DEVNULL)
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
 
+        wg = listener("gm-ir", [first_target], "wireguard", [1])
+        sides = {}
+        for name, host, port in (("ingress", "gm-ir", 35379), ("destination", first_target, 35389)):
+            public = command(*namespace(host, "wg-key", Path(root) / host), capture_output=True).stdout.strip()
+            sides[name] = {"public_key": public, "port": port}
+        wg["members"][0]["wireguard"] = dict(sides, keepalive=5)
+        command("ip", "netns", "exec", first_target, "ip", "link", "add", "gm-existing-wg", "type", "wireguard")
+        compiled_wg = apply([wg])
+        link = gre_link(owner, compiled_wg, compiled_wg["members"][0])
+        for proto in ("tcp", "udp"):
+            assert exchanges("gm-ir", 6, proto) == {"0": 6}
+        for host in ("gm-ir", first_target):
+            handshakes = command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], "latest-handshakes",
+                                 capture_output=True).stdout.split()
+            assert len(handshakes) == 2 and int(handshakes[-1]) > 0, handshakes
+        apply([weighted])
+        command("ip", "-n", first_target, "link", "show", "gm-existing-wg", stdout=subprocess.DEVNULL)
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
+        print("v2 WireGuard proved the handshake and TCP/UDP payload in both namespaces. A separate interface survived removal.", flush=True)
+
 
 if __name__ == "__main__":
     action, *args = sys.argv[1:]
@@ -393,3 +414,8 @@ if __name__ == "__main__":
         listener = json.loads(args[1])
         watchdog = Watchdog(None, None, run)
         print(json.dumps(watchdog.measure({"owner": args[0]}, listener, listener["members"][int(args[2])])))
+    elif action == "wg-key":
+        from panel.engine import run
+        from panel.v2_drivers import local_wireguard_key
+
+        print(local_wireguard_key(Paths(args[0]), run, create=True))

@@ -425,9 +425,13 @@ function memberForm(parent, member = {}) {
         `<option value="${mode}" ${options.mss_mode === mode ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
       <label>عدد MSS ${title}<input data-value="${side}-mss" type="number" min="64" max="1436" value="${esc(options.mss)}"></label>`;
   };
+  const wgFields = (side, title) => `<label>کلید عمومی ${title}<input data-value="${side}-wg-key" dir="ltr" maxlength="44"
+    value="${esc(member.wireguard?.[side]?.public_key)}"></label>
+    <label>پورت UDP ${title}<input data-value="${side}-wg-port" type="number" min="1024" max="65535" value="${esc(member.wireguard?.[side]?.port)}"></label>`;
   row.innerHTML = `<label>سرور مقصد<select data-value="node">${nodeOptions(member.node_id, true)}</select></label>
     <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option>
-      <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option></select></label>
+      <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option>
+      <option value="wireguard" ${member.method === 'wireguard' ? 'selected' : ''}>WireGuard</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
     <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
     <label>MTU تونل<input data-value="mtu" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
@@ -437,8 +441,12 @@ function memberForm(parent, member = {}) {
     ${rateFields(member.limits)}
     <label>وضعیت<select data-value="state"><option value="on">فعال</option><option value="drain" ${member.draining ? 'selected' : ''}>در حال تخلیه</option>
       <option value="off" ${member.enabled === false ? 'selected' : ''}>متوقف</option></select></label>
-    <details><summary>MTU و MSS دو سر GRE</summary><div class="form-grid">
+    <details><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
       ${sideFields('ingress','ورودی')}${sideFields('destination','مقصد')}</div></details>
+    <details ${member.method === 'wireguard' ? 'open' : ''}><summary>تنظیمات WireGuard</summary><div class="form-grid">
+      ${wgFields('ingress','ورودی')}${wgFields('destination','مقصد')}
+      <label>Keepalive (ثانیه)<input data-value="keepalive" type="number" min="0" max="65535" value="${esc(member.wireguard?.keepalive ?? 25)}"></label>
+      </div><small>کلید عمومی هر نود را از <code>sudo gremgr wireguard-key</code> بگیرید.</small></details>
     <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
   parent.append(row);
 }
@@ -542,6 +550,9 @@ function groupRequest() {
     const mtu = value(member,side+'-mtu'), mss = value(member,side+'-mss'), mss_mode = value(member,side+'-mode');
     return mtu || mss_mode !== 'mtu' ? [[side,{mss_mode,...(mtu && {mtu}),...(mss_mode === 'manual' && {mss})}]] : [];
   }));
+  const wireguard = member => ({keepalive:Number(value(member,'keepalive')),
+    ...Object.fromEntries(['ingress','destination'].map(side => [side,
+      {public_key:value(member,side+'-wg-key'),port:Number(value(member,side+'-wg-port'))}]))});
   const listeners = $$('[data-v2-listener]', groupForm).map(row => ({
     id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
     ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
@@ -557,6 +568,7 @@ function groupRequest() {
       mtu:Number(value(member,'mtu')),
       ...(value(member,'method') !== 'direct' && {link_settings:linkSettings(member)}),
       ...(value(member,'method') === 'ipip' && {ttl:Number(value(member,'ttl'))}),
+      ...(value(member,'method') === 'wireguard' && {wireguard:wireguard(member)}),
       weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
       limits:readRateFields(member),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',
