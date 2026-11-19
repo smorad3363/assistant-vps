@@ -6,7 +6,9 @@ After=network-online.target
 Before=gremgr-web.service
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=100
 User=root
 Group=gremgr
 WorkingDirectory=/opt/gremgr/current

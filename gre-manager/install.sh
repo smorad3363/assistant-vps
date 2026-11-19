@@ -93,8 +93,8 @@ services=(gremgr-worker.service gremgr-web.service)
 restart=()
 enabled=()
 for unit in "${services[@]}"; do
-  if systemctl is-active --quiet "$unit"; then restart+=("$unit"); fi
-  if systemctl is-enabled --quiet "$unit"; then enabled+=("$unit"); fi
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then restart+=("$unit"); fi
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then enabled+=("$unit"); fi
 done
 activated=false
 
@@ -104,6 +104,10 @@ rollback_install() {
   set +e
   echo "The panel update failed. Installation backup: $backup" >&2
   if $activated; then
+    if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+      systemctl show "${services[@]}" -p Id -p ActiveState -p SubState -p Result -p ExecMainStatus >&2
+      journalctl -u gremgr-worker.service -u gremgr-web.service -n 24 --no-pager >&2
+    fi
     systemctl stop "${services[@]}"
     systemctl disable "${services[@]}" >/dev/null 2>&1
     if [[ -n "$old_release" && -d "$old_release" ]]; then
@@ -159,11 +163,21 @@ systemctl daemon-reload
 systemctl enable gremgr-worker.service gremgr-web.service >/dev/null
 systemctl restart gremgr-worker.service
 systemctl restart gremgr-web.service
-PORT=$(python3 -c 'import json;print(json.load(open("/etc/gremgr/panel.json"))["settings"]["port"])')
+readiness_url=$(python3 - <<'PY'
+import json
+from pathlib import Path
+settings = json.loads(Path('/etc/gremgr/panel.json').read_text())['settings']
+host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(settings['bind'], settings['bind'])
+if ':' in host:
+    host = '[' + host + ']'
+protocol = 'https' if settings['tls'] else 'http'
+print(f"{protocol}://{host}:{settings['port']}/")
+PY
+)
 ready=0
 for attempt in {1..30}; do
   if systemctl is-active --quiet gremgr-worker.service && systemctl is-active --quiet gremgr-web.service &&
-     curl --noproxy '*' -kfsS --connect-timeout 1 --max-time 2 "https://127.0.0.1:$PORT/" -o "$work/readiness" 2>/dev/null &&
+     curl --noproxy '*' -kfsS --connect-timeout 1 --max-time 2 "$readiness_url" -o "$work/readiness" 2>/dev/null &&
      grep -Fq 'GRE Manager' "$work/readiness"; then ready=1; break; fi
   sleep 1
 done

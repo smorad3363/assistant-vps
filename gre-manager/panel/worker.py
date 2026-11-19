@@ -4,6 +4,7 @@ import grp
 import json
 import os
 import signal
+import socket
 import socketserver
 import threading
 
@@ -104,6 +105,10 @@ def main():
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
+    if endpoint := os.environ.get("NOTIFY_SOCKET"):
+        destination = "\0" + endpoint[1:] if endpoint.startswith("@") else endpoint
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notification:
+            notification.sendto(b"READY=1", destination)
     try:
         server.serve_forever()
     finally:
