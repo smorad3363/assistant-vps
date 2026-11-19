@@ -97,9 +97,20 @@ for unit in "${services[@]}"; do
   if systemctl is-enabled --quiet "$unit" 2>/dev/null; then enabled+=("$unit"); fi
 done
 activated=false
+install_owner=$BASHPID
+owned_password=false
+owned_rules_absent=false
+peer_monitor=false
+state_db=/var/lib/gremgr/panel.sqlite3
+if systemctl is-active --quiet gremgr-peer-monitor.service 2>/dev/null; then peer_monitor=true; fi
+if iptables-save > "$work/kernel-before" 2>/dev/null &&
+   ! grep -Eq '^:GMP_(PRE|POST|LOCAL|FWD|INPUT|COUNT|MSS|MSS_LOCAL)[[:space:]]' "$work/kernel-before"; then
+  owned_rules_absent=true
+fi
 
 rollback_install() {
   local code=$1 target saved
+  if [[ $BASHPID != "$install_owner" ]]; then exit "$code"; fi
   trap - ERR HUP INT TERM
   set +e
   echo "The panel update failed. Installation backup: $backup" >&2
@@ -124,11 +135,23 @@ rollback_install() {
         rm -f -- "$target"
       fi
     done
+    if $owned_password && [[ -f "$state_db" ]]; then
+      python3 - "$state_db" <<'PY'
+from contextlib import closing
+import sqlite3, sys
+with closing(sqlite3.connect(sys.argv[1], timeout=15)) as db, db:
+    db.execute("DELETE FROM secrets WHERE key='password'")
+PY
+    fi
+    if $owned_rules_absent; then
+      (cd "$release" && env -u GRE_PANEL_HOME python3 -c 'from panel.engine import Engine; from panel.store import Paths; Engine(Paths()).clear_owned()')
+    fi
     systemctl daemon-reload
     if ((${#enabled[@]})); then systemctl enable "${enabled[@]}" >/dev/null; fi
     systemctl reset-failed "${services[@]}" 2>/dev/null
   fi
   if ((${#restart[@]})); then systemctl start "${restart[@]}"; fi
+  if $activated && $peer_monitor; then systemctl start gremgr-peer-monitor.service; fi
   exit "$code"
 }
 
@@ -150,11 +173,25 @@ install -m 644 "$release/gremgr-worker.service" /etc/systemd/system/gremgr-worke
 install -m 644 "$release/gremgr-web.service" /etc/systemd/system/gremgr-web.service
 install -m 644 "$release/gremgr-certificate.service" /etc/systemd/system/gremgr-certificate.service
 install -m 644 "$release/gremgr-certificate.timer" /etc/systemd/system/gremgr-certificate.timer
+previous_password=$(python3 - "$state_db" <<'PY'
+from contextlib import closing
+from pathlib import Path
+import sqlite3, sys
+path = Path(sys.argv[1])
+previous = False
+if path.is_file():
+    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=15)) as db:
+        table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='secrets'").fetchone()
+        previous = table is not None and db.execute("SELECT 1 FROM secrets WHERE key='password'").fetchone() is not None
+print('yes' if previous else 'no')
+PY
+)
+if [[ $previous_password == no ]]; then owned_password=true; fi
+init_args=()
 if [[ -n "$PANEL_PORT" ]]; then
-  (cd "$release" && python3 -m panel.cli init --port "$PANEL_PORT")
-else
-  (cd "$release" && python3 -m panel.cli init)
+  init_args+=(--port "$PANEL_PORT")
 fi
+(cd "$release" && env -u GRE_PANEL_HOME python3 -m panel.cli init "${init_args[@]}") > "$work/initialize"
 if [[ ! -s /etc/gremgr/tls/cert.pem || ! -s /etc/gremgr/tls/key.pem ]]; then
   openssl req -x509 -newkey ed25519 -nodes -keyout /etc/gremgr/tls/key.pem -out /etc/gremgr/tls/cert.pem -days 365 -subj '/CN=GRE Manager' >/dev/null 2>&1
   chmod 600 /etc/gremgr/tls/key.pem /etc/gremgr/tls/cert.pem
@@ -183,6 +220,7 @@ for attempt in {1..30}; do
 done
 if (( ! ready )); then rollback_install 1; fi
 trap - ERR HUP INT TERM
+cat "$work/initialize"
 if [[ ${GRE_PANEL_SKIP_ACME:-0} != 1 ]]; then
   if (cd "$release" && python3 -m panel.certificates configure); then
     if [[ ! -x /opt/gremgr/acme-venv/bin/certbot ]]; then
