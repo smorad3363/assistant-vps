@@ -5,6 +5,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import secrets
 import select
 import signal
 import socket
@@ -17,7 +18,9 @@ import uuid
 
 from panel.engine import Engine
 from panel.model import DEFAULTS
-from panel.store import Paths, atomic_json
+from panel.store import Paths, atomic_json, topology_node_id
+from panel.v2_bench_agent import boot_id as benchmark_boot_id, execute as execute_benchmark, key_for, record_file, test_link, validate
+from panel.v2_benchmark import SECOND, direction_lengths, report
 from panel.v2_config import normalize_group
 from panel.v2_drivers import driver_for
 from panel.v2_forwarding import topology_views, with_ssh_protection
@@ -167,6 +170,71 @@ def ssh_client(stack, root, name, address, port):
             return client
         time.sleep(.2)
     raise RuntimeError(f"Unable to reach namespace SSH fixture: {ready.stderr}")
+
+
+def bench_child(home, owner):
+    paths = Paths(home)
+    payload = json.load(sys.stdin)
+    engine = Engine(paths)
+    key = key_for(payload)
+    request = dict(validate(payload, engine, paths), secret=payload["secret"], port=payload.get("port"))
+    atomic_json(record_file(paths, key), {"phase": "starting", "boot": benchmark_boot_id(), "owner": owner,
+                                         "expires": time.time() + payload["seconds"] + 40, "request": request})
+    execute_benchmark(paths, key, engine)
+
+
+def bench_acceptance(stack, root, left, right, addresses):
+    hosts = [left, right]
+    homes = [Path(root) / ("bench-" + host) for host in hosts]
+    paths = [Paths(home) for home in homes]
+    node_ids = [topology_node_id(item) for item in paths]
+
+    def launch(side, payload):
+        process = start_process(stack, namespace(hosts[side], "bench-child", homes[side], node_ids[0]), stdin=subprocess.PIPE)
+        process.stdin.write(json.dumps(payload))
+        process.stdin.close()
+        return process
+
+    cases = [("gre", 2), ("ipip", 3)]
+    if os.getenv("GREMGR_BENCH_LONG") == "true":
+        cases.extend([("gre", 37), ("ipip", 300)])
+    for method, duration in cases:
+        receipts = []
+        job_id = uuid.uuid4().hex
+        for direction, seconds in enumerate(direction_lengths(duration)):
+            sender, receiver = direction, 1 - direction
+            payload = {"job_id": job_id, "method": method, "direction": direction, "nodes": node_ids,
+                       "first": addresses[0], "second": addresses[1], "seconds": seconds, "budget": seconds * 200_000 + 100_000,
+                       "rate": 200_000, "secret": secrets.token_hex(32)}
+            key = key_for(payload)
+            receiving = launch(receiver, payload)
+            record = record_file(paths[receiver], key)
+            deadline = time.monotonic() + 12
+            status = {}
+            while time.monotonic() < deadline:
+                if record.exists():
+                    status = json.loads(record.read_text())
+                    if status["phase"] == "ready":
+                        break
+                if receiving.poll() is not None:
+                    break
+                time.sleep(.03)
+            assert status.get("phase") == "ready", status.get("error")
+            sending = launch(sender, dict(payload, port=status["port"]))
+            assert receiving.wait(timeout=seconds + 8) == 0 and sending.wait(timeout=5) == 0
+            final = json.loads(record.read_text())
+            result = final.get("receipt")
+            assert final["phase"] == "done" and final["cleaned"] and result and result["reason"] == "finished", final.get("error")
+            assert result["elapsed_ns"] == seconds * SECOND and 130_000 < result["received_bytes"] <= seconds * 200_000, result
+            receipts.append(result)
+            link = test_link(node_ids[0], final["request"])["tunnel"]
+            for host in hosts:
+                assert subprocess.run(["ip", "-n", host, "link", "show", link], capture_output=True).returncode != 0
+                rules = command("ip", "netns", "exec", host, "iptables-save", "-t", "filter", capture_output=True).stdout
+                assert "gmpbench:" + key not in rules
+        results = report(*receipts)
+        assert results["finished"] and results["received_bytes"] == sum(item["received_bytes"] for item in receipts)
+        print(f"v2 {method.upper()} benchmark proved {duration} seconds of real directional TCP and selective cleanup: {results['received_bytes']} bytes.", flush=True)
 
 
 def lab(root):
@@ -368,6 +436,7 @@ def lab(root):
             assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
         command("ip", "-n", "gm-ir", "link", "show", "gm-other-ipip", stdout=subprocess.DEVNULL)
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
+        bench_acceptance(processes, root, "gm-ir", first_target, [nodes["gm-ir"][0], nodes[first_target][0]])
 
         first = listener("gm-ir", [first_target], "vxlan", [1])
         second = listener("gm-ir", [first_target], "vxlan", [1])
@@ -481,6 +550,8 @@ if __name__ == "__main__":
         listener = json.loads(args[1])
         watchdog = Watchdog(None, None, run)
         print(json.dumps(watchdog.measure({"owner": args[0]}, listener, listener["members"][int(args[2])])))
+    elif action == "bench-child":
+        bench_child(*args)
     elif action == "wg-key":
         from panel.engine import run
         from panel.v2_drivers import local_wireguard_key

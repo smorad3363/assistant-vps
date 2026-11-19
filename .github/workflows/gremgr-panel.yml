@@ -37,9 +37,11 @@ jobs:
       - name: Install network test dependencies
         run: bash gre-manager/tests/install_ci_deps.sh iptables iproute2 iputils-ping kmod openssh-server sshpass conntrack strongswan xl2tpd ppp wireguard-tools
       - name: Real kernel TCP and UDP in isolated namespaces
+        env:
+          GREMGR_BENCH_LONG: ${{ matrix.os == 'ubuntu-24.04' }}
         run: |
           sudo mkdir -p /run/netns
-          sudo unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
+          sudo --preserve-env=GREMGR_BENCH_LONG unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
       - name: Full noninteractive install and update on disposable runner
         run: |
           python3 gre-manager/build-release.py WORKTREE
@@ -54,6 +56,8 @@ jobs:
       - name: Real SSH provisioning and peer recovery
         run: |
           sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/ssh_lab.py
+      - name: Benchmark lease cleanup after cancellation and process death
+        run: sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/bench_systemd_lab.py
       - name: Both installer commands and automatic rollback
         run: sudo env GITHUB_ACTIONS=true bash gre-manager/tests/install_rollback_lab.sh
   browser:
