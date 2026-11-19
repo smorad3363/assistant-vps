@@ -27,11 +27,21 @@ trap cleanup EXIT
 images=https://cloud.debian.org/images/cloud/bookworm/latest
 image=debian-12-genericcloud-amd64.qcow2
 if [[ $method == l2tpv2 ]]; then image=debian-12-generic-amd64.qcow2; fi
-curl --fail --retry 3 --location --silent --show-error "$images/SHA512SUMS" --output "$lab/SHA512SUMS"
+sums=SHA512SUMS
+checksum=sha512sum
+os_release='Debian 12'
+if [[ ${GREMGR_REBOOT_OS:-} == ubuntu22 ]]; then
+  images=https://cloud-images.ubuntu.com/jammy/current
+  image=jammy-server-cloudimg-amd64.img
+  sums=SHA256SUMS
+  checksum=sha256sum
+  os_release='Ubuntu 22.04'
+fi
+curl --fail --retry 3 --location --silent --show-error "$images/$sums" --output "$lab/$sums"
 curl --fail --retry 3 --location --silent --show-error "$images/$image" --output "$lab/$image"
 (
   cd "$lab"
-  awk -v image="$image" '$2 == image || $2 == "*" image {print; ++n} END {exit(n != 1)}' SHA512SUMS | sha512sum --check
+  awk -v image="$image" '$2 == image || $2 == "*" image {print; ++n} END {exit(n != 1)}' "$sums" | "$checksum" --check
 )
 ssh-keygen -q -t ed25519 -N '' -f "$lab/key"
 sudo ip link add "$bridge" type bridge
@@ -133,6 +143,10 @@ GUEST
     guest "$port" 'uname -r && sudo modprobe ppp_generic && sudo modprobe l2tp_ppp && sudo test -c /dev/ppp'
     guest "$port" 'sudo install -d -m 700 /etc/gremgr/ppp-credentials && sudo install -m 600 /dev/stdin /etc/gremgr/ppp-credentials/lab' <"$lab/ppp-secret"
   fi
+  if [[ ${GREMGR_REBOOT_OS:-} == ubuntu22 ]]; then
+    guest "$port" 'grep -E "^VERSION_ID=\"?22\.04\"?$" /etc/os-release && uname -r'
+    guest "$port" 'if ! sudo modprobe -nq l2tp_eth; then sudo apt-get update -qq && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "linux-modules-extra-$(uname -r)"; fi; sudo modprobe l2tp_eth'
+  fi
 }
 
 start_vm in 25222 25251 52:54:00:32:60:01 198.51.100.50
@@ -146,22 +160,28 @@ install_side out 25223 &
 setup_out=$!
 wait "$setup_in"
 wait "$setup_out"
-guest 25223 sudo bash -s <<'GUEST'
+guest 25223 sudo bash -s -- "$method" <<'GUEST'
 set -euo pipefail
 cat >/usr/local/sbin/gremgr-fixture-echo.py <<'PY'
-import socketserver
+import socket, socketserver, sys
 class Echo(socketserver.BaseRequestHandler):
     def handle(self):
         self.request.sendall(b"reboot:" + self.request.recv(128))
-with socketserver.ThreadingTCPServer(("198.51.100.51", 25244), Echo) as server:
+class Echo6(socketserver.ThreadingTCPServer):
+    address_family = socket.AF_INET6
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        super().server_bind()
+listener = Echo6(("::", 25244), Echo) if sys.argv[1] == "sit" else socketserver.ThreadingTCPServer(("198.51.100.51", 25244), Echo)
+with listener as server:
     server.serve_forever()
 PY
-cat >/etc/systemd/system/gremgr-fixture-echo.service <<'UNIT'
+cat >/etc/systemd/system/gremgr-fixture-echo.service <<UNIT
 [Unit]
 Requires=gremgr-fixture-network.service
 After=gremgr-fixture-network.service
 [Service]
-ExecStart=/usr/bin/python3 /usr/local/sbin/gremgr-fixture-echo.py
+ExecStart=/usr/bin/python3 /usr/local/sbin/gremgr-fixture-echo.py $1
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -185,9 +205,19 @@ member = {"id": identity(), "node_id": dst, "method": method, "service_ip": "198
 if method == "l2tpv2":
     member["l2tpv2"] = {"lac": "ingress", "ingress": {"port": 37401, "credential": "lab"},
                        "destination": {"port": 37402, "credential": "lab"}}
-group = normalize_group({"id": group_id, "name": method.upper() + " reboot", "limits": {"up": 10, "down": 20}, "listeners": [{
-    "id": identity(), "node_id": src, "ip": "10.0.2.15", "outer_ip": "198.51.100.50", "protocols": ["tcp"],
-    "ports": "all", "port_map": {"5100": 25244}, "members": [member],
+if method == "l2tpv3":
+    member["l2tpv3"] = {"ingress": {"tunnel_id": 21701, "session_id": 21711, "port": 37001},
+                       "destination": {"tunnel_id": 21702, "session_id": 21712, "port": 37002}}
+
+if method == "geneve":
+    member["geneve"] = {"vni": 814321}
+forwarding = {"protocols": ["tcp"], "ports": "all", "port_map": {"5100": 25244}}
+group_policy = {"limits": {"up": 10, "down": 20}}
+if method == "sit":
+    member["sit"] = {"ingress": "fd49:1e81:7ca::1/64", "destination": "fd49:1e81:7ca::2/64"}
+    forwarding, group_policy = {}, {}
+group = normalize_group({"id": group_id, "name": method.upper() + " reboot", **group_policy, "listeners": [{
+    "id": identity(), "node_id": src, "ip": "10.0.2.15", "outer_ip": "198.51.100.50", **forwarding, "members": [member],
 }]})
 print(json.dumps({"id": identity(), "owner": src, "group_id": group_id, "group": group, "expected_revision": 0,
                   "participants": [dst, src], "joining": [dst]}))
@@ -200,6 +230,15 @@ for stage in prepare commit; do
 done
 
 verify_flow() {
+  if [[ $method == sit ]]; then
+    guest 25222 python3 - <<'PY'
+import socket
+with socket.create_connection(("fd49:1e81:7ca::2", 25244), timeout=5) as connection:
+    connection.sendall(b"fresh")
+    assert connection.recv(64) == b"reboot:fresh"
+PY
+    return
+  fi
   python3 - <<'PY'
 import socket
 with socket.create_connection(("127.0.0.1", 25251), timeout=5) as connection:
@@ -231,6 +270,11 @@ if [[ $method == l2tpv2 ]]; then
   for port in 25222 25223; do guest "$port" ip -o -4 addr show | grep -Eq 'p2-[0-9a-f]{12} .* peer '; done
 fi
 guest 25222 sudo iptables-save -t filter >"$lab/restored-filter"
+if [[ $method == sit ]]; then
+  grep -Eq -- '-s 198\.51\.100\.51/32 -d 198\.51\.100\.50/32 .* -p (41|ipv6) -j ACCEPT' "$lab/restored-filter"
+  echo 'PASS: both Debian 12 boot IDs changed. Fresh SSH and SIT IPv6 payload passed after each reboot and the joint reboot.'
+  exit 0
+fi
 python3 - "$lab/restored-filter" <<'PY'
 import re, sys
 from pathlib import Path
@@ -240,4 +284,4 @@ rates = [int(value) * {"": 1, "k": 1024, "m": 1024 * 1024}[unit]
 for expected in (1250000, 2500000):
     assert any(abs(rate - expected) < expected * .01 for rate in rates), (expected, rates)
 PY
-echo "PASS: both Debian 12 boot IDs changed. Fresh SSH and mapped ${method^^} payload passed after each reboot and the joint reboot."
+echo "PASS: both $os_release boot IDs changed. Fresh SSH and mapped ${method^^} payload passed after each reboot and the joint reboot."

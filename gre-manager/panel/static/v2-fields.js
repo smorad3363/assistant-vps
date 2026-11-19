@@ -47,6 +47,18 @@ const v2FieldSchema = {
     'destination-ppp-port': ['پورت L2TPv2 مقصد','یک پورت UDP آزاد روی سرور مقصد.'],
     'ingress-ppp-credential': ['مرجع اعتبارنامه ورودی','نام فایل اعتبارنامهٔ محلی PPP روی سرور ورودی.'],
     'destination-ppp-credential': ['مرجع اعتبارنامه مقصد','نام فایل اعتبارنامهٔ محلی PPP روی سرور مقصد.'],
+    'ingress-sit-ip': ['IPv6 داخلی ورودی','آدرس IPv6 ورودی همراه پیشوند بین ۶۴ تا ۱۲۶.'],
+    'destination-sit-ip': ['IPv6 داخلی مقصد','آدرس IPv6 مقصد با همان پیشوند شبکهٔ ورودی.'],
+
+    'ingress-l2tp-tunnel_id': ['شناسهٔ تونل ورودی','شناسهٔ ۳۲ بیتی تونل روی سرور ورودی.'],
+    'destination-l2tp-tunnel_id': ['شناسهٔ تونل مقصد','شناسهٔ ۳۲ بیتی تونل روی سرور مقصد.'],
+    'ingress-l2tp-session_id': ['شناسهٔ نشست ورودی','شناسهٔ ۳۲ بیتی نشست Ethernet روی سرور ورودی.'],
+    'destination-l2tp-session_id': ['شناسهٔ نشست مقصد','شناسهٔ ۳۲ بیتی نشست Ethernet روی سرور مقصد.'],
+    'ingress-l2tp-port': ['پورت UDP ورودی','پورت محلی حمل L2TPv3 در ورودی.'],
+    'destination-l2tp-port': ['پورت UDP مقصد','پورت محلی حمل L2TPv3 در مقصد.'],
+
+    'geneve-vni': ['شناسهٔ GENEVE','شناسهٔ ۲۴ بیتی که برای این لینک باید در دو سر یکسان باشد.'],
+    'geneve-port': ['پورت UDP GENEVE','پورت مشترک UDP در هر دو سر. پیش‌فرض ۶۰۸۱ است.'],
     'ingress-mtu': ['MTU ورودی',mtuHint], 'destination-mtu': ['MTU مقصد',mtuHint],
     'ingress-mode': ['روش MSS ورودی',mssHint], 'destination-mode': ['روش MSS مقصد',mssHint],
     'ingress-mss': ['عدد MSS ورودی',mssHint], 'destination-mss': ['عدد MSS مقصد',mssHint],
@@ -63,6 +75,7 @@ const v2FieldSchema = {
     duration_s: ['مدت هر روش','مجموع زمان انتقال رفت و برگشت یک روش به ثانیه. آماده‌سازی جداگانه است.'],
     gre: ['GRE','اجرای یک آزمایش با رابط GRE موقت.'], ipip: ['IPIP','اجرای آزمایش با حمل مستقیم IPv4 روی IPv4.'],
     gre_time: ['مدت GRE','برای این روش می‌توان مدت اصلی را تغییر داد.'], ipip_time: ['مدت IPIP','برای این روش می‌توان مدت اصلی را تغییر داد.'],
+    sit: ['SIT','انتقال دادهٔ IPv6 داخل رابط SIT موقت.'], sit_time: ['مدت SIT','برای این روش می‌توان مدت اصلی را تغییر داد.'],
     parallel: ['اجرای هم‌زمان','روش‌های هم‌زمان نرخ و حجم مجاز میزبان را با هم تقسیم می‌کنند.'],
   },
   settings: {

@@ -47,8 +47,16 @@ def serve(address, marker, port):
             data, sock = self.request
             sock.sendto(b"ready" if data == b"gremgr-health" else marker + data, self.client_address)
 
-    tcp = socketserver.ThreadingTCPServer((address, port), TCP)
-    udp = socketserver.UDPServer((address, port), UDP)
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
+
+    class TCPServer(socketserver.ThreadingTCPServer):
+        address_family = family
+
+    class UDPServer(socketserver.UDPServer):
+        address_family = family
+
+    tcp = TCPServer((address, port), TCP)
+    udp = UDPServer((address, port), UDP)
     threading.Thread(target=udp.serve_forever, daemon=True).start()
     print("ready", flush=True)
     tcp.serve_forever()
@@ -61,12 +69,15 @@ def exchange(sock, payload):
     return answer[:1].decode()
 
 
-def sample(address, number, udp=False, port=5100):
+def sample(address, number, udp=False, port=5100, source_start=None):
     result = Counter()
     kind = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
     for case in range(number):
-        with socket.socket(socket.AF_INET, kind) as sock:
+        with socket.socket(family, kind) as sock:
             sock.settimeout(3)
+            if source_start is not None:
+                sock.bind(("", source_start + case))
             sock.connect((address, port))
             result[exchange(sock, str(case).encode())] += 1
     print(json.dumps(result), flush=True)
@@ -81,7 +92,7 @@ def hold(address):
 
 def aggregate_udp(address):
     with ExitStack() as stack:
-        sockets = [stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) for _ in range(24)]
+        sockets = [stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) for _ in range(96)]
         for sock in sockets:
             sock.connect((address, 5100))
             sock.setblocking(False)
@@ -118,11 +129,12 @@ def render(home, node, with_panel, crash=None):
 
     def execute(*args, **kwargs):
         result = run(*args, **kwargs)
-        if crash and args[:3] == ("ip", "link", "add") and "type" in args and args[args.index("type") + 1] == crash:
+        created = args[:3] == ("ip", "link", "add") and "type" in args and args[args.index("type") + 1] == crash
+        if crash and (created or (crash == "l2tpv3" and args[:4] == ("ip", "l2tp", "add", "session"))):
             os.kill(os.getpid(), signal.SIGKILL)
         return result
 
-    Engine(paths, execute).apply(topology_views(config, current, node), topology_views(config, previous, node))
+    Engine(paths, execute).apply(topology_views(config, current, node, paths=paths), topology_views(config, previous, node, paths=paths))
     atomic_json(prior, current)
 
 
@@ -203,7 +215,7 @@ def bench_acceptance(stack, root, left, right, addresses):
         process.stdin.close()
         return process
 
-    for method, duration in (("gre", 2), ("ipip", 3)):
+    for method, duration in (("gre", 2), ("ipip", 3), ("sit", 3)):
         receipts = []
         job_id = uuid.uuid4().hex
         for direction, seconds in enumerate(direction_lengths(duration)):
@@ -237,6 +249,9 @@ def bench_acceptance(stack, root, left, right, addresses):
                 assert subprocess.run(["ip", "-n", host, "link", "show", link], capture_output=True).returncode != 0
                 rules = command("ip", "netns", "exec", host, "iptables-save", "-t", "filter", capture_output=True).stdout
                 assert "gmpbench:" + key not in rules
+                if method == "sit":
+                    rules = command("ip", "netns", "exec", host, "ip6tables-save", "-t", "filter", capture_output=True).stdout
+                    assert "gmpbench:" + key not in rules
         results = report(*receipts)
         assert results["finished"] and results["received_bytes"] == sum(item["received_bytes"] for item in receipts)
         print(f"v2 {method.upper()} benchmark proved {duration} seconds of real directional TCP and selective cleanup: {results['received_bytes']} bytes.", flush=True)
@@ -253,6 +268,7 @@ def lab(root):
         services.append(name)
     owner = nodes["gm-ir"][1]
     group_id = uuid.uuid4().hex
+    next_udp_source = 20000
 
     def listener(source, targets, method, weights):
         address, node = nodes[source]
@@ -275,7 +291,13 @@ def lab(root):
         return group["listeners"][0]
 
     def exchanges(name, count, proto="tcp", port=5100):
-        return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto, port),
+        nonlocal next_udp_source
+        source = []
+        if proto == "udp":
+            # Old UDP tuples intentionally keep their previous destination across revisions.
+            source = [next_udp_source]
+            next_udp_source += count
+        return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto, port, *source),
                                   capture_output=True).stdout)
 
     with ExitStack() as mounts, ExitStack() as processes:
@@ -441,6 +463,40 @@ def lab(root):
             assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
         command("ip", "-n", "gm-ir", "link", "show", "gm-other-ipip", stdout=subprocess.DEVNULL)
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
+
+        sit = listener("gm-ir", [first_target], "sit", [1])
+        sit.update(ports="all", port_map={}, protocols=[])
+        sit["members"][0]["sit"] = {"ingress": "fd34:5d09:ee5::1/64", "destination": "fd34:5d09:ee5::2/64"}
+        command("ip", "-n", "gm-ir", "link", "add", "gm-foreign-sit", "type", "sit", "local", nodes["gm-ir"][0],
+                "remote", nodes[services[-1]][0])
+        staged = normalize_group({"id": group_id, "name": "SIT prepare", "listeners": [sit]})
+        plan = {"groups": {}, "operations": {"prepared": {"phase": "prepared", "owner": owner, "change": {"group": staged}}}}
+        pending = gre_link(owner, staged["listeners"][0], staged["listeners"][0]["members"][0])
+        for host in ("gm-ir", first_target):
+            command(*namespace(host, "render", Path(root) / host, nodes[host][1], int(host == "gm-ir")), input=json.dumps(plan))
+            assert subprocess.run(["ip", "-n", host, "link", "show", pending["tunnel"]], capture_output=True).returncode != 0
+        compiled = apply([sit])
+        link = gre_link(owner, compiled, compiled["members"][0])
+        endpoint = link["peer_tun"]
+        echo = start_process(processes, namespace(first_target, "serve", endpoint, "6", 25244), stdout=subprocess.PIPE)
+        assert receive_line(echo) == "ready"
+        for proto in ("tcp", "udp"):
+            observed = command(*namespace("gm-ir", "sample", endpoint, 6, proto, 25244), capture_output=True).stdout
+            assert json.loads(observed) == {"6": 6}, observed
+        for host, inner in (("gm-ir", link["local_tun"]), (first_target, endpoint)):
+            device = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", link["tunnel"], capture_output=True).stdout)[0]
+            assert device["linkinfo"]["info_kind"] == "sit" and device["ifalias"] == "gremgr:v2:" + link["id"], device
+            ipv6 = json.loads(command("ip", "-n", host, "-j", "-6", "addr", "show", "dev", link["tunnel"], capture_output=True).stdout)
+            assert any(a["local"] == inner and a["prefixlen"] == 64 for a in ipv6[0]["addr_info"]), ipv6
+        stop_process(echo)
+        ipv6_default = ("ip", "netns", "exec", "gm-ir", "sysctl", "-qw", "net.ipv6.conf.default.disable_ipv6=")
+        command(*ipv6_default[:-1], ipv6_default[-1] + "1")
+        apply([weighted])
+        command(*ipv6_default[:-1], ipv6_default[-1] + "0")
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
+        command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-sit", stdout=subprocess.DEVNULL)
+        print("v2 SIT reserved without installing, carried IPv6 TCP and UDP, and removed only the owned device with IPv6 disabled.", flush=True)
         bench_acceptance(processes, root, "gm-ir", first_target, [nodes["gm-ir"][0], nodes[first_target][0]])
 
         l2 = listener("gm-ir", [first_target], "gretap", [1])
@@ -519,6 +575,80 @@ def lab(root):
         assert exchanges("gm-ir", 6) == {"0": 6}
         command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-vx", stdout=subprocess.DEVNULL)
         print("v2 independent unicast VXLAN VNIs verified their kernel settings, TCP/UDP round trips, and selective removal.", flush=True)
+
+        geneve = listener("gm-ir", [first_target], "geneve", [1])
+        geneve.update(ports="5300", port_map={"5300": 6000})
+        geneve["members"][0]["geneve"] = {"vni": 98345, "port": 36081}
+        second_peer = listener("gm-ir", [services[1]], "geneve", [1])
+        second_peer.update(ports="5340", port_map={"5340": 5000})
+        second_peer["members"][0]["geneve"] = dict(geneve["members"][0]["geneve"])
+        apply([first, geneve, second_peer])
+        geneve_link = gre_link(owner, geneve, geneve["members"][0])
+        for host in ("gm-ir", first_target):
+            settings = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", geneve_link["tunnel"],
+                                          capture_output=True).stdout)[0]["linkinfo"]
+            assert settings["info_kind"] == "geneve", settings
+            assert settings["info_data"]["id"] == 98345 and settings["info_data"]["port"] == 36081, settings
+        for proto in ("tcp", "udp"):
+            assert exchanges("gm-ir", 6, proto, port=5300) == {"M": 6}
+            assert exchanges("gm-ir", 6, proto, port=5340) == {"1": 6}
+            assert exchanges("gm-ir", 6, proto, port=5100) == {"0": 6}
+        command("ip", "-n", "gm-ir", "addr", "add", "192.0.2.199/32", "dev", "eth0")
+        command("ip", "-n", "gm-ir", "route", "replace", nodes[first_target][0] + "/32", "dev", "eth0", "src", "192.0.2.199")
+        apply([first])
+        command("ip", "-n", "gm-ir", "route", "del", nodes[first_target][0] + "/32", "dev", "eth0")
+        command("ip", "-n", "gm-ir", "addr", "del", "192.0.2.199/32", "dev", "eth0")
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", geneve_link["tunnel"]], capture_output=True).returncode != 0
+        assert exchanges("gm-ir", 6) == {"0": 6}
+        print("v2 GENEVE carried two peers, cleaned up after preferred-route loss and preserved the independent VXLAN path.", flush=True)
+
+        # Jammy runs the same transport in its required stock-guest boot job.
+        if os.getenv("GREMGR_L2TPV3_VM") != "true":
+            l2tp = listener("gm-ir", [first_target], "l2tpv3", [1])
+            l2tp["members"][0]["l2tpv3"] = {"ingress": {"tunnel_id": 21701, "session_id": 21711, "port": 37001},
+                                          "destination": {"tunnel_id": 21702, "session_id": 21712, "port": 37002}}
+            group = normalize_group({"id": group_id, "name": "Interrupted L2TPv3 creation", "listeners": [l2tp]})
+            state = {"groups": {group_id: {"active": True, "owner": owner, "group": group}}, "operations": {}}
+            crashed = subprocess.run(namespace("gm-ir", "render", Path(root) / "gm-ir", owner, 1, "l2tpv3"),
+                                     input=json.dumps(state), capture_output=True, text=True, timeout=30)
+            assert crashed.returncode == -signal.SIGKILL, crashed.stderr
+            normalized = apply([l2tp])
+            member = normalized["members"][0]
+            for (host, local_ip, peer_ip, local_id, peer_id), receiving in (
+                    (("gm-ir", "198.19.200.1", "198.19.200.2", 21911, 21912), False),
+                    ((first_target, "198.19.200.2", "198.19.200.1", 21912, 21911), True)):
+                link = gre_link(owner, normalized, member, receiving=receiving)
+                prefix = ["ip", "netns", "exec", host]
+                command(*prefix, "ip", "l2tp", "add", "session", "tunnel_id", str(link["tunnel_id"]), "session_id", str(local_id),
+                        "peer_session_id", str(peer_id), "name", "gm-adjacent-v3")
+                command(*prefix, "ip", "addr", "add", local_ip + "/30", "dev", "gm-adjacent-v3")
+                command(*prefix, "ip", "link", "set", "gm-adjacent-v3", "up")
+                carrier = driver_for(link).firewall(dict(link, session_id=local_id))
+                command(*prefix, "iptables", "-A", "INPUT", "-i", "eth0", "-s", link["outer_peer"],
+                        "-d", link["outer_local"], *map(str, carrier), "-j", "ACCEPT")
+                command(*prefix, "iptables", "-A", "INPUT", "-i", "gm-adjacent-v3", "-s", peer_ip, "-d", local_ip,
+                        "-p", "tcp", "-j", "ACCEPT")
+            adjacent = start_process(processes, namespace(first_target, "serve", "198.19.200.2", "L", 5699), stdout=subprocess.PIPE)
+            assert receive_line(adjacent) == "ready"
+            for proto in ("tcp", "udp"):
+                assert exchanges("gm-ir", 5, proto) == {"0": 5}
+            apply([weighted])
+            neighbor = json.loads(command(*namespace("gm-ir", "sample", "198.19.200.2", 5, "tcp", 5699), capture_output=True).stdout)
+            assert neighbor == {"L": 5}
+            apply([l2tp])
+            link = gre_link(owner, normalized, member)
+            prefix = ("ip", "netns", "exec", "gm-ir")
+            tunnel, session = str(link["tunnel_id"]), str(link["session_id"])
+            command(*prefix, "ip", "l2tp", "del", "session", "tunnel_id", tunnel, "session_id", session)
+            command(*prefix, "ip", "l2tp", "add", "session", "tunnel_id", tunnel, "session_id", session,
+                    "peer_session_id", str(link["peer_session_id"]), "name", link["tunnel"])
+            command(*prefix, "ip", "link", "set", "dev", link["tunnel"], "alias", "outside-gremgr")
+            apply([weighted])
+            foreign = json.loads(command(*prefix, "ip", "-j", "link", "show", "dev", link["tunnel"], capture_output=True).stdout)
+            assert foreign[0]["ifalias"] == "outside-gremgr", foreign
+            assert json.loads(command(*namespace("gm-ir", "sample", "198.19.200.2", 5, "tcp", 5699), capture_output=True).stdout) == {"L": 5}
+            print("v2 L2TPv3 recovered interrupted creation, carried TCP/UDP and preserved neighboring and foreign sessions.", flush=True)
         wg = listener("gm-ir", [first_target], "wireguard", [1])
         sides = {}
         for name, host, port in (("ingress", "gm-ir", 35379), ("destination", first_target, 35389)):
@@ -573,7 +703,8 @@ if __name__ == "__main__":
     elif action == "serve":
         serve(args[0], args[1].encode(), int(args[2]))
     elif action == "sample":
-        sample(args[0], int(args[1]), args[2] == "udp", int(args[3]) if len(args) > 3 else 5100)
+        sample(args[0], int(args[1]), args[2] == "udp", int(args[3]) if len(args) > 3 else 5100,
+               int(args[4]) if len(args) > 4 else None)
     elif action == "hold":
         hold(*args)
     elif action == "aggregate":

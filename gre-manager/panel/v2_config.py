@@ -1,5 +1,6 @@
 """Validation and local listener claims for the v2 topology."""
 from collections import defaultdict
+import ipaddress
 import re
 
 from .model import DEFAULTS, PanelError, address, bandwidth_limits, connection, integer, port_ranges, ranges_for
@@ -27,6 +28,18 @@ def l2tpv2_settings(value):
             raise PanelError("Use a local PPP credential name of up to 48 letters, digits, dashes or underscores.", field="credential")
         cooked[side] = {"port": integer(endpoint["port"], 1024, 65535, "port"), "credential": name}
     return cooked
+
+
+def l2tpv3_settings(value):
+    if not isinstance(value, dict) or set(value) != {"ingress", "destination"}:
+        raise PanelError("Provide tunnel and session IDs and a UDP port for both L2TPv3 endpoints.", field="l2tpv3")
+    result = {}
+    for side, settings in value.items():
+        if not isinstance(settings, dict) or set(settings) != {"tunnel_id", "session_id", "port"}:
+            raise PanelError("Provide tunnel and session IDs and a UDP port for each L2TPv3 endpoint.", field="l2tpv3")
+        result[side] = {field: integer(settings[field], 1, high, field)
+                        for field, high in (("tunnel_id", 4294967295), ("session_id", 4294967295), ("port", 65535))}
+    return result
 
 
 def listener_profile(listener, settings, service_ip):
@@ -120,7 +133,8 @@ def normalize_group(raw):
                 raise PanelError("An unmanaged destination needs direct forwarding.")
             if managed:
                 edges[ingress].add(egress)
-            service_ip = address(member.get("service_ip", ""))
+            service = member.get("outer_ip") if method == "sit" else None
+            service_ip = address(service or member.get("service_ip", ""))
             target_outer = address(member.get("outer_ip") or service_ip) if method in DRIVERS else None
             is_enabled = enabled(member.get("enabled", True))
             draining = enabled(member.get("draining", False))
@@ -131,7 +145,7 @@ def normalize_group(raw):
             normalized_members.append({
                 "id": member_id, "method": method, "managed": managed, "node_id": egress,
                 "service_ip": service_ip, "outer_ip": target_outer,
-                "mtu": integer(member.get("mtu", 1280), 576, 1476, "mtu") if method in DRIVERS else None,
+                "mtu": integer(member.get("mtu", 1280), 1280 if method == "sit" else 576, 1476, "mtu") if method in DRIVERS else None,
                 "weight": integer(member.get("weight", 1), 1, 1000, "weight"),
                 "priority": integer(member.get("priority", 0), 0, 1000, "priority"),
                 "enabled": is_enabled, "draining": draining,
@@ -142,26 +156,49 @@ def normalize_group(raw):
                 if method not in DRIVERS:
                     raise PanelError("Set link MTU and MSS on a tunnel member.", field="link_settings")
                 normalized_members[-1]["link_settings"] = link_settings(member["link_settings"])
+                if method == "sit" and any(side.get("mtu", 1280) < 1280 for side in normalized_members[-1]["link_settings"].values()):
+                    raise PanelError("An IPv6 SIT interface requires at least 1280 bytes of MTU.", field="mtu")
+                if method == "sit" and any(side["mss_mode"] not in ("mtu", "off") for side in normalized_members[-1]["link_settings"].values()):
+                    raise PanelError("SIT uses IPv6 path MTU discovery. Configure only its link MTU.", field="mtu")
             if method == "ipip":
                 normalized_members[-1]["ttl"] = integer(member.get("ttl", 64), 0, 255, "ttl")
-            if method == "vxlan":
-                parameters = member.get("vxlan")
+            if method in ("vxlan", "geneve"):
+                parameters = member.get(method)
                 if not isinstance(parameters, dict) or set(parameters) - {"vni", "port"}:
-                    raise PanelError("Set the VNI and optional UDP port for this VXLAN link.", field="vxlan")
-                normalized_members[-1]["vxlan"] = {"vni": integer(parameters.get("vni"), 1, 16777215, "vni"),
-                                                   "port": integer(parameters.get("port", 4789), 1, 65535, "port")}
+                    raise PanelError(f"Set the VNI and optional UDP port for this {method.upper()} link.", field=method)
+                default_port = 4789 if method == "vxlan" else 6081
+                normalized_members[-1][method] = {"vni": integer(parameters.get("vni"), 1, 16777215, "vni"),
+                                                   "port": integer(parameters.get("port", default_port), 1, 65535, "port")}
             if method == "wireguard":
                 normalized_members[-1]["wireguard"] = wireguard_settings(member.get("wireguard"))
             if method == "l2tpv2":
                 normalized_members[-1]["l2tpv2"] = l2tpv2_settings(member.get("l2tpv2"))
+            if method == "l2tpv3":
+                normalized_members[-1]["l2tpv3"] = l2tpv3_settings(member.get("l2tpv3"))
             if method == "gretap":
                 settings = member.get("gretap", {})
                 if not isinstance(settings, dict) or set(settings) - {"key"}:
                     raise PanelError("Configure the optional GRETAP key.", field="gretap")
                 normalized_members[-1]["gretap"] = ({"key": integer(settings["key"], 1, 4294967295, "key")}
                                                        if "key" in settings else {})
+            if method == "sit":
+                if (draining or normalized_members[-1]["weight"] != 1 or normalized_members[-1]["priority"]
+                        or any(normalized_members[-1].get("limits", {}).values())):
+                    raise PanelError("SIT supports start and stop. Weight, priority, rate limits and drain require service forwarding.", field="sit")
+                normalized_members[-1]["sit"] = sit_settings(member.get("sit"))
         first = normalized_members[0]
-        profile = listener_profile(dict(listener, ip=listen_ip), neutral, first["service_ip"])
+        sit = [member for member in normalized_members if member["method"] == "sit"]
+        if sit:
+            if (len(sit) != len(normalized_members) or listener.get("protocols") or listener.get("probe")
+                    or listener.get("watch_link") or listener.get("ports", "all") != "all"
+                    or any(listener.get(field) for field in ("port_limits", "target_port", "exclude_ports", "port_map"))):
+                raise PanelError("Use a separate SIT listener for IPv6 links without IPv4 port forwarding or service probes.", field="sit")
+            if any(result.get("limits", {}).values()) or any(bandwidth_limits(listener.get("limits", {})).values()):
+                raise PanelError("Place SIT in a group without shared rate limits.", field="sit")
+            profile = {"listen_ip": listen_ip, "ports": "all", "protocols": [], "exclude_ports": [], "port_map": {},
+                       "target_port": None, "port_limits": {}}
+        else:
+            profile = listener_profile(dict(listener, ip=listen_ip), neutral, first["service_ip"])
         result["listeners"].append({
             "id": listener_id, "node_id": ingress, "ip": profile["listen_ip"], "outer_ip": outer_ip,
             "ports": profile["ports"], "protocols": profile["protocols"],
@@ -242,6 +279,8 @@ def local_claims(change, node_id, config, addresses):
             raise PanelError("The listener address is unavailable on this node.", "listen_ip")
         if any(member["enabled"] and member["method"] in DRIVERS for member in listener["members"]) and listener["outer_ip"] not in addresses:
             raise PanelError("The tunnel source address is unavailable on this node.", "local_ip")
+        if not listener["protocols"]:
+            continue
         profile = listener_profile(listener, settings, listener["members"][0]["service_ip"])
         incoming = [(listener["ip"], proto, lo, hi) for proto in listener["protocols"]
                     for lo, hi in ranges_for(profile, settings)]
@@ -269,3 +308,18 @@ def participant_order(group, nodes):
         order.extend(ready)
         pending.difference_update(ready)
     return order
+def sit_settings(value):
+    if not isinstance(value, dict) or set(value) != {"ingress", "destination"}:
+        raise PanelError("Configure the two inner IPv6 addresses with prefix lengths.", field="sit")
+    try:
+        if not all(isinstance(item, str) and "/" in item and "%" not in item for item in value.values()):
+            raise ValueError()
+        pairs = {side: ipaddress.IPv6Interface(item) for side, item in value.items()}
+        first, second = pairs["ingress"], pairs["destination"]
+        if (first.network != second.network or first.ip == second.ip or not 64 <= first.network.prefixlen <= 126
+                or any(x.ip.is_link_local or x.ip.is_multicast or x.ip.is_unspecified or x.ip.is_loopback or x.ip.ipv4_mapped
+                       for x in pairs.values())):
+            raise ValueError()
+    except ValueError as error:
+        raise PanelError("SIT needs two distinct unicast IPv6 addresses in the same subnet with a /64–/126 prefix.", field="sit") from error
+    return {side: str(endpoint) for side, endpoint in pairs.items()}
