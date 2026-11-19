@@ -24,6 +24,7 @@ from .engine import Engine, discovered_ssh_ports, gre_for, run
 from .model import PanelError, connection, resolve, settings_update, validate_conflicts
 from .remote import Remote, server_metadata
 from .store import Store, atomic_json, check_password
+from .topology import legacy_topology
 
 
 class Controller:
@@ -40,12 +41,9 @@ class Controller:
         self.pending = self.paths.etc / "pending.json"
         self.stats_cache, self.stats_cached_at = None, 0
 
-    def adopt(self):
-        """Import saved Iran pair profiles without touching live interfaces."""
-        cfg = self.store.config()
-        changed = False
+    def legacy_connections(self, cfg):
         seen = {x["id"] for x in cfg["connections"]}
-        for path in (self.paths.etc / "pairs").glob("*.json"):
+        for path in sorted((self.paths.etc / "pairs").glob("*.json")):
             old = json.loads(path.read_text())
             if old.get("role") != "iran" or old.get("id") in seen:
                 continue
@@ -59,11 +57,39 @@ class Controller:
                     "enabled": True, "exclude_ports": [], "upload_mbps": 0, "download_mbps": 0,
                     "port_limits": {}, "monitor_ports": [], "mtu": old["mtu"], "mtu_mode": "manual",
                     "service_ip": old["outer_peer"], "server_id": "", "legacy_pair": old}
-            cfg["connections"].append(item)
-            changed = True
-        if changed:
+            seen.add(item["id"])
+            yield item
+
+    def adopt(self):
+        """Persist legacy pair profiles before their managed replacement is applied."""
+        cfg = self.store.config()
+        peer_file = self.paths.etc / "peers.json"
+        if not peer_file.exists():
+            peers = read_peers(self.paths)
+            if peers:
+                atomic_json(peer_file, peers)
+        legacy = list(self.legacy_connections(cfg))
+        if legacy:
+            cfg["connections"].extend(legacy)
             self.store.save(cfg)
             self.store.event("info", "Existing GRE pairs imported without changing live tunnels.")
+
+    def topology(self, config=None):
+        addresses, peers = {}, []
+        if config is None:
+            config = self.store.config()
+            config["connections"].extend(self.legacy_connections(config))
+            peers = read_peers(self.paths)
+            with contextlib.suppress(PanelError):
+                addresses = self.engine.interfaces()
+        try:
+            server_ids = {server_metadata(server)["id"] for server in config["servers"]}
+            ready = {identity for identity in server_ids if (self.paths.ssh / identity).is_file()}
+            return legacy_topology(config, peers, self.store.topology_node_id(), addresses, ready)
+        except PanelError:
+            raise
+        except (KeyError, TypeError, ValueError) as error:
+            raise PanelError("The schema-1 topology could not be read.", "invalid_topology") from error
 
     def combined(self, cfg):
         result = copy.deepcopy(cfg)
@@ -577,11 +603,14 @@ class Controller:
     def request(self, route, payload, token=None, csrf=None, peer="local"):
         if route == "login":
             return self.store.login(payload.get("username", ""), payload.get("password", ""), peer)
-        session = self.store.session(token, None if route in ("state", "live", "stats", "job", "backup.download") else csrf or "")
+        session = self.store.session(token, None if route in ("state", "live", "stats", "job", "backup.download", "v2/topology") else csrf or "")
         if route == "auth.check":
             return {}
         if route == "state":
             return self.state(session)
+        if route == "v2/topology":
+            with self.lock:
+                return self.topology()
         if route == "live":
             with self.lock:
                 return {"sampled_at": self.last_sample, "connections": [
@@ -613,8 +642,10 @@ class Controller:
             if not path.is_file():
                 raise PanelError("Backup not found.", "not_found")
             return {"content": base64.b64encode(path.read_bytes()).decode(), "filename": name}
-        if route == "backup.preview":
+        if route in ("backup.preview", "v2/migration.preview"):
             config, _ = self.store.read_backup(base64.b64decode(payload.get("content", ""), validate=True))
+            if route == "v2/migration.preview":
+                return self.topology(config)
             return {"connections": len(config["connections"]), "servers": len(config["servers"]),
                     "addresses": sorted({x["listen_ip"] for x in config["connections"]})}
         if route in {"connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update"}:

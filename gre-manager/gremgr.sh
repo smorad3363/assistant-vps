@@ -6,5 +6,6 @@ case "${1:-}" in
   --version) cd /opt/gremgr/current; exec python3 -c 'from panel import __version__; print(__version__)' ;;
   --reset-password) cd /opt/gremgr/current; exec python3 -m panel.cli reset-password ;;
   --recover) cd /opt/gremgr/current; exec python3 -m panel.cli recover ;;
+  --topology) shift; cd /opt/gremgr/current; exec python3 -m panel.cli topology "$@" ;;
   *) cd /opt/gremgr/current; exec python3 -m panel.cli status ;;
 esac

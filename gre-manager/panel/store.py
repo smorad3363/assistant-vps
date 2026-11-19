@@ -11,6 +11,7 @@ import secrets
 import sqlite3
 import tempfile
 import time
+import uuid
 import zipfile
 
 from .model import DEFAULTS, PanelError
@@ -110,6 +111,12 @@ class Store:
             raise PanelError("Unsupported configuration schema.")
         data["settings"] = dict(DEFAULTS, **data["settings"])
         return data
+
+    def topology_node_id(self):
+        with self.database() as db:
+            key = "topology.node_id"
+            db.execute("INSERT OR IGNORE INTO secrets VALUES(?,?)", (key, uuid.uuid4().hex))
+            return db.execute("SELECT value FROM secrets WHERE key=?", (key,)).fetchone()[0]
 
     def interrupt_jobs(self):
         with self.database() as db:

@@ -13,8 +13,8 @@ from urllib.parse import parse_qs, urlsplit
 
 MAX_REQUEST = 48 * 1024 * 1024
 STATIC = Path(__file__).parent / "static"
-GET_ROUTES = {"state", "live", "stats", "job", "backup.download"}
-POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update"}
+GET_ROUTES = {"state", "live", "stats", "job", "backup.download", "v2/topology"}
+POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "v2/migration.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update"}
 
 
 class RPC:
@@ -111,7 +111,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(401 if check.get("code") == "auth" else 403, check)
         try:
             length = int(self.headers.get("Content-Length", "-1"))
-            maximum = MAX_REQUEST if route in ("backup.restore", "backup.preview") else 4096 if route == "login" else 262144
+            maximum = MAX_REQUEST if route in ("backup.restore", "backup.preview", "v2/migration.preview") else 4096 if route == "login" else 262144
             if not 0 <= length <= maximum:
                 raise ValueError()
             payload = json.loads(self.rfile.read(length))
