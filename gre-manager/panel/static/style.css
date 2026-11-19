@@ -20,3 +20,38 @@ html{min-height:100%;scrollbar-gutter:stable}body{background:var(--bg);color:var
 @layer responsive{@media(max-width:760px){.row-actions .icon-button{min-width:44px;min-height:44px;padding:10px}.connection-title{padding-left:142px}}}
 
 .port-map-row{display:grid;grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr) 38px;gap:10px;align-items:end;margin-block:10px}.port-map-arrow{align-self:center;margin-top:22px;text-align:center;color:var(--muted)}.port-map-row .icon-button{padding:8px;min-width:36px}.table-scroll{max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain}.port-traffic{min-width:400px}.port-traffic th{white-space:normal}.live-rate{font-variant-numeric:tabular-nums;white-space:nowrap}#port-inputs{border:1px solid var(--line);border-radius:10px;padding:14px;margin-block:16px}#port-inputs .section-heading{gap:8px}#port-inputs h3{font-size:12px}@media(max-width:540px){.port-map-row{gap:6px;grid-template-columns:minmax(0,1fr) 12px minmax(0,1fr) 32px}#port-inputs{padding:10px}.port-map-row input{padding-inline:8px}.port-map-row .icon-button{min-width:32px;padding:6px}.port-traffic{font-size:10px;min-width:360px}}
+
+#groups-page, #benchmark-page { margin-block-end:35px }
+.topology-heading { align-items:center }
+.topology-heading .button-row { flex-shrink:0 }
+#v2-group-list { display:grid; gap:12px; margin-block:0 14px }
+.topology-card { border:1px solid var(--line); border-radius:9px; padding:14px; min-width:0; overflow-wrap:anywhere }
+.topology-card[data-state="0"] { border-inline-start:3px solid var(--amber) }
+.topology-card-header { display:flex; justify-content:space-between; gap:16px; align-items:start }
+.topology-card-header > div { min-width:0 }
+.topology-card-header p { display:flex; flex-wrap:wrap; gap:5px 12px; color:var(--muted); font-size:12px }
+.topology-card[data-state="0"] .topology-status { color:#f0d794 }
+.topology-card details { margin-block-start:6px; font-size:12px }
+.topology-card details small { display:block; color:var(--muted) }
+#v2-group-form { border-top:1px solid var(--line); margin-block-start:18px; padding-block-start:18px }
+#v2-group-form fieldset { min-inline-size:0; margin:12px 0; padding:14px; border:1px solid var(--line); border-radius:9px }
+#v2-group-form .topology-member { margin-block:12px; padding:12px; border:1px solid var(--line); border-radius:8px }
+#v2-group-form .topology-member > details { grid-column:1 / -1 }
+#v2-group-form input[type="number"], #v2-bench-form input[inputmode="numeric"] { direction:ltr; text-align:start }
+.topology-preview { min-width:340px; margin-block:12px }
+.field-with-help { position:relative; min-width:0 }
+.field-with-help > label { padding-inline-end:26px }
+.field-help { position:absolute; inset-inline-end:1px; inset-block-start:0; color:var(--text); background:var(--surface); border:1px solid var(--line); border-radius:50%; min-width:23px; min-height:23px; font-size:12px; padding:0 }
+.field-with-help [role="tooltip"] { position:absolute; inset-inline-end:0; inset-block-start:27px; width:min(260px,100%); z-index:5; padding:8px 11px; border:1px solid var(--line); border-radius:7px; background:#25342c; color:#f4f8f5; font-size:12px; box-shadow:0 6px 18px #0006 }
+#v2-bench-result details { padding:8px 0; border-top:1px solid var(--line); overflow-wrap:anywhere }
+#v2-bench-result details div { font-size:12px; color:var(--muted) }
+@media (max-width:540px) {
+  .tabs a { flex-direction:column; gap:4px; min-width:0; padding:8px 5px; font-size:11px }
+  .tabs .tab-count { display:none }
+  .topology-heading { align-items:start; flex-wrap:wrap }
+  .topology-heading .button { margin-top:0 }
+  #groups-page .form-grid, #benchmark-page .form-grid { grid-template-columns:minmax(0,1fr) }
+  #v2-group-form fieldset { padding:9px }
+  .field-help { min-width:26px; min-height:26px }
+  .field-with-help > label { padding-inline-end:30px }
+}

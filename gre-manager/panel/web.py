@@ -91,7 +91,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(404, {"error": "Not found", "code": "not_found"})
             payload = {key: values[-1] for key, values in parse_qs(path.query).items()}
             return self.api(route, payload)
-        names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg"}
+        names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/v2-fields.js": "v2-fields.js",
+                 "/style.css": "style.css", "/favicon.svg": "favicon.svg"}
         if path.path not in names:
             return self.reply(404, {"error": "Not found", "code": "not_found"})
         file = STATIC / names[path.path]
