@@ -76,6 +76,7 @@ def main():
         stop.set()
         server.server_close()
         controller.executor.shutdown(wait=True, cancel_futures=True)
+        controller.v2_executor.shutdown(wait=True, cancel_futures=True)
         with contextlib.suppress(Exception):
             controller.collect()
 

@@ -1,0 +1,133 @@
+"""Validation and local listener claims for the v2 topology."""
+from collections import defaultdict
+
+from .model import DEFAULTS, PanelError, address, connection, integer, ranges_for
+from .transactions import identity, overlaps
+
+
+def enabled(value):
+    if type(value) is not bool:
+        raise PanelError("The enabled flag must be true or false.", field="enabled")
+    return value
+
+
+def listener_profile(listener, settings, service_ip):
+    keys = ("protocols", "ports", "target_port", "port_map", "exclude_ports")
+    profile = {key: listener[key] for key in keys if key in listener}
+    return connection(
+        dict(profile, kind="direct", listen_ip=listener["ip"], target_host=service_ip),
+        settings, resolver=lambda ip: ip,
+    )
+
+
+def normalize_group(raw):
+    if not isinstance(raw, dict):
+        raise PanelError("Provide a topology group.")
+    name = str(raw.get("name", "")).strip()
+    if not name or len(name) > 80 or any(ord(char) < 32 for char in name):
+        raise PanelError("Use a group name of 1..80 characters.", field="name")
+    selection = raw.get("selection", "weighted")
+    if selection not in ("weighted", "failover", "single"):
+        raise PanelError("Invalid member selection policy.", field="selection")
+    listeners = raw.get("listeners")
+    if not isinstance(listeners, list) or not 1 <= len(listeners) <= 128:
+        raise PanelError("Provide 1..128 listeners.")
+    result = {"id": identity(raw.get("id"), group=True), "name": name, "selection": selection,
+              "enabled": enabled(raw.get("enabled", True)), "listeners": []}
+    neutral = dict(DEFAULTS, port=22)
+    used = set()
+    edges = defaultdict(set)
+    for listener in listeners:
+        if not isinstance(listener, dict):
+            raise PanelError("Invalid listener.")
+        listener_id, ingress = identity(listener.get("id")), identity(listener.get("node_id"))
+        if listener_id in used:
+            raise PanelError("Duplicate listener or member ID.", "identity")
+        used.add(listener_id)
+        members = listener.get("members")
+        if not isinstance(members, list) or not 1 <= len(members) <= 128:
+            raise PanelError("Provide 1..128 members per listener.")
+        if selection == "single" and len(members) != 1:
+            raise PanelError("Single-member selection needs one member.")
+        normalized_members = []
+        for member in members:
+            if not isinstance(member, dict):
+                raise PanelError("Invalid member.")
+            member_id = identity(member.get("id"))
+            if member_id in used:
+                raise PanelError("Duplicate listener or member ID.", "identity")
+            used.add(member_id)
+            method = member.get("method")
+            managed = enabled(member.get("managed", method != "direct"))
+            egress = identity(member.get("node_id"))
+            if method not in ("gre", "direct") or (method != "direct" and not managed):
+                raise PanelError("An unmanaged destination needs direct forwarding.")
+            if managed:
+                edges[ingress].add(egress)
+            normalized_members.append({
+                "id": member_id, "method": method, "managed": managed, "node_id": egress,
+                "service_ip": address(member.get("service_ip", "")),
+                "weight": integer(member.get("weight", 1), 1, 1000, "weight"),
+                "priority": integer(member.get("priority", 0), 0, 1000, "priority"),
+                "enabled": enabled(member.get("enabled", True)),
+            })
+        first = normalized_members[0]
+        profile = listener_profile(dict(listener, ip=address(listener.get("ip", ""))), neutral, first["service_ip"])
+        result["listeners"].append({
+            "id": listener_id, "node_id": ingress, "ip": profile["listen_ip"],
+            "ports": profile["ports"], "protocols": profile["protocols"],
+            "exclude_ports": profile["exclude_ports"], "port_map": profile["port_map"],
+            "target_port": profile["target_port"], "members": normalized_members,
+        })
+    if len(used) > 1024:
+        raise PanelError("Use at most 1024 listeners and members per group.")
+    # Remove sinks repeatedly in this bounded graph. Remaining edges form a cycle.
+    remaining = {node: set(targets) for node, targets in edges.items()}
+    while remaining:
+        sinks = {target for targets in remaining.values() for target in targets} - remaining.keys()
+        if not sinks:
+            raise PanelError("The managed forwarding graph has a cycle.", "cycle")
+        remaining = {node: targets - sinks for node, targets in remaining.items() if targets - sinks}
+    return result
+
+
+def managed_nodes(group):
+    nodes = set()
+    if group:
+        for listener in group["listeners"]:
+            nodes.add(listener["node_id"])
+            nodes.update(member["node_id"] for member in listener["members"] if member["managed"])
+    return nodes
+
+
+def local_claims(change, node_id, config, addresses):
+    raw = change.get("group")
+    if raw is None:
+        return []
+    group = normalize_group(raw)
+    if group != raw or group["id"] != change["group_id"]:
+        raise PanelError("The group does not match the planned representation.", "group")
+    if not (managed_nodes(group) | {change["owner"]}).issubset(change["participants"]):
+        raise PanelError("A managed node is missing from the operation.", "participant")
+    settings = dict(DEFAULTS, **config.get("settings", {}))
+    claims = []
+    for listener in group["listeners"]:
+        if listener["node_id"] != node_id:
+            continue
+        if listener["ip"] not in addresses:
+            raise PanelError("The listener address is unavailable on this node.", "listen_ip")
+        profile = listener_profile(listener, settings, listener["members"][0]["service_ip"])
+        incoming = [(listener["ip"], proto, lo, hi) for proto in listener["protocols"]
+                    for lo, hi in ranges_for(profile, settings)]
+        if overlaps(claims, incoming):
+            raise PanelError("Two listeners in this group overlap.", "overlap")
+        claims.extend(incoming)
+    if not group["enabled"]:
+        return []
+    for legacy in config.get("connections", []):
+        if legacy.get("enabled", True):
+            existing = [(legacy["listen_ip"], proto, lo, hi) for proto in legacy["protocols"]
+                        for lo, hi in ranges_for(legacy, settings)]
+            if overlaps(claims, existing):
+                raise PanelError("Listener overlaps legacy route " + legacy["id"] + ".", "overlap")
+    return claims

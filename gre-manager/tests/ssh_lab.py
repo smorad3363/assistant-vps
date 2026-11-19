@@ -6,11 +6,13 @@ import socket
 import subprocess
 import tempfile
 import time
+import uuid
 
 from panel.engine import run, gre_for
 from panel.model import DEFAULTS, PanelError, connection
 from panel.remote import Remote
-from panel.store import Paths
+from panel.store import Paths, topology_node_id
+from panel.v2_config import normalize_group
 
 if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true':
     raise SystemExit('This test is restricted to disposable GitHub Actions runners.')
@@ -34,6 +36,21 @@ with tempfile.TemporaryDirectory(prefix='gremgr-ssh-lab-') as directory:
         foreign=remote.connect({'host':address,'port':port,'username':'root','private_key':(root/'initial').read_text(),'name':'SSH lab'})
         status=remote.call(foreign,{'action':'status'})
         assert address in status['addresses'],status
+        owner, receiver = topology_node_id(paths), foreign["v2_node_id"]
+        group_id = uuid.uuid4().hex
+        group = normalize_group({"id": group_id, "name": "SSH registration lab", "listeners": [{
+            "id": uuid.uuid4().hex, "node_id": receiver, "ip": address, "ports": "5100",
+            "members": [{"id": uuid.uuid4().hex, "node_id": uuid.uuid4().hex,
+                         "method": "direct", "service_ip": "203.0.113.20"}],
+        }]})
+        change = {"id": uuid.uuid4().hex, "group_id": group_id, "owner": owner, "expected_revision": 0,
+                  "participants": [owner, receiver], "joining": [receiver], "group": group}
+        assert remote.v2_call(foreign, "prepare", change)["phase"] == "prepared"
+        assert remote.v2_call(foreign, "commit", change)["revision"] == 1
+        assert remote.v2_call(foreign, "status", change)["phase"] == "committed"
+        removal = dict(change, id=uuid.uuid4().hex, expected_revision=1, group=None, joining=[], departing=[receiver])
+        assert remote.v2_call(foreign, "prepare", removal)["phase"] == "prepared"
+        assert remote.v2_call(foreign, "commit", removal)["revision"] == 2
         marker=root/'must-not-exist'
         opts=remote._options(foreign,paths.ssh/foreign['id'])
         forced=run(*opts,'touch '+str(marker),input=json.dumps({'action':'status'}),timeout=20)

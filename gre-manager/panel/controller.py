@@ -19,12 +19,15 @@ import time
 import uuid
 
 from . import __version__
-from .agent import read_peers
+from .agent import read_peers, v2_participant
 from .engine import Engine, discovered_ssh_ports, gre_for, run
-from .model import PanelError, connection, resolve, settings_update, validate_conflicts
+from .model import PanelError, connection, ranges_for, resolve, settings_update, validate_conflicts
 from .remote import Remote, server_metadata
 from .store import Store, atomic_json, check_password
 from .topology import legacy_topology
+from .transactions import Coordinator, fingerprint, identity, overlaps
+from .v2_access import AUTH_ROUTES, Access
+from .v2_config import managed_nodes, normalize_group
 
 
 class Controller:
@@ -40,6 +43,11 @@ class Controller:
         self.live_counters, self.live_epoch, self.last_persist = {}, None, 0
         self.pending = self.paths.etc / "pending.json"
         self.stats_cache, self.stats_cached_at = None, 0
+        self.v2_agent = v2_participant(self.paths, self.engine)
+        self.v2_access = Access(self.paths, self.v2_agent.node_id)
+        self.v2_coordinator = Coordinator(self.paths, self.dispatch_v2)
+        self.v2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="topology-job")
+        self.v2_future, self.last_v2_retry = None, 0
 
     def legacy_connections(self, cfg):
         seen = {x["id"] for x in cfg["connections"]}
@@ -76,7 +84,8 @@ class Controller:
 
     def topology(self, config=None):
         addresses, peers = {}, []
-        if config is None:
+        live = config is None
+        if live:
             config = self.store.config()
             config["connections"].extend(self.legacy_connections(config))
             peers = read_peers(self.paths)
@@ -85,7 +94,10 @@ class Controller:
         try:
             server_ids = {server_metadata(server)["id"] for server in config["servers"]}
             ready = {identity for identity in server_ids if (self.paths.ssh / identity).is_file()}
-            return legacy_topology(config, peers, self.store.topology_node_id(), addresses, ready)
+            topology = legacy_topology(config, peers, self.v2_agent.node_id, addresses, ready)
+            if live:
+                topology["paired_nodes"] = self.v2_access.paired()
+            return topology
         except PanelError:
             raise
         except (KeyError, TypeError, ValueError) as error:
@@ -95,6 +107,100 @@ class Controller:
         result = copy.deepcopy(cfg)
         result["connections"] += read_peers(self.paths)
         return result
+
+    def participant_request(self, owner, action, change):
+        with open(self.paths.etc / "network.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return self.v2_agent.request(owner, action, change)
+
+    def dispatch_v2(self, node_id, action, change):
+        if node_id == self.v2_agent.node_id:
+            return self.participant_request(node_id, action, change)
+        server = next((s for s in self.store.config()["servers"] if s.get("v2_node_id") == node_id), None)
+        if server:
+            return self.remote.v2_call(server, action, change)
+        return self.v2_access.call(node_id, action, change)
+
+    def v2_change(self, payload):
+        owner = self.v2_agent.node_id
+        operation_id = identity(payload.get("id"))
+        group_id = identity(payload.get("group_id"), group=True)
+        raw = payload.get("group")
+        group = normalize_group(raw) if raw is not None else None
+        if group and group["id"] != group_id:
+            raise PanelError("The group ID does not match the operation.", "identity")
+        existing = self.v2_coordinator.journal.read()["operations"].get(operation_id)
+        if existing:
+            change = existing["change"]
+            if (change["group_id"], change["expected_revision"], change["group"]) != (
+                    group_id, payload.get("expected_revision"), group):
+                raise PanelError("Operation ID is already in use.", "idempotency")
+            return change
+        stored = self.v2_agent.journal.read()["groups"].get(group_id, {})
+        if stored and stored["owner"] != owner:
+            raise PanelError("This group belongs to another owner.", "owner")
+        before = managed_nodes(stored.get("group"))
+        after = managed_nodes(group)
+        participants = sorted(before | after | {owner})
+        return {"id": operation_id, "group_id": group_id, "owner": owner,
+                "expected_revision": payload.get("expected_revision"), "participants": participants,
+                "joining": sorted(after - before - {owner}), "departing": sorted(before - after - {owner}),
+                "group": group}
+
+    def v2_group_state(self):
+        return [
+            {"id": key, "owner": record["owner"], "revision": record["revision"], "group": record["group"]}
+            for key, record in sorted(self.v2_agent.journal.read()["groups"].items()) if record["active"]
+        ]
+
+    def v2_uses_node(self, node_id):
+        if not node_id:
+            return False
+        groups = self.v2_group_state()
+        pending = self.v2_coordinator.journal.read()["operations"].values()
+        return (
+            any(node_id in (managed_nodes(item["group"]) | {item["owner"]}) for item in groups)
+            or any(node_id in item["change"]["participants"] and item["phase"] not in ("committed", "aborted")
+                   for item in pending)
+        )
+
+    def schedule_v2(self):
+        with self.lock:
+            if self.v2_future is not None and not self.v2_future.done():
+                return
+            operations = self.v2_coordinator.pending()
+            if operations:
+                self.v2_future = self.v2_executor.submit(self.run_v2, operations)
+
+    def run_v2(self, operations):
+        for operation in operations:
+            try:
+                self.v2_coordinator.advance(operation)
+            except (OSError, ValueError):
+                self.store.event("error", "A v2 journal could not be advanced. Its decision is retained.")
+
+    def check_v2_reservations(self, config):
+        state = self.v2_agent.journal.read()
+        reservations = [
+            (identity, group["claims"]) for identity, group in state["groups"].items()
+        ] + [
+            (op["group_id"], op["claims"]) for op in state["operations"].values() if op["phase"] == "prepared"
+        ]
+        if not reservations:
+            return
+        settings = config["settings"]
+        protected = {22, settings["port"], *settings["ssh_ports"], *settings["reserved_ports"]}
+        for group_id, reserved in reservations:
+            if any(lo <= port <= hi for _, _, lo, hi in reserved for port in protected):
+                raise PanelError("A protected port overlaps v2 group " + group_id + ".", "in_use")
+        for item in config["connections"]:
+            if not item.get("enabled", True):
+                continue
+            claims = [(item["listen_ip"], proto, lo, hi) for proto in item["protocols"]
+                      for lo, hi in ranges_for(item, config["settings"])]
+            for group_id, reserved in reservations:
+                if overlaps(claims, reserved):
+                    raise PanelError("Legacy route overlaps v2 group " + group_id + ".", "overlap")
 
     def collect(self, persist=True):
         counters, epoch = self.engine.counters()
@@ -182,11 +288,14 @@ class Controller:
         def perform():
             self.store.job(identity, "running", 5, "Checking configuration")
             try:
-                with self.lock, open(self.paths.etc / "network.lock", "a") as lock:
-                    fcntl.flock(lock, fcntl.LOCK_EX)
-                    if self.pending.exists() and operation not in ("server.connect", "backup.create", "connection.probe"):
-                        raise PanelError("A previous change is being recovered. Wait for recovery to finish.", "recovering")
-                    result = self.operation(operation, payload, lambda p, m: self.store.job(identity, "running", p, m))
+                if operation == "v2/plan":
+                    result = self.v2_coordinator.plan(payload)
+                else:
+                    with self.lock, open(self.paths.etc / "network.lock", "a") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX)
+                        if self.pending.exists() and operation not in ("server.connect", "backup.create", "connection.probe"):
+                            raise PanelError("A previous change is being recovered. Wait for recovery to finish.", "recovering")
+                        result = self.operation(operation, payload, lambda p, m: self.store.job(identity, "running", p, m))
                 self.store.job(identity, "done", 100, "Completed", result)
             except Exception as error:
                 message = str(error)[:800]
@@ -194,7 +303,8 @@ class Controller:
                 self.store.job(identity, "failed", 100, message,
                                {"code": getattr(error, "code", "system"), "field": getattr(error, "field", None)})
 
-        self.executor.submit(perform)
+        executor = self.v2_executor if operation == "v2/plan" else self.executor
+        executor.submit(perform)
         return {"job": identity}
 
     @staticmethod
@@ -231,6 +341,7 @@ class Controller:
                     c["mtu"] = updated["settings"]["mtu"]
                     measurements.add(c["id"])
         validate_conflicts(updated["connections"], updated["settings"])
+        self.check_v2_reservations(updated)
         self.allocate_gre(updated, previous)
         self.engine.preflight(self.combined(updated))
         self.collect()
@@ -330,7 +441,7 @@ class Controller:
             server = self.remote.connect(credentials)
             if previous:
                 temporary = server["id"]
-                for suffix in ("", ".pub", ".known"):
+                for suffix in ("", ".pub", ".known", ".v2"):
                     source = self.paths.ssh / (temporary + suffix)
                     if source.exists():
                         os.replace(source, self.paths.ssh / (identity + suffix))
@@ -357,7 +468,7 @@ class Controller:
         if operation == "server.delete":
             identity = str(payload.get("id", ""))
             if any(x.get("server_id") == identity for x in cfg["connections"]):
-                raise PanelError("This server is still used by a GRE connection.", "in_use")
+                raise PanelError("This server is still used by a connection or operation.", "in_use")
             return self.cleanup_server(identity)
         if operation in ("connection.save", "connection.delete", "connection.toggle", "connection.probe"):
             identity = payload.get("id")
@@ -380,7 +491,8 @@ class Controller:
             result = {"id": item["id"] if operation == "connection.save" else identity}
             if operation == "connection.delete" and previous["kind"] == "gre" and previous.get("server_id"):
                 server_id = previous["server_id"]
-                if not any(c.get("server_id") == server_id for c in cfg["connections"]):
+                node = next((s.get("v2_node_id") for s in cfg["servers"] if s["id"] == server_id), None)
+                if not self.v2_uses_node(node) and not any(c.get("server_id") == server_id for c in cfg["connections"]):
                     progress(92, "Cleaning unused foreign helper")
                     result["cleanup"] = self.cleanup_server(server_id)
             return result
@@ -414,6 +526,10 @@ class Controller:
             incoming["settings"]["username"] = cfg["settings"]["username"]
             incoming["settings"]["ssh_ports"] = sorted(set(incoming["settings"]["ssh_ports"] + cfg["settings"]["ssh_ports"]))
             incoming["servers"] = [server_metadata(s) for s in incoming["servers"]]
+            incoming_servers = {server["id"]: server for server in incoming["servers"]}
+            for server in cfg["servers"]:
+                if self.v2_uses_node(server.get("v2_node_id")) and incoming_servers.get(server["id"]) != server_metadata(server):
+                    raise PanelError("The backup would change a server used by a v2 group or operation.", "in_use")
             if len(incoming["servers"]) > 128 or len({s["id"] for s in incoming["servers"]}) != len(incoming["servers"]):
                 raise PanelError("Invalid foreign server list in backup.")
             normalized = []
@@ -480,6 +596,8 @@ class Controller:
         server = next((s for s in cfg["servers"] if s["id"] == identity), None)
         if not server or not re.fullmatch(r"[0-9a-f]{10}", identity):
             raise PanelError("Foreign server not found.", "not_found")
+        if self.v2_uses_node(server.get("v2_node_id")):
+            raise PanelError("This server is still used by a v2 group or operation.", "in_use")
         public = self.paths.ssh / (identity + ".pub")
         try:
             if not public.is_file():
@@ -492,7 +610,7 @@ class Controller:
             raise PanelError("The tunnel was removed, but foreign cleanup is pending. Reconnect an older helper or retry from Settings.", "cleanup_pending") from error
         cfg["servers"] = [s for s in cfg["servers"] if s["id"] != identity]
         self.store.save(cfg)
-        for suffix in ("", ".pub", ".known"):
+        for suffix in ("", ".pub", ".known", ".v2"):
             (self.paths.ssh / (identity + suffix)).unlink(missing_ok=True)
         self.store.event("success", "Unused foreign management connection removed safely.")
         return result
@@ -603,7 +721,13 @@ class Controller:
     def request(self, route, payload, token=None, csrf=None, peer="local"):
         if route == "login":
             return self.store.login(payload.get("username", ""), payload.get("password", ""), peer)
-        session = self.store.session(token, None if route in ("state", "live", "stats", "job", "backup.download", "v2/topology") else csrf or "")
+        if route in AUTH_ROUTES:
+            if route == "v2/agent.exchange":
+                return self.v2_access.exchange(payload)
+            owner = self.v2_access.trusted_owner(payload, "https")
+            return self.participant_request(owner, payload.get("action"), payload.get("change"))
+        reads = ("state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers")
+        session = self.store.session(token, None if route in reads else csrf or "")
         if route == "auth.check":
             return {}
         if route == "state":
@@ -611,6 +735,34 @@ class Controller:
         if route == "v2/topology":
             with self.lock:
                 return self.topology()
+        if route == "v2/groups":
+            return self.v2_group_state()
+        if route == "v2/peers":
+            return self.v2_access.peers()
+        if route == "v2/jobs":
+            job_id = payload.get("id")
+            if isinstance(job_id, str) and re.fullmatch(r"[0-9a-f]{16}", job_id):
+                return self.store.job(job_id)
+            return self.v2_coordinator.job(job_id)
+        if route == "v2/pairing.invite":
+            settings = self.store.config()["settings"]
+            if not settings["tls"]:
+                raise PanelError("HTTPS is required to pair a panel.", "certificate")
+            return self.v2_access.invite(payload.get("host") or settings["hostname"], settings["port"], payload.get("owner"))
+        if route == "v2/pairing.connect":
+            return self.v2_access.pair(payload)
+        if route == "v2/pairing.revoke":
+            self.v2_access.revoke(payload.get("node_id"))
+            return {}
+        if route in ("v2/plan", "v2/apply"):
+            change = self.v2_change(payload)
+            if route == "v2/plan":
+                return self.submit(route, change)
+            if payload.get("digest") != fingerprint(change):
+                raise PanelError("The group changed after planning. Request a new plan.", "plan_changed")
+            job = self.v2_coordinator.enqueue(change)
+            self.schedule_v2()
+            return job
         if route == "live":
             with self.lock:
                 return {"sampled_at": self.last_sample, "connections": [
@@ -673,6 +825,9 @@ class Controller:
                     self.schedule_web_restart()
                     self.store.event("warning", "Panel port change rolled back because access was not confirmed.")
             cfg = self.store.config()
+            if now - self.last_v2_retry >= 10:
+                self.last_v2_retry = now
+                self.schedule_v2()
             if now - self.last_probe > 60:
                 self.last_probe = now
                 for c in cfg["connections"]:

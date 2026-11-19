@@ -74,6 +74,17 @@ def check_password(password, stored):
         return False
 
 
+def topology_node_id(paths):
+    # The peer-only agent can share the same identity before the panel exists.
+    with contextlib.closing(sqlite3.connect(paths.db, timeout=15)) as db, db:
+        db.execute("CREATE TABLE IF NOT EXISTS secrets(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        key = "topology.node_id"
+        db.execute("INSERT OR IGNORE INTO secrets VALUES(?,?)", (key, uuid.uuid4().hex))
+        node_id = db.execute("SELECT value FROM secrets WHERE key=?", (key,)).fetchone()[0]
+    os.chmod(paths.db, 0o600)
+    return node_id
+
+
 class Store:
     def __init__(self, paths=None):
         self.paths = paths or Paths()
@@ -113,10 +124,7 @@ class Store:
         return data
 
     def topology_node_id(self):
-        with self.database() as db:
-            key = "topology.node_id"
-            db.execute("INSERT OR IGNORE INTO secrets VALUES(?,?)", (key, uuid.uuid4().hex))
-            return db.execute("SELECT value FROM secrets WHERE key=?", (key,)).fetchone()[0]
+        return topology_node_id(self.paths)
 
     def interrupt_jobs(self):
         with self.database() as db:

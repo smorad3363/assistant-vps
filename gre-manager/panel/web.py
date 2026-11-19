@@ -11,10 +11,13 @@ import socket
 import ssl
 from urllib.parse import parse_qs, urlsplit
 
+from .v2_access import AUTH_ROUTES
+
 MAX_REQUEST = 48 * 1024 * 1024
 STATIC = Path(__file__).parent / "static"
-GET_ROUTES = {"state", "live", "stats", "job", "backup.download", "v2/topology"}
-POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "v2/migration.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update"}
+GET_ROUTES = {"state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers"}
+POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "v2/migration.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update",
+               "v2/plan", "v2/apply", "v2/pairing.invite", "v2/pairing.connect", "v2/pairing.revoke"} | AUTH_ROUTES
 
 
 class RPC:
@@ -43,6 +46,12 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         self.connection.settimeout(30)
+
+    def handle(self):
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def reply(self, status, content, content_type="application/json; charset=utf-8", extra=None):
         if isinstance(content, (dict, list)):
@@ -101,7 +110,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json" or self.headers.get("Transfer-Encoding"):
             self.close_connection = True
             return self.reply(400, {"error": "JSON required", "code": "invalid"})
-        if route != "login":
+        if route in AUTH_ROUTES and not self.server.secure:
+            self.close_connection = True
+            return self.reply(403, {"error": "Agent operations require HTTPS.", "code": "auth"})
+        if route != "login" and route not in AUTH_ROUTES:
             try:
                 check = self.server.backend.request("auth.check", {}, self.token(), self.headers.get("X-Gremgr-CSRF"), self.client_address[0])
             except (OSError, ValueError):
