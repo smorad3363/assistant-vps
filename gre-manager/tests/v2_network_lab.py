@@ -81,7 +81,7 @@ def hold(address):
 
 def aggregate_udp(address):
     with ExitStack() as stack:
-        sockets = [stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) for _ in range(24)]
+        sockets = [stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) for _ in range(96)]
         for sock in sockets:
             sock.connect((address, 5100))
             sock.setblocking(False)

@@ -85,9 +85,15 @@ ready() {
 }
 
 install_side() {
-  local side=$1 port=$2 mac address
+  local side=$1 port=$2 mac address attempt status
   read -r mac address <"$lab/$side/link"
-  guest "$port" sudo cloud-init status --wait
+  for ((attempt=1; attempt<=6; attempt++)); do
+    status=0
+    guest "$port" sudo cloud-init status --wait || status=$?
+    if ((status != 255)); then break; fi
+    sleep 3
+  done
+  ((status == 0))
   tar -C "$repo" -cf - gre-manager | guest "$port" tar -xf -
   guest "$port" sudo bash -s -- "$mac" "$address" <<'GUEST'
 set -euo pipefail

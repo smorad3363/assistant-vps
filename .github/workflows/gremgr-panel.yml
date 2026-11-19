@@ -73,6 +73,7 @@ jobs:
           trap 'kill $!' EXIT
           for i in {1..20}; do curl -fsS http://127.0.0.1:8877/ >/dev/null && break || sleep 1; done
           python3 tests/browser_test.py
+          python3 tests/v2_browser_test.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
