@@ -84,6 +84,7 @@ def overlaps(left, right):
 class Participant:
     def __init__(self, paths, node_id, claims, clock=time.time, materialize=None):
         self.journal = Journal(paths.var / "v2-participant.json")
+        self.network_lock = paths.etc / "network.lock"
         self.node_id = node_id
         self.claims = claims
         self.clock = clock
@@ -111,7 +112,13 @@ class Participant:
             if operation and operation["digest"] != digest:
                 raise PanelError("Operation ID is already in use.", "idempotency")
             if action == "status":
-                return self.receipt(change, digest, operation)
+                receipt = self.receipt(change, digest, operation)
+                record = groups.get(change["group_id"], {})
+                if receipt["phase"] == "committed" and record.get("revision") == receipt["revision"]:
+                    prefix = change["group_id"] + ":"
+                    receipt["health"] = {key[len(prefix):]: sample for key, sample in state.get("health", {}).items()
+                                         if key.startswith(prefix) and sample.get("revision") == record["revision"]}
+                return receipt
             if action not in ("plan", "prepare", "commit", "abort"):
                 raise PanelError("Unknown transaction operation.")
             if action == "abort":

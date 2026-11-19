@@ -1,7 +1,7 @@
 """Validation and local listener claims for the v2 topology."""
 from collections import defaultdict
 
-from .model import DEFAULTS, PanelError, address, connection, integer, ranges_for
+from .model import DEFAULTS, PanelError, address, connection, integer, port_ranges, ranges_for
 from .transactions import identity, overlaps
 from .v2_forwarding import segments
 
@@ -91,6 +91,20 @@ def normalize_group(raw):
             "exclude_ports": profile["exclude_ports"], "port_map": profile["port_map"],
             "target_port": profile["target_port"], "members": normalized_members,
         })
+        if listener.get("watch_link") is not None:
+            result["listeners"][-1]["watch_link"] = enabled(listener["watch_link"])
+        probe = listener.get("probe")
+        if probe is not None:
+            if not isinstance(probe, dict) or probe.get("protocol") not in profile["protocols"]:
+                raise PanelError("Choose a protocol the listener forwards.", "probe", "protocol")
+            port = integer(probe.get("port"), 1, 65535, "port")
+            if not any(lo <= port <= hi for lo, hi in port_ranges(profile["ports"])) or port in profile["exclude_ports"]:
+                raise PanelError("The health probe needs a forwarded listening port.", "probe", "port")
+            request, response = probe.get("request"), probe.get("response")
+            if not all(isinstance(value, str) and 0 < len(value.encode()) <= 512 for value in (request, response)):
+                raise PanelError("Set bounded request and expected response text for the service.", "probe")
+            result["listeners"][-1]["probe"] = {"protocol": probe["protocol"], "port": port,
+                                                  "request": request, "response": response}
     if len(used) > 1024:
         raise PanelError("Use at most 1024 listeners and members per group.")
     # Remove sinks repeatedly in this bounded graph. Remaining edges form a cycle.

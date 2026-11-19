@@ -421,6 +421,15 @@ function listenerForm(listener = {}) {
     <label>استثناها<input data-value="excluded" dir="ltr" value="${esc((listener.exclude_ports || []).join(','))}"></label>
     <label>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
       <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label></div>
+    <details ${listener.probe ? 'open' : ''}><summary>سنجش سلامت سرویس</summary><div class="form-grid">
+      <label><input data-value="watch-link" type="checkbox" ${(listener.watch_link ?? !listener.id) ? 'checked' : ''}> پذیرش بر اساس سلامت لینک GRE</label>
+      <label>روش سنجش<select data-value="probe-protocol"><option value="">تنظیم نشده</option>
+        <option value="tcp" ${listener.probe?.protocol === 'tcp' ? 'selected' : ''}>TCP</option>
+        <option value="udp" ${listener.probe?.protocol === 'udp' ? 'selected' : ''}>UDP</option></select></label>
+      <label>پورت ورودی سنجش<input data-value="probe-port" type="number" min="1" max="65535" value="${esc(listener.probe?.port)}"></label>
+      <label>متن درخواست<textarea data-value="probe-request" dir="ltr" maxlength="512">${esc(listener.probe?.request)}</textarea></label>
+      <label>پاسخ موردانتظار<textarea data-value="probe-response" dir="ltr" maxlength="512">${esc(listener.probe?.response)}</textarea></label>
+    </div></details>
     <div data-v2-members></div><div class="button-row"><button type="button" class="button secondary" data-v2-edit="add">افزودن مقصد</button>
     <button type="button" class="button secondary" data-v2-edit="remove-listener">حذف ورودی</button></div>`;
   for (const member of listener.members || [{}]) memberForm($('[data-v2-members]', section), member);
@@ -448,8 +457,15 @@ async function refreshGroups() {
   v2Nodes = [{id:v2Local,name:'این پنل'}, ...topology.paired_nodes.map(node => ({id:node.id,name:node.hostname})),
     ...state.servers.filter(node => node.v2_node_id && node.key_ready).map(node => ({id:node.v2_node_id,name:node.name}))];
   v2Groups = groups;
+  const status = value => value === true ? 'سالم' : value === false ? 'قطع' : 'نامشخص';
+  const evidence = record => record.group.listeners.flatMap(listener => listener.members.filter(member => member.enabled).map(member => {
+    const sample = record.health?.[member.id] || {};
+    const summary = `مدیریت ${status(sample.management)} · لینک ${status(sample.link)} · سرویس ${status(sample.service)} · ICMP ${status(sample.icmp)}`;
+    const checked = sample.checked ? ' · ' + new Date(sample.checked * 1000).toLocaleTimeString('fa-IR') : '';
+    return `<small><bdi>${esc(member.service_ip)}</bdi> ${esc(summary + checked)}</small>`;
+  })).join('');
   $('#v2-group-list').innerHTML = groups.map(record => `<div class="server-item"><div class="server-info"><strong>${esc(record.group.name)}</strong>
-    <small>${fa.format(record.group.listeners.length)} ورودی</small></div>${record.owner === v2Local ?
+    <small>${fa.format(record.group.listeners.length)} ورودی</small>${evidence(record)}</div>${record.owner === v2Local ?
     `<button class="button secondary" type="button" data-group-id="${esc(record.id)}">ویرایش</button>` : ''}</div>`).join('');
   openGroup();
 }
@@ -475,6 +491,9 @@ function groupRequest() {
     id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
     ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
     protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')],
+    watch_link:$('[data-value="watch-link"]', row).checked,
+    ...(value(row,'probe-protocol') && {probe:{protocol:value(row,'probe-protocol'), port:Number(value(row,'probe-port')),
+      request:$('[data-value="probe-request"]', row).value, response:$('[data-value="probe-response"]', row).value}}),
     members:$$('[data-v2-member]', row).map(member => ({
       id:member.dataset.v2Member, node_id:value(member,'node') || member.dataset.unmanaged, managed:!!value(member,'node'),
       method:value(member,'method'), service_ip:value(member,'service'), outer_ip:value(member,'outer'),
