@@ -33,7 +33,7 @@ jobs:
           python3 -m unittest discover -s gre-manager -p 'test_mtu.py' -v
           python3 -m unittest discover -s gre-manager -p 'test_docker_wireguard.py' -v
       - name: Install network test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod openssh-server sshpass conntrack strongswan xl2tpd ppp
+        run: bash gre-manager/tests/install_ci_deps.sh iptables iproute2 iputils-ping kmod openssh-server sshpass conntrack strongswan xl2tpd ppp
       - name: Real kernel TCP and UDP in isolated namespaces
         run: |
           sudo mkdir -p /run/netns
@@ -82,8 +82,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual machine dependencies
-        run: |
-          sudo apt-get update -qq -o Acquire::Retries=3
-          sudo apt-get install -y -qq -o Acquire::Retries=3 qemu-system-x86 qemu-utils cloud-image-utils
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils
       - name: Genuine Debian boot and saved flow acceptance
         run: bash gre-manager/tests/qemu_reboot_lab.sh
