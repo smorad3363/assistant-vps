@@ -369,6 +369,27 @@ def lab(root):
         command("ip", "-n", "gm-ir", "link", "show", "gm-other-ipip", stdout=subprocess.DEVNULL)
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
 
+        l2 = listener("gm-ir", [first_target], "gretap", [1])
+        l2["members"][0]["gretap"] = {"key": 224411}
+        command("ip", "-n", "gm-ir", "link", "add", "gm-foreign-tap", "type", "gretap", "local",
+                nodes["gm-ir"][0], "remote", nodes[first_target][0], "key", "224412")
+        compiled = apply([l2])
+        link = gre_link(owner, compiled, compiled["members"][0])
+        for proto in ("tcp", "udp"):
+            assert exchanges("gm-ir", 6, proto) == {"0": 6}
+        for host in ("gm-ir", first_target):
+            info = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", link["tunnel"], capture_output=True).stdout)[0]
+            assert info["link_type"] == "ether" and info["linkinfo"]["info_kind"] == "gretap", info
+            neighbors = json.loads(command("ip", "-n", host, "-j", "neigh", "show", "dev", link["tunnel"],
+                                           capture_output=True).stdout)
+            assert any(item.get("lladdr") for item in neighbors), neighbors
+        apply([weighted])
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
+        command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-tap", stdout=subprocess.DEVNULL)
+        print("v2 GRETAP two-sided Ethernet learned the peer MAC and carried isolated TCP/UDP without touching the foreign device.", flush=True)
+
+
         first = listener("gm-ir", [first_target], "vxlan", [1])
         second = listener("gm-ir", [first_target], "vxlan", [1])
         second.update(ports="5200", port_map={"5200": 6000})

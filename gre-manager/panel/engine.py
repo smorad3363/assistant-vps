@@ -15,7 +15,7 @@ import uuid
 
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
-from .v2_drivers import driver_for, local_wireguard_key
+from .v2_drivers import driver_for, gre_key, local_wireguard_key
 from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology, require_ssh_protection
 from .v2_resources import admission_pressure, pressure_file
 
@@ -418,7 +418,7 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs, vxlan, wg_links = {}, [], []
+        unkeyed_pairs, keyed_pairs, vxlan, wg_links = {}, {}, [], []
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
@@ -428,6 +428,10 @@ class Engine:
                 vxlan.append(link)
             if link.get("method") == "wireguard":
                 wg_links.append(link)
+            if link.get("method") == "gretap":
+                key = link["outer_local"], link["outer_peer"], link["key"]
+                if keyed_pairs.setdefault(key, link)["tunnel"] != link["tunnel"]:
+                    raise PanelError("Choose a different GRETAP key for this endpoint pair.", "device_conflict", "key")
         if unkeyed_pairs:
             inspected = self.run("ip", "-j", "-d", "link", "show", "type", "ipip", check=False)
             if inspected.returncode == 0:
@@ -436,6 +440,13 @@ class Engine:
                     link = unkeyed_pairs.get((data.get("local"), data.get("remote")))
                     if link and (row.get("ifname") != link["tunnel"] or not driver_for(link).owns(link, row)):
                         raise PanelError("An existing IPIP interface uses the requested outer addresses.", "device_conflict")
+        if keyed_pairs:
+            observed = self.run("ip", "-j", "-d", "link", "show", "type", "gretap").stdout
+            for row in json.loads(observed):
+                data = row.get("linkinfo", {}).get("info_data", {})
+                link = keyed_pairs.get((data.get("local"), data.get("remote"), gre_key(data.get("ikey", 0))))
+                if link and (row.get("ifname") != link["tunnel"] or not driver_for(link).owns(link, row)):
+                    raise PanelError("An existing GRETAP interface uses that endpoint pair and key.", "device_conflict", "key")
         self.check_vxlan(vxlan, interfaces)
         self.check_wireguard(wg_links, interfaces)
         if {x["listen_port"] for x in vxlan} & {x["listen_port"] for x in wg_links}:

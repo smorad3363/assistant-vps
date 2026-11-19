@@ -432,7 +432,8 @@ function memberForm(parent, member = {}) {
     <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option>
       <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option>
       <option value="wireguard" ${member.method === 'wireguard' ? 'selected' : ''}>WireGuard</option>
-      <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option></select></label>
+      <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option>
+      <option value="gretap" ${member.method === 'gretap' ? 'selected' : ''}>GRETAP</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
     <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
     <label>MTU تونل<input data-value="mtu" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
@@ -452,6 +453,8 @@ function memberForm(parent, member = {}) {
       ${wgFields('ingress','ورودی')}${wgFields('destination','مقصد')}
       <label>Keepalive (ثانیه)<input data-value="keepalive" type="number" min="0" max="65535" value="${esc(member.wireguard?.keepalive ?? 25)}"></label>
       </div><small>کلید عمومی هر نود را از <code>sudo gremgr wireguard-key</code> بگیرید.</small></details>
+    <details ${member.method === 'gretap' ? 'open' : ''}><summary>تنظیمات GRETAP</summary><label>کلید GRETAP (اختیاری)<input
+      data-value="gretap-key" type="number" min="1" max="4294967295" dir="ltr" value="${esc(member.gretap?.key)}"></label></details>
     <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
   parent.append(row);
 }
@@ -576,6 +579,7 @@ function groupRequest() {
       ...(value(member,'method') === 'ipip' && {ttl:Number(value(member,'ttl'))}),
       ...(value(member,'method') === 'vxlan' && {vxlan:{vni:Number(value(member,'vxlan-vni')), port:Number(value(member,'vxlan-port'))}}),
       ...(value(member,'method') === 'wireguard' && {wireguard:wireguard(member)}),
+      ...(value(member,'method') === 'gretap' && {gretap:value(member,'gretap-key') ? {key:Number(value(member,'gretap-key'))} : {}}),
       weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
       limits:readRateFields(member),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',

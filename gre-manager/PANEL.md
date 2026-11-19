@@ -203,6 +203,10 @@ python3 -m panel.demo --seed
 # http://127.0.0.1:8877 ; admin / Demo-Panel-2026!
 ```
 
+GRETAP members use a separate Ethernet interface to carry IPv4 between the
+two configured outer addresses. The panel generates matching keys on both
+ends unless a key is supplied. The link stays separate from the WAN bridge.
+
 For a VXLAN member, select the outer IPv4 address at each end, set the VNI and
 choose a shared UDP destination port (4789 by default). Separate VNIs can share
 a GRE Manager UDP socket. Each device carries IPv4 packets over its own

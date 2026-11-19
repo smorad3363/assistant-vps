@@ -79,9 +79,15 @@ jobs:
   reboot-debian:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [gre, gretap]
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual machine dependencies
         run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils
       - name: Genuine Debian boot and saved flow acceptance
+        env:
+          GREMGR_REBOOT_METHOD: ${{ matrix.transport }}
         run: bash gre-manager/tests/qemu_reboot_lab.sh

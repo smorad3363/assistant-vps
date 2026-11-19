@@ -136,6 +136,12 @@ def normalize_group(raw):
                                                    "port": integer(parameters.get("port", 4789), 1, 65535, "port")}
             if method == "wireguard":
                 normalized_members[-1]["wireguard"] = wireguard_settings(member.get("wireguard"))
+            if method == "gretap":
+                settings = member.get("gretap", {})
+                if not isinstance(settings, dict) or set(settings) - {"key"}:
+                    raise PanelError("Configure the optional GRETAP key.", field="gretap")
+                normalized_members[-1]["gretap"] = ({"key": integer(settings["key"], 1, 4294967295, "key")}
+                                                       if "key" in settings else {})
         first = normalized_members[0]
         profile = listener_profile(dict(listener, ip=listen_ip), neutral, first["service_ip"])
         result["listeners"].append({
