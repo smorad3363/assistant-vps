@@ -18,6 +18,22 @@ from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_l2tpv2_rejects_a_connected_foreign_udp_binding(self):
+        transport = driver_for({"method": "l2tpv2"})
+        link = {"tunnel": "p2-b0b000000001", "listen_port": 37401, "credential": "lab"}
+
+        def run(*args):
+            if args[:2] == ("ss", "-H"):
+                self.assertIn("-uanp", args)
+                output = 'ESTAB 0 0 192.0.2.10:37401 203.0.113.20:9009 users:(("foreign",pid=42,fd=5))'
+            else:
+                output = '[]'
+            return subprocess.CompletedProcess(args, 0, output, "")
+
+        with patch.object(transport, "available", return_value=True), patch.object(transport, "credential"), patch.object(transport, "status", return_value={}):
+            with self.assertRaisesRegex(PanelError, "different UDP socket"):
+                transport.check([link], {}, None, run)
+
     def test_l2tpv2_uses_distinct_roles_and_scopes_public_and_inner_traffic(self):
         settings = {"lac": "destination", "ingress": {"port": 37401, "credential": "in-lab"},
                     "destination": {"port": 37402, "credential": "out-lab"}}

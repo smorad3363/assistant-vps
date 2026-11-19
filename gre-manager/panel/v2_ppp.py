@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import stat
+import time
 
 from .model import PanelError
 from .store import atomic_json
@@ -56,11 +57,24 @@ class L2TPv2:
             raise PanelError("A different systemd service uses the PPP link unit name.", "device_conflict", "l2tpv2")
         return properties
 
+    @staticmethod
+    def sockets(run):
+        return [line.split(maxsplit=5) for line in run("ss", "-H", "-uanp").stdout.splitlines()]
+
+    @staticmethod
+    def socket_owned(fields, pid):
+        return pid.isdecimal() and int(pid) > 0 and len(fields) == 6 and f"pid={pid}," in fields[5]
+
+    def listening(self, link, status, run):
+        endpoint = f"{link['outer_local']}:{link['listen_port']}"
+        return any(len(row) >= 4 and row[3] == endpoint and self.socket_owned(row, status.get("MainPID", "0"))
+                   for row in self.sockets(run))
+
     def check(self, links, interfaces, paths, run):
         if not self.available(run):
             raise PanelError("Install xl2tpd and ppp and enable the Linux PPP kernel module on both hosts.", "method", "l2tpv2")
         ports = {}
-        sockets = run("ss", "-H", "-lunp").stdout.splitlines()
+        sockets = self.sockets(run)
         routes = json.loads(run("ip", "-j", "-4", "route", "show", "table", "all").stdout)
         for link in links:
             self.credential(paths, link["credential"])
@@ -68,10 +82,9 @@ class L2TPv2:
                 raise PanelError("Use a dedicated UDP port for each L2TPv2 link.", "device_conflict", "port")
             status = self.status(link, run)
             pid = status.get("MainPID", "0")
-            for line in sockets:
-                fields = line.split()
+            for fields in sockets:
                 endpoint = fields[3].rsplit(":", 1)[-1] if len(fields) > 3 else ""
-                if endpoint == str(link["listen_port"]) and f"pid={pid}," not in line:
+                if endpoint == str(link["listen_port"]) and not self.socket_owned(fields, pid):
                     raise PanelError("A different UDP socket uses the L2TPv2 port.", "device_conflict", "port")
             if not status and run("ip", "link", "show", "dev", link["tunnel"], check=False).returncode == 0:
                 raise PanelError("A different interface uses the PPP link name.", "device_conflict", "l2tpv2")
@@ -89,7 +102,7 @@ class L2TPv2:
         status = self.status(link, run)
         marker = directory / "profile.json"
         if status and status.get("ActiveState") in ("active", "activating") and marker.exists():
-            if json.loads(marker.read_text()) == profile_id:
+            if json.loads(marker.read_text()) == profile_id and self.listening(link, status, run):
                 return
         if status:
             run("systemctl", "stop", self.unit(link))
@@ -121,6 +134,13 @@ class L2TPv2:
             "--property=BindReadOnlyPaths=" + str(private) + ":/etc/ppp", "--property=UMask=0077",
             shutil.which("xl2tpd") or "xl2tpd", "-D", "-c", str(directory / "xl2tpd.conf"),
             "-p", str(directory / "daemon.pid"), "-C", str(directory / "control"))
+        expires = time.monotonic() + 8
+        while time.monotonic() < expires:
+            status = self.status(link, run)
+            if status and self.listening(link, status, run):
+                return
+            time.sleep(.15)
+        raise PanelError("The dedicated xl2tpd service did not bind the requested UDP endpoint.", "method", "l2tpv2")
 
     def remove(self, link, paths, run):
         if self.status(link, run):
