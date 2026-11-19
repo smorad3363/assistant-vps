@@ -52,6 +52,9 @@ class ForwardingTests(unittest.TestCase):
         with patch.dict("os.environ", {"SSH_CONNECTION": "192.0.2.1 42100 192.0.2.2 23351"}), \
                 patch("panel.engine.run", side_effect=lambda tool, *_, **__: subprocess.CompletedProcess([], 0, output[tool])):
             self.assertEqual(discovered_ssh_ports(), [22, 23351, 34471, 35555, 43157, 54321, 57777])
+        with patch("panel.engine.run", return_value=subprocess.CompletedProcess([], 0, "", "Cannot open netlink socket")):
+            with self.assertRaisesRegex(PanelError, "verify the host's SSH"):
+                discovered_ssh_ports()
 
     def test_incomplete_discovery_retains_previous_and_manual_ports(self):
         with tempfile.TemporaryDirectory() as root:
@@ -67,6 +70,7 @@ class ForwardingTests(unittest.TestCase):
             view["v2_listeners"][0][2]["protocols"].append("tcp")
             with self.assertRaisesRegex(PanelError, "Cannot inspect SSH"):
                 require_ssh_protection(view)
+            require_ssh_protection(view, view)
 
     def test_single_direct_matches_legacy_dnat_and_management_protection(self):
         legacy = connection({"kind": "direct", "listen_ip": "192.0.2.10", "target_host": "203.0.113.20",

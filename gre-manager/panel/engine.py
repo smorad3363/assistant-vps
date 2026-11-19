@@ -56,7 +56,7 @@ def discovered_ssh_ports():
     def probe(*args):
         with contextlib.suppress(PanelError):
             result = run(*args, check=False, timeout=5)
-            if result.returncode == 0:
+            if result.returncode == 0 and (args[0] != "ss" or not result.stderr):
                 return result.stdout
         return None
 
@@ -365,7 +365,7 @@ class Engine:
     def apply(self, config, previous=None):
         previous = installed_topology(self.paths, previous) if previous is not None else None
         config = installed_topology(self.paths, config)
-        require_ssh_protection(config)
+        require_ssh_protection(config, previous)
         interfaces = self.preflight(config)
         previous = previous or dict(config, connections=[], v2_listeners=[], v2_devices=[])
         old_gre = {g["tunnel"]: g for g in self.gre_devices(previous)}

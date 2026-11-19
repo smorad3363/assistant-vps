@@ -112,13 +112,21 @@ def with_ssh_protection(config, paths=None, *, remember=False):
     return dict(config, settings=settings, ssh_discovery_error=error)
 
 
-def require_ssh_protection(config):
+def require_ssh_protection(config, previous=None):
     error = config.get("ssh_discovery_error")
     if not error:
         return
-    incoming = any("tcp" in listener["protocols"] for _, _, listener in config.get("v2_listeners", []))
-    receiving = any(peer.get("v2_ports", {}).get("tcp") for peer in config["connections"])
-    if incoming or receiving:
+    def incoming(view):
+        return [(group.get("selection") if group else None, owner, listener)
+                for group, owner, listener in view.get("v2_listeners", []) if "tcp" in listener["protocols"]]
+
+    def receiving(view):
+        return {(peer["gre"]["tunnel"], peer["service_ip"], lo, hi)
+                for peer in view.get("connections", [])
+                for lo, hi in peer.get("v2_ports", {}).get("tcp", [])}
+
+    previous = previous or {}
+    if any(item not in incoming(previous) for item in incoming(config)) or receiving(config) - receiving(previous):
         raise PanelError(error, "ssh_discovery", "ssh_ports")
 
 
