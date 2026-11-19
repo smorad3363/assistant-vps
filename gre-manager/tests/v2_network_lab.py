@@ -19,6 +19,7 @@ from panel.engine import Engine
 from panel.model import DEFAULTS
 from panel.store import Paths, atomic_json
 from panel.v2_config import normalize_group
+from panel.v2_drivers import driver_for
 from panel.v2_forwarding import topology_views, with_ssh_protection
 from panel.v2_forwarding import BOOT_ID, gre_link, health_signature
 from panel.v2_health import Watchdog, link_responses, transition
@@ -389,8 +390,10 @@ def lab(root):
             link = gre_link(owner, route, member)
             links.append(link["tunnel"])
             for host in ("gm-ir", first_target):
-                info = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", link["tunnel"],
-                                          capture_output=True).stdout)[0]["linkinfo"]
+                def inside(*args, check=True):
+                    return subprocess.run(["ip", "netns", "exec", host, *args], capture_output=True, text=True, check=check)
+
+                info = driver_for(link).inspect(inside, link["tunnel"])[0]["linkinfo"]
                 attrs = info["info_data"]
                 assert info["info_kind"] == "vxlan" and attrs["id"] == member["vxlan"]["vni"], info
                 assert attrs["port"] == 34789 and attrs["local"] == nodes[host][0], info

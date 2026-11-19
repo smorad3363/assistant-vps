@@ -352,9 +352,8 @@ class Engine:
             if identifiers.setdefault(identity, link)["tunnel"] != link["tunnel"]:
                 raise PanelError("Two VXLAN links on this node cannot share both VNI and UDP port.", "device_conflict", "vni")
             ports.add(link["listen_port"])
-        observed = self.run("ip", "-j", "-d", "link", "show", "type", "vxlan").stdout
         kernel_ports = set()
-        for row in json.loads(observed):
+        for row in driver_for(links[0]).inspect(self.run):
             data = row.get("linkinfo", {}).get("info_data", {})
             port = data.get("port")
             if port not in ports:
@@ -445,9 +444,8 @@ class Engine:
         driver = driver_for(g)
         interface = interfaces[g["outer_local"]]
         self.run("modprobe", driver.module, check=False)
-        current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
-        if current.returncode == 0:
-            row = json.loads(current.stdout)[0]
+        row = self.inspect_link(g, driver)
+        if row:
             if not driver.owns(g, row):
                 raise PanelError("Another program owns this tunnel interface.", "device_conflict")
             refresh = driver.refresh(g, row.get("linkinfo", {}), interface)
@@ -469,6 +467,14 @@ class Engine:
         self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
         self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
         self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
+
+    def inspect_link(self, link, driver):
+        if driver.method == "vxlan":
+            rows = driver.inspect(self.run, link["tunnel"])
+        else:
+            result = self.run("ip", "-j", "-d", "link", "show", link["tunnel"], check=False)
+            rows = json.loads(result.stdout) if result.returncode == 0 else []
+        return rows[0] if rows else None
 
     def docker_udp(self):
         result = self.run("iptables", "-w", "10", "-t", "nat", "-S", "DOCKER", check=False)
@@ -561,12 +567,9 @@ class Engine:
 
     def remove_gre(self, g):
         # Verify ownership even on deletion. Never deletes an arbitrary name.
-        current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
-        if current.returncode:
-            return
-        row = json.loads(current.stdout)[0]
         driver = driver_for(g)
-        if driver.owns(g, row):
+        row = self.inspect_link(g, driver)
+        if row and driver.owns(g, row):
             self.run(*driver.delete(g))
 
     def retire_legacy(self, config):

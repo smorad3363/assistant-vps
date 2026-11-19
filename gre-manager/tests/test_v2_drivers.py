@@ -1,6 +1,7 @@
 """Kernel command and ownership contracts for v2 tunnel drivers."""
 import copy
 import random
+import subprocess
 import tempfile
 import unittest
 
@@ -14,6 +15,23 @@ from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_vxlan_falls_back_to_kernel_text_when_detailed_json_is_malformed(self):
+        driver = driver_for({"method": "vxlan"})
+        def tool(*args, **kwargs):
+            if "-j" in args and "-d" in args:
+                output = '[{"ifindex":15,"ifname":"v2-123456789012","linkinfo":{"info_data":{"port":4789 localbypass}}}]'
+            elif "-j" in args:
+                output = '[{"ifindex":15,"ifname":"v2-123456789012","ifalias":"gremgr:v2:1234567890"}]'
+            else:
+                output = ("15: v2-123456789012: <BROADCAST> mtu 1280 \\    link/ether 76:22:18:d7:2f:aa"
+                          " \\    vxlan id 4 remote 203.0.113.20 local 192.0.2.11 dev eth1 srcport 0 0 dstport 4789 nolearning")
+            return subprocess.CompletedProcess(args, 0, output, "")
+        row, = driver.inspect(tool)
+        self.assertEqual(row["linkinfo"]["info_data"], {"id": 4, "learning": False, "remote": "203.0.113.20",
+                                                        "local": "192.0.2.11", "link": "eth1", "port": 4789})
+        self.assertTrue(driver.owns({"vni": 4, "id": "1234567890", "outer_local": "192.0.2.11",
+                                     "outer_peer": "203.0.113.20", "listen_port": 4789}, row))
+
     def test_existing_gre_keeps_its_key_and_command(self):
         group = data([{"id": key(4), "node_id": key(5), "method": "gre", "service_ip": "203.0.113.20"}])
         listener = group["listeners"][0]
