@@ -29,6 +29,7 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(len({rule[rule.index("--hashlimit-name") + 1] for rule in matches}), 1)
             expected = "12500000b/s" if direction == "ORIGINAL" else "10000000b/s"
             self.assertTrue(all(expected in rule for rule in matches))
+            self.assertTrue(all(int(rule[rule.index("--hashlimit-burst") + 1][:-1]) > int(expected[:-3]) for rule in matches))
         self.assertNotEqual(filters[0][filters[0].index("--hashlimit-name") + 1],
                             filters[2][filters[2].index("--hashlimit-name") + 1])
         rng = random.Random(1035)

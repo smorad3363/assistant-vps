@@ -209,6 +209,14 @@ guest 25223 sudo systemctl reboot || true
 ready 25222 "$boot_in" >/dev/null
 ready 25223 "$boot_out" >/dev/null
 verify_restored
-guest 25222 sudo iptables-save -t filter | grep -F -- '1250000b/s' >/dev/null
-guest 25222 sudo iptables-save -t filter | grep -F -- '2500000b/s' >/dev/null
+guest 25222 sudo iptables-save -t filter >"$lab/restored-filter"
+python3 - "$lab/restored-filter" <<'PY'
+import re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+rates = [int(value) * {"": 1, "k": 1024, "m": 1024 * 1024}[unit]
+         for value, unit in re.findall(r"--hashlimit-above (\d+)([km]?)b/s", text)]
+for expected in (1250000, 2500000):
+    assert any(abs(rate - expected) < expected * .01 for rate in rates), (expected, rates)
+PY
 echo 'PASS: both Debian 12 boot IDs changed. Fresh SSH and mapped GRE payload passed after each reboot and the joint reboot.'
