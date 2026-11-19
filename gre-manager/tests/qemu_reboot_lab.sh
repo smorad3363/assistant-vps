@@ -147,12 +147,14 @@ start_vm in 25222 25251 52:54:00:32:60:01 198.51.100.50
 start_vm out 25223 '' 52:54:00:32:60:02 198.51.100.51
 boot_in=$(ready 25222)
 boot_out=$(ready 25223)
+echo "Both $os_release guests have fresh SSH connections. Installing the panel and transport dependencies."
 install_side in 25222 &
 setup_in=$!
 install_side out 25223 &
 setup_out=$!
 wait "$setup_in"
 wait "$setup_out"
+echo "Both $os_release endpoints are ready to configure ${method^^}."
 guest 25223 sudo bash -s -- "$method" <<'GUEST'
 set -euo pipefail
 cat >/usr/local/sbin/gremgr-fixture-echo.py <<'PY'
@@ -245,12 +247,15 @@ verify_restored() {
   return 1
 }
 verify_restored
+echo "Initial ${method^^} payload passed."
 guest 25223 sudo systemctl reboot || true
 boot_out=$(ready 25223 "$boot_out")
 verify_restored
+echo "Destination boot ID changed and payload passed."
 guest 25222 sudo systemctl reboot || true
 boot_in=$(ready 25222 "$boot_in")
 verify_restored
+echo "Ingress boot ID changed and payload passed."
 guest 25222 sudo systemctl reboot || true
 guest 25223 sudo systemctl reboot || true
 ready 25222 "$boot_in" >/dev/null
