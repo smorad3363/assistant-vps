@@ -25,7 +25,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Syntax and regression tests
         run: |
-          bash -n gre.sh gre-manager/install.sh gre-manager/gremgr.sh gre-manager/legacy-restore.sh gre-manager/tests/network_lab.sh
+          for script in gre.sh gre-manager/install.sh gre-manager/gremgr.sh gre-manager/legacy-restore.sh gre-manager/tests/*.sh; do
+            bash -n "$script"
+          done
           python3 gre-manager/build-release.py --check
           python3 -m compileall -q gre-manager/panel
           PYTHONPATH=gre-manager python3 -m unittest discover -s gre-manager/tests -p 'test_*.py' -v
@@ -52,6 +54,8 @@ jobs:
       - name: Real SSH provisioning and peer recovery
         run: |
           sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/ssh_lab.py
+      - name: Both installer commands and automatic rollback
+        run: sudo env GITHUB_ACTIONS=true bash gre-manager/tests/install_rollback_lab.sh
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -85,3 +89,12 @@ jobs:
         run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils
       - name: Genuine Debian boot and saved flow acceptance
         run: bash gre-manager/tests/qemu_reboot_lab.sh
+  release-fedora:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install virtual machine dependencies
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils gnupg
+      - name: dnf installation, upgrade, rollback and reboot
+        run: bash gre-manager/tests/qemu_fedora_install_lab.sh
