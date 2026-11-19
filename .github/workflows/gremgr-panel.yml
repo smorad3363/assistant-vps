@@ -35,15 +35,18 @@ jobs:
       - name: Install network test dependencies
         run: bash gre-manager/tests/install_ci_deps.sh iptables iproute2 iputils-ping kmod openssh-server sshpass conntrack strongswan xl2tpd ppp wireguard-tools
       - name: Install the matching Ethernet pseudowire kernel module
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           if ! sudo modprobe -nq l2tp_eth; then
             bash gre-manager/tests/install_ci_deps.sh "linux-modules-extra-$(uname -r)"
           fi
           sudo modprobe l2tp_eth
       - name: Real kernel TCP and UDP in isolated namespaces
+        env:
+          GREMGR_L2TPV3_VM: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
           sudo mkdir -p /run/netns
-          sudo unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
+          sudo --preserve-env=GREMGR_L2TPV3_VM unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
       - name: Full noninteractive install and update on disposable runner
         run: |
           python3 gre-manager/build-release.py WORKTREE
@@ -99,4 +102,16 @@ jobs:
       - name: Genuine Debian boot and saved flow acceptance
         env:
           GREMGR_REBOOT_METHOD: ${{ matrix.transport }}
+        run: bash gre-manager/tests/qemu_reboot_lab.sh
+  reboot-jammy-l2tpv3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install virtual machine dependencies
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils
+      - name: L2TPv3 payload and reboot on stock Ubuntu 22.04 guests
+        env:
+          GREMGR_REBOOT_OS: ubuntu22
+          GREMGR_REBOOT_METHOD: l2tpv3
         run: bash gre-manager/tests/qemu_reboot_lab.sh
