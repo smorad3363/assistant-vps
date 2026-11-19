@@ -55,18 +55,19 @@ cat > "$lab/echo.py" <<'PY'
 import socket,threading,time,sys
 label=sys.argv[1].encode()
 def listen(port,udp):
+ prefix=label+b'-5000' if port==5000 else label
  s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM if udp else socket.SOCK_STREAM)
  s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('0.0.0.0',port))
  if udp:
   while True:
-   data,peer=s.recvfrom(65535);s.sendto(label+b':'+data,peer)
+   data,peer=s.recvfrom(65535);s.sendto(prefix+b':'+data,peer)
  else:
   s.listen()
   while True:
    c,_=s.accept()
    with c:
-    data=c.recv(65535);c.sendall(label+b':'+data)
-ports=[22,6111,8787] if label==b'IRAN' else [80,1000,51820,51821,65535]
+    data=c.recv(65535);c.sendall(prefix+b':'+data)
+ports=[22,6111,8787] if label==b'IRAN' else [80,1000,5000,51820,51821,65535]
 for port in ports:
  for udp in (False,True): threading.Thread(target=listen,args=(port,udp),daemon=True).start()
 time.sleep(600)
@@ -82,7 +83,10 @@ from panel.store import Paths
 from panel.model import DEFAULTS,connection
 role,home,mode=sys.argv[1:]
 settings=dict(DEFAULTS,ssh_ports=[22,6111])
-c=connection({'kind':'gre' if mode=='gre' else 'direct','listen_ip':'192.0.2.10','target_host':'192.0.2.20','ports':'all','port_map':{'8080':80},'server_id':'abcdef0123','service_ip':'192.0.2.21','mtu':1400,'mtu_mode':'manual','monitor_ports':[1000,51821]},settings)
+payload={'kind':'direct' if mode=='direct' else 'gre','listen_ip':'192.0.2.10','target_host':'192.0.2.20','ports':'all','port_map':{'8080':80},'server_id':'abcdef0123','service_ip':'192.0.2.21','mtu':1400,'mtu_mode':'manual','monitor_ports':[1000,51821]}
+if mode=='probe':
+ payload.update(ports='5100',port_map={'5100':5000},monitor_ports=[])
+c=connection(payload,settings)
 c['id']='abcdef0123'
 if role=='fo':
  g=pair_values('192.0.2.20','192.0.2.10');g['mtu']=1400
@@ -112,6 +116,55 @@ ip netns exec gm-fo python3 "$lab/apply.py" fo "$lab/fo" gre
 ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" gre
 for port in 1000 51821 65535 8080; do ip netns exec gm-client python3 "$lab/client.py" "$port" FOREIGN; done
 for port in 22 6111 8787; do ip netns exec gm-client python3 "$lab/client.py" "$port" IRAN; done
+
+# Freeze the two release 1.2.0 probe failures until the v2 health contract changes.
+ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" probe
+probe_replies=(-i eth0 -s 192.0.2.21 -d 192.0.2.10 -p tcp -m multiport --sports 5000,5100
+  -m conntrack --ctstate ESTABLISHED -j ACCEPT)
+ip netns exec gm-ir iptables -I INPUT 1 "${probe_replies[@]}"
+cat > "$lab/probe.py" <<'PY'
+import json
+import socket
+import sys
+from unittest.mock import patch
+
+from panel.engine import Engine
+from panel.model import PanelError
+from panel.store import Paths
+
+paths = Paths(sys.argv[1])
+icmp_allowed = sys.argv[2] == 'allowed'
+profile = json.loads((paths.etc / 'lab-previous.json').read_text())['connections'][0]
+engine = Engine(paths)
+with socket.create_connection((profile['service_ip'], profile['port_map']['5100']), timeout=3) as service:
+    service.sendall(b'probe-fixture')
+    assert service.recv(64) == b'FOREIGN-5000:probe-fixture'
+with patch('socket.create_connection', wraps=socket.create_connection) as connect:
+    health = engine.probe(profile)
+connect.assert_called_once_with((profile['service_ip'], 5100), timeout=3)
+assert health['gre'] is icmp_allowed and health['tcp'] is False, health
+if icmp_allowed:
+    assert engine.choose_mtu(profile, 1280) == 1260
+    print('Baseline reproduced: probe misses mapped port 5000 while GRE is reachable.')
+else:
+    try:
+        engine.choose_mtu(profile, 1280)
+    except PanelError as error:
+        assert error.code == 'gre_probe', error
+    else:
+        raise AssertionError('Expected the release MTU probe to reject blocked ICMP.')
+    print('Baseline reproduced: blocked ICMP makes the GRE and MTU probes fail.')
+PY
+ip netns exec gm-client python3 "$lab/client.py" 5100 FOREIGN-5000
+ip netns exec gm-ir python3 "$lab/probe.py" "$lab/ir" allowed
+icmp_rule=(-p icmp --icmp-type echo-request -j DROP)
+ip netns exec gm-fo iptables -I INPUT 1 "${icmp_rule[@]}"
+ip netns exec gm-client python3 "$lab/client.py" 5100 FOREIGN-5000
+ip netns exec gm-ir python3 "$lab/probe.py" "$lab/ir" blocked
+ip netns exec gm-fo iptables -D INPUT "${icmp_rule[@]}"
+ip netns exec gm-ir iptables -D INPUT "${probe_replies[@]}"
+ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" gre
+
 # Reapply without flushing conntrack or unrelated rules.
 ip netns exec gm-ir python3 "$lab/apply.py" ir "$lab/ir" gre
 ip netns exec gm-client python3 "$lab/client.py" 51821 FOREIGN

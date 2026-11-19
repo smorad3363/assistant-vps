@@ -1,0 +1,141 @@
+{
+  "version": "1.2.0",
+  "source_commit": "b1be495f824a357160fa5524e1b56ba2d1b70db1",
+  "requests": {
+    "server": {
+      "host": "203.0.113.20",
+      "name": "Fixture peer"
+    },
+    "connections": {
+      "gre": {
+        "kind": "gre",
+        "name": "Baseline GRE",
+        "listen_ip": "192.0.2.10",
+        "target_host": "203.0.113.20",
+        "service_ip": "203.0.113.21",
+        "ports": "5100,3300",
+        "port_map": "5100:5000,3300:3000",
+        "mtu": 1380,
+        "mtu_mode": "manual",
+        "upload_mbps": 20,
+        "download_mbps": 30,
+        "port_limits": {
+          "5100": {
+            "up": 2,
+            "down": 3
+          }
+        }
+      },
+      "direct": {
+        "kind": "direct",
+        "name": "Baseline direct",
+        "listen_ip": "192.0.2.10",
+        "target_host": "203.0.113.30",
+        "ports": "5200",
+        "target_port": 5000
+      }
+    },
+    "rejected": {
+      "overlap": {
+        "kind": "direct",
+        "name": "Baseline direct",
+        "listen_ip": "192.0.2.10",
+        "target_host": "203.0.113.30",
+        "ports": "5100",
+        "target_port": 5000
+      },
+      "protected_ssh": {
+        "kind": "direct",
+        "name": "Baseline direct",
+        "listen_ip": "192.0.2.10",
+        "target_host": "203.0.113.30",
+        "ports": "22",
+        "target_port": 5000
+      },
+      "protected_panel": {
+        "kind": "direct",
+        "name": "Baseline direct",
+        "listen_ip": "192.0.2.10",
+        "target_host": "203.0.113.30",
+        "ports": "8787",
+        "target_port": 5000
+      }
+    }
+  },
+  "response": {
+    "connections": {
+      "gre": {
+        "kind": "gre",
+        "name": "Baseline GRE",
+        "listen_ip": "192.0.2.10",
+        "target_host": "203.0.113.20",
+        "resolved_ip": "203.0.113.20",
+        "target_port": null,
+        "ports": "5100,3300",
+        "port_map": {
+          "5100": 5000,
+          "3300": 3000
+        },
+        "protocols": [
+          "tcp",
+          "udp"
+        ],
+        "enabled": true,
+        "exclude_ports": [],
+        "monitor_ports": [],
+        "port_limits": {
+          "5100": {
+            "up": 2.0,
+            "down": 3.0
+          }
+        },
+        "upload_mbps": 20.0,
+        "download_mbps": 30.0,
+        "mtu": 1380,
+        "mtu_mode": "manual",
+        "service_ip": "203.0.113.21"
+      },
+      "direct": {
+        "kind": "direct",
+        "name": "Baseline direct",
+        "listen_ip": "192.0.2.10",
+        "target_host": "203.0.113.30",
+        "resolved_ip": "203.0.113.30",
+        "target_port": 5000,
+        "ports": "5200",
+        "port_map": {},
+        "protocols": [
+          "tcp",
+          "udp"
+        ],
+        "enabled": true,
+        "exclude_ports": [],
+        "monitor_ports": [],
+        "port_limits": {},
+        "upload_mbps": 0.0,
+        "download_mbps": 0.0
+      }
+    },
+    "rejected": {
+      "overlap": {
+        "code": "overlap",
+        "field": "ports"
+      },
+      "protected_ssh": {
+        "code": "reserved",
+        "field": "ports"
+      },
+      "protected_panel": {
+        "code": "reserved",
+        "field": "ports"
+      }
+    },
+    "backup_preview": {
+      "connections": 2,
+      "servers": 1,
+      "addresses": [
+        "192.0.2.10"
+      ]
+    }
+  }
+}
