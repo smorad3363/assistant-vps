@@ -425,9 +425,13 @@ function memberForm(parent, member = {}) {
         `<option value="${mode}" ${options.mss_mode === mode ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
       <label>عدد MSS ${title}<input data-value="${side}-mss" type="number" min="64" max="1436" value="${esc(options.mss)}"></label>`;
   };
+  const wgFields = (side, title) => `<label>کلید عمومی ${title}<input data-value="${side}-wg-key" dir="ltr" maxlength="44"
+    value="${esc(member.wireguard?.[side]?.public_key)}"></label>
+    <label>پورت UDP ${title}<input data-value="${side}-wg-port" type="number" min="1024" max="65535" value="${esc(member.wireguard?.[side]?.port)}"></label>`;
   row.innerHTML = `<label>سرور مقصد<select data-value="node">${nodeOptions(member.node_id, true)}</select></label>
     <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option>
       <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option>
+      <option value="wireguard" ${member.method === 'wireguard' ? 'selected' : ''}>WireGuard</option>
       <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
     <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
@@ -444,6 +448,10 @@ function memberForm(parent, member = {}) {
     </div></details>
     <details><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
       ${sideFields('ingress','ورودی')}${sideFields('destination','مقصد')}</div></details>
+    <details ${member.method === 'wireguard' ? 'open' : ''}><summary>تنظیمات WireGuard</summary><div class="form-grid">
+      ${wgFields('ingress','ورودی')}${wgFields('destination','مقصد')}
+      <label>Keepalive (ثانیه)<input data-value="keepalive" type="number" min="0" max="65535" value="${esc(member.wireguard?.keepalive ?? 25)}"></label>
+      </div><small>کلید عمومی هر نود را از <code>sudo gremgr wireguard-key</code> بگیرید.</small></details>
     <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
   parent.append(row);
 }
@@ -506,7 +514,8 @@ async function refreshGroups() {
   const status = value => value === true ? 'سالم' : value === false ? 'قطع' : 'نامشخص';
   const evidence = record => record.group.listeners.flatMap(listener => listener.members.filter(member => member.enabled).map(member => {
     const sample = record.health?.[member.id] || {};
-    const summary = `مدیریت ${status(sample.management)} · لینک ${status(sample.link)} · سرویس ${status(sample.service)} · ICMP ${status(sample.icmp)}`;
+    const summary = record.driver_issues?.[member.id] === 'wireguard_key' ? 'نیاز به کلید WireGuard روی این سرور' :
+      `مدیریت ${status(sample.management)} · لینک ${status(sample.link)} · سرویس ${status(sample.service)} · ICMP ${status(sample.icmp)}`;
     const checked = sample.checked ? ' · ' + new Date(sample.checked * 1000).toLocaleTimeString('fa-IR') : '';
     return `<small><bdi>${esc(member.service_ip)}</bdi> ${esc(summary + checked)}</small>`;
   })).join('');
@@ -547,6 +556,9 @@ function groupRequest() {
     const mtu = value(member,side+'-mtu'), mss = value(member,side+'-mss'), mss_mode = value(member,side+'-mode');
     return mtu || mss_mode !== 'mtu' ? [[side,{mss_mode,...(mtu && {mtu}),...(mss_mode === 'manual' && {mss})}]] : [];
   }));
+  const wireguard = member => ({keepalive:Number(value(member,'keepalive')),
+    ...Object.fromEntries(['ingress','destination'].map(side => [side,
+      {public_key:value(member,side+'-wg-key'),port:Number(value(member,side+'-wg-port'))}]))});
   const listeners = $$('[data-v2-listener]', groupForm).map(row => ({
     id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
     ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
@@ -563,6 +575,7 @@ function groupRequest() {
       ...(value(member,'method') !== 'direct' && {link_settings:linkSettings(member)}),
       ...(value(member,'method') === 'ipip' && {ttl:Number(value(member,'ttl'))}),
       ...(value(member,'method') === 'vxlan' && {vxlan:{vni:Number(value(member,'vxlan-vni')), port:Number(value(member,'vxlan-port'))}}),
+      ...(value(member,'method') === 'wireguard' && {wireguard:wireguard(member)}),
       weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
       limits:readRateFields(member),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',

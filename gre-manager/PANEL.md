@@ -214,3 +214,15 @@ different UDP port for the panel's links.
 The direct-forwarding feature was informed by the behavior requested from
 [IPTABLE-Tunnel-multi-port](https://github.com/azavaxhuman/IPTABLE-Tunnel-multi-port).
 Its installer, shell menu and destructive global reset operations are not bundled.
+
+### WireGuard members in a paired v2 group
+
+Create each host's local key with `sudo gremgr wireguard-key`. On an SSH-only peer,
+use `sudo gremgr-peer --wireguard-key` from the administrator's shell. The command
+prints the public key. Keep the mode-0600 private key in that host's `/etc/gremgr`
+when restoring its identity.
+
+Enter each host's public key and an unused UDP listener port in the member form.
+The panel assigns the internal IPv4 link addresses. Each managed interface has a
+single peer and a host route for that peer. Existing WireGuard interfaces retain
+their settings. Allow the configured endpoint on the underlay before applying.

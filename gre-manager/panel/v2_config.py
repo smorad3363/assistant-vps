@@ -3,7 +3,7 @@ from collections import defaultdict
 
 from .model import DEFAULTS, PanelError, address, bandwidth_limits, connection, integer, port_ranges, ranges_for
 from .transactions import identity, overlaps
-from .v2_drivers import DRIVERS
+from .v2_drivers import DRIVERS, wireguard_public_key
 from .v2_forwarding import segments
 
 
@@ -38,6 +38,21 @@ def link_settings(raw):
         if mode == "manual":
             settings["mss"] = integer(values.get("mss"), 64, 1436, "mss")
         result[side] = settings
+    return result
+
+
+def wireguard_settings(raw):
+    if not isinstance(raw, dict):
+        raise PanelError("Configure both WireGuard peers.", field="wireguard")
+    result = {"keepalive": integer(raw.get("keepalive", 25), 0, 65535, "keepalive")}
+    for side in ("ingress", "destination"):
+        peer = raw.get(side)
+        if not isinstance(peer, dict):
+            raise PanelError("Set the public key and UDP port on each host.", field="wireguard")
+        result[side] = {"public_key": wireguard_public_key(peer.get("public_key")),
+                        "port": integer(peer.get("port"), 1024, 65535, "port")}
+    if result["ingress"]["public_key"] == result["destination"]["public_key"]:
+        raise PanelError("WireGuard requires a distinct public key for each endpoint.", field="wireguard")
     return result
 
 
@@ -119,6 +134,8 @@ def normalize_group(raw):
                     raise PanelError("Set the VNI and optional UDP port for this VXLAN link.", field="vxlan")
                 normalized_members[-1]["vxlan"] = {"vni": integer(parameters.get("vni"), 1, 16777215, "vni"),
                                                    "port": integer(parameters.get("port", 4789), 1, 65535, "port")}
+            if method == "wireguard":
+                normalized_members[-1]["wireguard"] = wireguard_settings(member.get("wireguard"))
         first = normalized_members[0]
         profile = listener_profile(dict(listener, ip=listen_ip), neutral, first["service_ip"])
         result["listeners"].append({

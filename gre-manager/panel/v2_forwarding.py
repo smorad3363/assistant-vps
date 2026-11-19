@@ -6,7 +6,7 @@ import json
 from .model import DEFAULTS, PanelError, ranges_for, subtract
 from .store import atomic_json, topology_node_id
 from .transactions import Journal, fingerprint
-from .v2_drivers import DRIVERS, driver_for
+from .v2_drivers import DRIVERS, driver_for, local_wireguard_key
 from .v2_resources import boot_id
 
 LINK_PROBE_PROTOCOL = 253
@@ -20,11 +20,11 @@ def gre_link(owner, listener, member, receiving=False):
     method = member["method"]
     base = f"{owner}|{source}|{target}|{member['service_ip']}"
     identity_input = f"{base}|{mtu}" if method == "gre" else f"{method}|{base}"
-    extra = {}
+    if method == "wireguard":
+        identity_input += "|" + member["id"]
     if method == "vxlan":
         settings = member["vxlan"]
         identity_input += f"|{settings['vni']}|{settings['port']}"
-        extra = {"vni": settings["vni"], "listen_port": settings["port"]}
     identity = hashlib.sha256(identity_input.encode()).hexdigest()
     start = int(ipaddress.IPv4Address("10.224.0.0")) + 4 * (int(identity[12:20], 16) % 262144)
     addresses = [str(ipaddress.IPv4Address(start + offset)) for offset in (1, 2)]
@@ -32,12 +32,22 @@ def gre_link(owner, listener, member, receiving=False):
         source, target = target, source
         addresses.reverse()
     parameters = member.get("link_settings", {}).get("destination" if receiving else "ingress", {})
+    extra = {}
+    if method == "vxlan":
+        extra = {"vni": settings["vni"], "listen_port": settings["port"]}
+    if method == "wireguard":
+        settings = member["wireguard"]
+        here, there = ("destination", "ingress") if receiving else ("ingress", "destination")
+        extra = {"public_key": settings[here]["public_key"], "peer_public_key": settings[there]["public_key"],
+                 "listen_port": settings[here]["port"], "peer_port": settings[there]["port"],
+                 "keepalive": 0 if receiving else settings["keepalive"]}
     return {
-        "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "vxlan": "v2-"}[method] + identity[:12],
+        "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "wireguard": "w2-", "vxlan": "v2-"}[method] + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
         "peer_tun": addresses[1], "key": int(identity[20:28], 16) or 1, "mtu": parameters.get("mtu", mtu),
         **({"mss_mode": parameters["mss_mode"], "mss": parameters.get("mss")} if parameters else {}),
-        **({"method": method, "ttl": member.get("ttl", 64)} if method != "gre" else {}), **extra,
+        **({"method": method, "ttl": member.get("ttl", 64)} if method != "gre" else {}),
+        **extra,
     }
 
 
@@ -68,15 +78,38 @@ def health_signature(owner, listener, member):
     path = [listener.get(key) for key in ("id", "node_id", "ip", "outer_ip", "ports", "exclude_ports", "port_map",
                                           "target_port", "protocols", "probe", "watch_link")]
     peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled")]
-    if member["method"] == "vxlan":
-        peer.append(member["vxlan"])
+    if member["method"] in ("wireguard", "vxlan"):
+        peer.append(member[member["method"]])
     return fingerprint([owner, path, peer])
 
 
-def topology_views(config, state, node_id):
+def topology_views(config, state, node_id, *, paths=None, require_keys_for=None):
     listeners, devices, receivers = [], {}, {}
     policies = {}
+    unavailable = {}
+    local_key = None
+    key_read = False
     settings = dict(DEFAULTS, **config["settings"])
+
+    def usable_member(listener, group, member):
+        nonlocal key_read, local_key
+        if (not paths or group["id"] == require_keys_for or member["method"] != "wireguard"
+                or not (member["enabled"] or member.get("draining"))):
+            return member
+        side = "ingress" if listener["node_id"] == node_id else "destination" if member["node_id"] == node_id else None
+        if side is None:
+            return member
+        if not key_read:
+            from .engine import run
+            try:
+                local_key = local_wireguard_key(paths, run)
+            except (PanelError, OSError):
+                pass
+            key_read = True
+        if local_key == member["wireguard"][side]["public_key"]:
+            return member
+        unavailable[group["id"] + ":" + member["id"]] = "wireguard_key"
+        return dict(member, enabled=False, draining=False)
 
     def reconcile_link(link, group_id, staged):
         name = link["tunnel"]
@@ -93,6 +126,8 @@ def topology_views(config, state, node_id):
         if not group or not group["enabled"]:
             return
         for listener in group["listeners"]:
+            if paths:
+                listener = dict(listener, members=[usable_member(listener, group, member) for member in listener["members"]])
             ingress = listener["node_id"] == node_id
             if ingress and not staged:
                 if "probe" in listener or listener.get("watch_link"):
@@ -134,7 +169,7 @@ def topology_views(config, state, node_id):
         if record["phase"] == "prepared" and record.get("change"):
             add_group(record["owner"], record["change"]["group"], True)
     return dict(config, settings=settings, connections=[*config["connections"], *receivers.values()],
-                v2_listeners=listeners, v2_devices=list(devices.values()))
+                v2_listeners=listeners, v2_devices=list(devices.values()), v2_driver_unavailable=unavailable)
 
 
 def installed_topology(paths, config):
@@ -143,7 +178,7 @@ def installed_topology(paths, config):
     state = Journal(paths.var / "v2-participant.json").read()
     if not state["groups"] and not state["operations"]:
         return config
-    return topology_views(with_ssh_protection(config, paths, remember=True), state, topology_node_id(paths))
+    return topology_views(with_ssh_protection(config, paths, remember=True), state, topology_node_id(paths), paths=paths)
 
 
 def with_ssh_protection(config, paths=None, *, remember=False):
