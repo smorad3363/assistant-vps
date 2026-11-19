@@ -1,8 +1,11 @@
 """Kernel command and ownership contracts for v2 tunnel drivers."""
 import copy
 import base64
+import errno
 import json
 import random
+import ipaddress
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -10,15 +13,100 @@ from unittest.mock import patch
 
 from panel.engine import Engine, build_rules, external_carrier_forward, udp_carrier_matches
 from panel.model import DEFAULTS, PanelError
-from panel.store import Paths
+from panel.store import Paths, atomic_json
 from panel.v2_bench_agent import test_link
-from panel.v2_config import normalize_group, sit_settings
+from panel.v2_config import l2tpv2_settings, normalize_group, sit_settings
 from panel.v2_drivers import driver_for, local_wireguard_key
+from panel.v2_eoip import decode_frame, encode_frame, send_frame
 from panel.v2_forwarding import gre_link, topology_views
 from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_eoip_reconfigures_a_daemon_started_from_an_older_release(self):
+        link = {"id": "f4f8921acb", "tunnel": "e2-f4f8921acb7a", "method": "eoip"}
+        transport = driver_for(link)
+        row = {"ifalias": transport.marker(link), "link_type": "ether", "flags": ["UP"]}
+        calls = []
+
+        def run(*args, **options):
+            calls.append(args)
+            state = f"LoadState=loaded\nTransient=yes\nActiveState=active\nDescription={transport.description(link)}\n"
+            return subprocess.CompletedProcess(args, 0, json.dumps([row]) if args[0] == "ip" else state, "")
+
+        with tempfile.TemporaryDirectory() as root:
+            paths = Paths(root)
+            atomic_json(transport.settings(paths, link), dict(link, interface="eth0", source="/older/release"))
+            transport.configure(link, paths, "eth0", row, run)
+            self.assertIn(("systemctl", "stop", transport.unit(link)), calls)
+            self.assertEqual(sum(cmd[0] == "systemd-run" for cmd in calls), 1)
+            transport.configure(link, paths, "eth0", row, run)
+            self.assertEqual(sum(cmd[0] == "systemd-run" for cmd in calls), 1)
+
+    def test_eoip_does_not_stop_for_a_path_mtu_error(self):
+        class Socket:
+            def sendto(self, packet, endpoint):
+                if len(packet) > 1400:
+                    raise OSError(errno.EMSGSIZE, "too large")
+                self.sent = (packet, endpoint)
+
+        carrier = Socket()
+        endpoint = ("192.0.2.1", 0)
+        send_frame(carrier, endpoint, 2800, b"a" * 1500)
+        send_frame(carrier, endpoint, 2800, b"b" * 1280)
+        self.assertEqual(carrier.sent, (encode_frame(2800, b"b" * 1280), endpoint))
+
+    def test_eoip_encoding_and_input_validation(self):
+        rng = random.Random(6400)
+        local, remote = [ipaddress.IPv4Address(a).packed for a in ("192.0.2.10", "203.0.113.20")]
+        for _ in range(250):
+            size, identity = rng.randint(14, 1300), rng.randint(1, 65535)
+            payload = rng.randbytes(size)
+            data = encode_frame(identity, payload)
+            self.assertEqual(data[:8], b"\x20\x01\x64\x00" + size.to_bytes(2, "big") + identity.to_bytes(2, "little"))
+            ip_header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, len(data)+20, 0, 0, 64, 47, 0, remote, local)
+            self.assertEqual(decode_frame(ip_header+data, local, remote, identity, 1300), payload)
+            self.assertIsNone(decode_frame(ip_header+data, remote, local, identity, 1300))
+            self.assertIsNone(decode_frame(ip_header+data[:-1], local, remote, identity, 1300))
+            self.assertIsNone(decode_frame(ip_header+data, local, remote, identity ^ 1, 1300))
+
+    def test_l2tpv2_rejects_a_connected_foreign_udp_binding(self):
+        transport = driver_for({"method": "l2tpv2"})
+        link = {"tunnel": "p2-b0b000000001", "listen_port": 37401, "credential": "lab"}
+
+        def run(*args):
+            if args[:2] == ("ss", "-H"):
+                self.assertIn("-uanp", args)
+                output = 'ESTAB 0 0 192.0.2.10:37401 203.0.113.20:9009 users:(("foreign",pid=42,fd=5))'
+            else:
+                output = '[]'
+            return subprocess.CompletedProcess(args, 0, output, "")
+
+        with patch.object(transport, "available", return_value=True), patch.object(transport, "credential"), patch.object(transport, "status", return_value={}):
+            with self.assertRaisesRegex(PanelError, "different UDP socket"):
+                transport.check([link], {}, None, run)
+
+    def test_l2tpv2_uses_distinct_roles_and_scopes_public_and_inner_traffic(self):
+        settings = {"lac": "destination", "ingress": {"port": 37401, "credential": "in-lab"},
+                    "destination": {"port": 37402, "credential": "out-lab"}}
+        group = data([{"id": key(4), "node_id": key(5), "method": "l2tpv2", "service_ip": "203.0.113.20", "l2tpv2": settings}])
+        listener = group["listeners"][0]
+        member = listener["members"][0]
+        first, second = (gre_link(key(3), listener, member, receiving=side) for side in (False, True))
+        self.assertFalse(first["lac"])
+        self.assertTrue(second["lac"])
+        self.assertEqual(first["peer_tun"], second["local_tun"])
+        self.assertEqual(driver_for(first).firewall(first), ["-p", "udp", "--sport", 37402, "--dport", 37401])
+        state = {"groups": {group["id"]: {"active": True, "owner": key(3), "group": group}}, "operations": {}}
+        config = {"settings": DEFAULTS, "connections": []}
+        view = topology_views(config, state, key(3))
+        rules = build_rules(view, {"192.0.2.10": "eth0", "192.0.2.11": "eth0"})
+        self.assertTrue(any(rule[-7:] == ["-d", first["peer_tun"], "!", "-o", first["tunnel"], "-j", "DROP"]
+                            for rule in rules["filter"]["GMP_FWD"]))
+        for ref in ("../chap", "/temp/file", "a\npassword", "", 42):
+            with self.subTest(ref=ref), self.assertRaises(PanelError):
+                l2tpv2_settings(dict(settings, ingress={"port": 37401, "credential": ref}))
+
     def test_sit_keeps_ipv6_and_its_exact_outer_filter_separate_from_ipv4_forwarding(self):
         member = {"id": key(4), "node_id": key(5), "method": "sit", "outer_ip": "203.0.113.20",
                   "sit": {"ingress": "fd00:1234::1/64", "destination": "fd00:1234::2/64"}}

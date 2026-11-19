@@ -9,7 +9,9 @@ import os
 import tempfile
 
 from .model import PanelError
+from .v2_eoip import EoIP
 from .v2_l2tp import L2TPv3
+from .v2_ppp import L2TPv2
 
 
 def gre_key(value):
@@ -243,7 +245,7 @@ class Geneve(Vxlan):
 
 
 DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan(),
-           "gretap": GreTap("gretap", "ip_gre", "gre", True), "geneve": Geneve(), "l2tpv3": L2TPv3(), "sit": Sit("sit", "sit", "41")}
+           "gretap": GreTap("gretap", "ip_gre", "gre", True), "geneve": Geneve(), "l2tpv3": L2TPv3(), "sit": Sit("sit", "sit", "41"), "l2tpv2": L2TPv2(), "eoip": EoIP()}
 
 
 def driver_for(link):

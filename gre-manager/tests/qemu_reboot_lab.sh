@@ -26,6 +26,7 @@ trap cleanup EXIT
 
 images=https://cloud.debian.org/images/cloud/bookworm/latest
 image=debian-12-genericcloud-amd64.qcow2
+if [[ $method == l2tpv2 ]]; then image=debian-12-generic-amd64.qcow2; fi
 sums=SHA512SUMS
 checksum=sha512sum
 os_release='Debian 12'
@@ -137,6 +138,11 @@ systemctl enable --now gremgr-fixture-network.service
 env GRE_PANEL_SKIP_ACME=1 bash /home/fixture/gre-manager/install.sh --source-dir /home/fixture/gre-manager
 systemctl is-active gremgr-worker.service
 GUEST
+  if [[ $method == l2tpv2 ]]; then
+    guest "$port" 'sudo apt-get update -qq && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xl2tpd ppp'
+    guest "$port" 'uname -r && sudo modprobe ppp_generic && sudo modprobe l2tp_ppp && sudo test -c /dev/ppp'
+    guest "$port" 'sudo install -d -m 700 /etc/gremgr/ppp-credentials && sudo install -m 600 /dev/stdin /etc/gremgr/ppp-credentials/lab' <"$lab/ppp-secret"
+  fi
   if [[ ${GREMGR_REBOOT_OS:-} == ubuntu22 ]]; then
     guest "$port" 'grep -E "^VERSION_ID=\"?22\.04\"?$" /etc/os-release && uname -r'
     guest "$port" 'if ! sudo modprobe -nq l2tp_eth; then sudo apt-get update -qq && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "linux-modules-extra-$(uname -r)"; fi; sudo modprobe l2tp_eth'
@@ -147,6 +153,7 @@ start_vm in 25222 25251 52:54:00:32:60:01 198.51.100.50
 start_vm out 25223 '' 52:54:00:32:60:02 198.51.100.51
 boot_in=$(ready 25222)
 boot_out=$(ready 25223)
+if [[ $method == l2tpv2 ]]; then openssl rand -hex 32 >"$lab/ppp-secret"; fi
 install_side in 25222 &
 setup_in=$!
 install_side out 25223 &
@@ -195,6 +202,11 @@ def identity(): return uuid.uuid4().hex
 group_id = identity()
 member = {"id": identity(), "node_id": dst, "method": method, "service_ip": "198.51.100.51",
           "outer_ip": "198.51.100.51", "mtu": 1280}
+if method == "eoip":
+    member["eoip"] = {"tunnel_id": 22411}
+if method == "l2tpv2":
+    member["l2tpv2"] = {"lac": "ingress", "ingress": {"port": 37401, "credential": "lab"},
+                       "destination": {"port": 37402, "credential": "lab"}}
 if method == "l2tpv3":
     member["l2tpv3"] = {"ingress": {"tunnel_id": 21701, "session_id": 21711, "port": 37001},
                        "destination": {"tunnel_id": 21702, "session_id": 21712, "port": 37002}}
@@ -215,7 +227,12 @@ PY
 request='import json, sys; from panel.agent import v2_participant; from panel.engine import Engine; from panel.store import Paths; p=Paths(); peer=v2_participant(p, Engine(p)); change=json.load(sys.stdin); assert peer.request(change["owner"], sys.argv[1], change)["phase"] == sys.argv[1] + ("d" if sys.argv[1] == "prepare" else "ted")'
 for stage in prepare commit; do
   for port in 25223 25222; do
-    guest "$port" "cd /opt/gremgr/current && sudo python3 -c '$request' '$stage'" <"$lab/change.json"
+    if ! guest "$port" "cd /opt/gremgr/current && sudo python3 -c '$request' '$stage'" <"$lab/change.json"; then
+      if [[ $method == eoip ]]; then
+        guest "$port" "sudo journalctl -b -u 'gremgr-eoip-*' -n 60 --no-pager && ip -br link" || true
+      fi
+      exit 1
+    fi
   done
 done
 
@@ -245,6 +262,13 @@ verify_restored() {
   return 1
 }
 verify_restored
+if [[ $method == eoip ]]; then
+  guest 25222 "sudo systemctl stop 'gremgr-eoip-*.service'"
+  if verify_flow; then echo 'A removed EoIP link unexpectedly carried traffic.' >&2; exit 1; fi
+  guest 25222 sudo iptables-save -c -t filter | awk '/^\[[1-9][0-9]*:.*\] -A GMP_FWD .* ! -o e2-.* -j DROP/{verified=1} END{exit(!verified)}'
+  guest 25222 sudo systemctl restart gremgr-worker.service
+  verify_restored
+fi
 guest 25223 sudo systemctl reboot || true
 boot_out=$(ready 25223 "$boot_out")
 verify_restored
@@ -256,6 +280,9 @@ guest 25223 sudo systemctl reboot || true
 ready 25222 "$boot_in" >/dev/null
 ready 25223 "$boot_out" >/dev/null
 verify_restored
+if [[ $method == l2tpv2 ]]; then
+  for port in 25222 25223; do guest "$port" ip -o -4 addr show | grep -Eq 'p2-[0-9a-f]{12} .* peer '; done
+fi
 guest 25222 sudo iptables-save -t filter >"$lab/restored-filter"
 if [[ $method == sit ]]; then
   grep -Eq -- '-s 198\.51\.100\.51/32 -d 198\.51\.100\.50/32 .* -p (41|ipv6) -j ACCEPT' "$lab/restored-filter"
