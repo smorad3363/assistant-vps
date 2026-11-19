@@ -126,6 +126,13 @@ if __name__ == "__main__":
         page = browser.new_page(viewport={"width": 1440, "height": 900})
         failures = []
         page.on("pageerror", lambda error: failures.append(str(error)))
-        run(page, output)
+        try:
+            run(page, output)
+        except Exception:
+            print(f"Browser errors: {failures}")
+            if page.locator('#toast').is_visible():
+                print(page.locator('#toast').inner_text())
+            page.screenshot(path=str(output / "v2-failure.png"))
+            raise
         assert not failures, failures
         print("PASS: v2 creation, apply, 16 members, failed-path priority, field help, benchmark form and five widths.")

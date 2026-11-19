@@ -536,7 +536,7 @@ function openGroup(record) {
   resetGroupPlan();
 }
 async function refreshGroups() {
-  const [topology, groups, metrics] = await Promise.all([api('v2/topology'), api('v2/groups'), api('v2/metrics')]);
+  const [topology, groups, metrics] = await Promise.all([api('v2/topology'), api('v2/groups'), api('v2/metrics').catch(() => ({}))]);
   const pressure = metrics?.conntrack;
   $('#v2-host-resources').textContent = pressure?.percent == null ? '' :
     `conntrack این سرور ${fa.format(Math.round(pressure.percent))}٪ · فضای آزاد ${fa.format(Math.round(metrics.disk_free_bytes / 1048576))} MiB`;
