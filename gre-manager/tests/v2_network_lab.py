@@ -345,6 +345,8 @@ def lab(root):
             print(f"v2 four destinations shared the 1 Mbps {direction} aggregate: {measured['bytes']} bytes over 4 seconds.", flush=True)
 
         ipip = listener("gm-ir", [first_target], "ipip", [1])
+        command("ip", "netns", "exec", "gm-ir", "ip", "tunnel", "add", "gm-other-ipip", "mode", "ipip",
+                "local", nodes["gm-ir"][0], "remote", nodes[services[-1]][0])
         ipip["members"][0]["ttl"] = 43
         normalized = apply([ipip])
         link = gre_link(owner, normalized, normalized["members"][0])
@@ -356,10 +358,14 @@ def lab(root):
             assert exchanges("gm-ir", 6, proto) == {"0": 6}
         ipip["members"][0]["ttl"] = 55
         apply([ipip])
+        for host in ("gm-ir", first_target):
+            details = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", link["tunnel"], capture_output=True).stdout)[0]
+            assert details["linkinfo"]["info_data"]["ttl"] == 55, details
         assert exchanges("gm-ir", 6) == {"0": 6}
         apply([weighted])
         for host in ("gm-ir", first_target):
             assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
+        command("ip", "-n", "gm-ir", "link", "show", "gm-other-ipip", stdout=subprocess.DEVNULL)
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
 
 

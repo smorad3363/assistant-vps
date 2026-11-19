@@ -292,8 +292,16 @@ class Engine:
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
-                if unkeyed_pairs.setdefault(pair, link["tunnel"]) != link["tunnel"]:
+                if unkeyed_pairs.setdefault(pair, link)["tunnel"] != link["tunnel"]:
                     raise PanelError("IPIP cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
+        if unkeyed_pairs:
+            inspected = self.run("ip", "-j", "-d", "link", "show", "type", "ipip", check=False)
+            if inspected.returncode == 0:
+                for row in json.loads(inspected.stdout):
+                    data = row.get("linkinfo", {}).get("info_data", {})
+                    link = unkeyed_pairs.get((data.get("local"), data.get("remote")))
+                    if link and (row.get("ifname") != link["tunnel"] or not driver_for(link).owns(link, row)):
+                        raise PanelError("An existing IPIP interface uses the requested outer addresses.", "device_conflict")
         for c in forwarding:
             if not c.get("enabled", True):
                 continue
@@ -337,10 +345,10 @@ class Engine:
         self.run("modprobe", driver.module, check=False)
         current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
         if current.returncode == 0:
-            details = json.loads(current.stdout)[0].get("linkinfo", {})
-            if not driver.owns(g, details):
+            row = json.loads(current.stdout)[0]
+            if not driver.owns(g, row):
                 raise PanelError("Another program owns this tunnel interface.", "device_conflict")
-            refresh = driver.refresh(g, details, interface)
+            refresh = driver.refresh(g, row.get("linkinfo", {}), interface)
             if refresh:
                 self.run(*refresh)
         else:
@@ -348,6 +356,14 @@ class Engine:
                 if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
                     raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
             self.run(*driver.create(g, interface))
+            marker = driver.marker(g)
+            if marker:
+                try:
+                    self.run("ip", "link", "set", "dev", g["tunnel"], "alias", marker)
+                except PanelError:
+                    with contextlib.suppress(PanelError):
+                        self.run(*driver.delete(g))
+                    raise
         self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
         self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
         self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
@@ -446,9 +462,9 @@ class Engine:
         current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
         if current.returncode:
             return
-        details = json.loads(current.stdout)[0].get("linkinfo", {})
+        row = json.loads(current.stdout)[0]
         driver = driver_for(g)
-        if driver.owns(g, details):
+        if driver.owns(g, row):
             self.run(*driver.delete(g))
 
     def retire_legacy(self, config):

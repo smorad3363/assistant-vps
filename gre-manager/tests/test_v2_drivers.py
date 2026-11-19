@@ -22,8 +22,8 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(driver.create(link, "eth1"), ["ip", "tunnel", "add", link["tunnel"], "mode", "gre",
                                                         "local", "192.0.2.11", "remote", "203.0.113.20",
                                                         "key", link["key"], "ttl", 64, "dev", "eth1"])
-        self.assertTrue(driver.owns(link, {"info_kind": "gre", "info_data": {"local": link["outer_local"],
-                                                     "remote": link["outer_peer"], "ikey": str(link["key"])}}))
+        self.assertTrue(driver.owns(link, {"linkinfo": {"info_kind": "gre", "info_data": {"local": link["outer_local"],
+                                                     "remote": link["outer_peer"], "ikey": str(link["key"])}}}))
 
     def test_ipip_reverses_endpoints_and_rejects_unowned_devices(self):
         rng = random.Random(404)
@@ -42,10 +42,12 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(driver.firewall(source), ["-p", "4"])
             info = {"info_kind": "ipip", "info_data": {"local": source["outer_local"], "remote": source["outer_peer"],
                                                      "ttl": (member["ttl"] + 1) % 256}}
-            self.assertTrue(driver.owns(source, info))
+            self.assertFalse(driver.owns(source, {"linkinfo": info}))
+            row = {"linkinfo": info, "ifalias": driver.marker(source)}
+            self.assertTrue(driver.owns(source, row))
             self.assertIn("change", driver.refresh(source, info, "eth1"))
             info["info_kind"] = "gre"
-            self.assertFalse(driver.owns(source, info))
+            self.assertFalse(driver.owns(source, row))
 
     def test_unkeyed_endpoint_collision_is_rejected(self):
         original = data([{"id": key(4), "node_id": key(5), "method": "ipip", "service_ip": "203.0.113.20",

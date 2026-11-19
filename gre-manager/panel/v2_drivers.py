@@ -15,13 +15,17 @@ class IPTunnel:
         return ["ip", "tunnel", "add", link["tunnel"], "mode", self.method, "local", link["outer_local"], "remote",
                 link["outer_peer"], *key, "ttl", link.get("ttl", 64), "dev", interface]
 
-    def owns(self, link, info):
+    def marker(self, link):
+        return None if self.keyed else "gremgr:v2:" + link["id"]
+
+    def owns(self, link, row):
+        info = row.get("linkinfo", {})
         data = info.get("info_data", {})
         if (info.get("info_kind"), data.get("local"), data.get("remote")) != (
                 self.method, link["outer_local"], link["outer_peer"]):
             return False
         if not self.keyed:
-            return True
+            return row.get("ifalias") == self.marker(link)
         key = data.get("ikey", 0)
         if isinstance(key, str):
             key = int(ipaddress.IPv4Address(key)) if "." in key else int(key)
