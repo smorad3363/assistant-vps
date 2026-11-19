@@ -12,6 +12,7 @@ from .model import PanelError
 from .transactions import fingerprint
 from .v2_forwarding import with_ssh_protection
 from .v2_health import Watchdog
+from .v2_resources import HostSampler
 
 MAX_REQUEST = 48 * 1024 * 1024
 
@@ -84,10 +85,13 @@ def main():
     threading.Thread(target=monitor.serve, args=(stop, lambda error: controller.store.event(
         "error", "V2 health checks: " + error[:550])), daemon=True).start()
 
+    sampler = HostSampler(controller.paths)
+
     def timer():
         while not stop.is_set():
             try:
                 controller.tick()
+                sampler.snapshot()
             except Exception as error:
                 controller.store.event("error", "Background check: " + str(error)[:600])
             stop.wait(1)

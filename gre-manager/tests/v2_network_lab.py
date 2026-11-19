@@ -20,7 +20,7 @@ from panel.model import DEFAULTS
 from panel.store import Paths, atomic_json
 from panel.v2_config import normalize_group
 from panel.v2_forwarding import topology_views, with_ssh_protection
-from panel.v2_forwarding import gre_link, health_signature
+from panel.v2_forwarding import BOOT_ID, gre_link, health_signature
 from panel.v2_health import Watchdog, link_responses, transition
 
 
@@ -73,6 +73,33 @@ def hold(address):
         print(exchange(sock, b"before"), flush=True)
         assert sys.stdin.readline() == "continue\n"
         print(exchange(sock, b"after"), flush=True)
+
+
+def aggregate_udp(address):
+    with ExitStack() as stack:
+        sockets = [stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) for _ in range(24)]
+        for sock in sockets:
+            sock.connect((address, 5100))
+            sock.setblocking(False)
+        markers = set()
+        payload = b"x" * 1024
+        total = 0
+        started = time.monotonic()
+        sent = 0
+        while time.monotonic() - started < 7:
+            with suppress(BlockingIOError):
+                sockets[sent % len(sockets)].send(payload)
+            sent += 1
+            readable = select.select(sockets, [], [], .001)[0]
+            for ready in readable:
+                with suppress(BlockingIOError):
+                    answer = ready.recv(2048)
+                    assert answer[1:] == payload
+                    markers.add(answer[:1].decode())
+                    if time.monotonic() - started >= 3:
+                        total += len(answer)
+            time.sleep(.0006)
+        print(json.dumps({"bytes": total, "members": sorted(markers)}), flush=True)
 
 
 def render(home, node, with_panel):
@@ -164,8 +191,9 @@ def lab(root):
             ],
         }
 
-    def apply(listeners, health=None, selection="weighted"):
-        group = normalize_group({"id": group_id, "name": "Namespace acceptance", "listeners": listeners, "selection": selection})
+    def apply(listeners, health=None, selection="weighted", limits=None):
+        group = normalize_group({"id": group_id, "name": "Namespace acceptance", "listeners": listeners,
+                                 "selection": selection, **({"limits": limits} if limits else {})})
         state = {"groups": {group_id: {"active": True, "revision": 1, "owner": owner, "group": group}},
                  "operations": {}, "health": health or {}}
         for name, (_, node) in nodes.items():
@@ -285,7 +313,7 @@ def lab(root):
                                         capture_output=True).stdout)
             identity = group_id + ":" + member["id"]
             evidence[identity] = dict(transition(evidence.get(identity), sample, time_value), revision=1,
-                                      path=health_signature(owner, compiled, member))
+                                      path=health_signature(owner, compiled, member), boot_id=BOOT_ID)
             return sample
 
         for index in (0, 1):
@@ -308,6 +336,14 @@ def lab(root):
             assert exchanges("gm-ir", 3) == ({"1": 3} if elapsed < 50 else {"0": 3})
         print("v2 payload health separated ICMP and service failure, failed over and returned after the stability window.", flush=True)
 
+        weighted = listener("gm-ir", services, "direct", [1, 1, 1, 1])
+        for direction in ("up", "down"):
+            apply([weighted], limits={direction: 1})
+            measured = json.loads(command(*namespace("gm-client", "aggregate", nodes["gm-ir"][0]), capture_output=True).stdout)
+            assert set(measured["members"]) == {"0", "1", "2", "3"}, measured
+            assert 210000 < measured["bytes"] < 610000, (direction, measured)
+            print(f"v2 four destinations shared the 1 Mbps {direction} aggregate: {measured['bytes']} bytes over 4 seconds.", flush=True)
+
 
 if __name__ == "__main__":
     action, *args = sys.argv[1:]
@@ -321,6 +357,8 @@ if __name__ == "__main__":
         sample(args[0], int(args[1]), args[2] == "udp")
     elif action == "hold":
         hold(*args)
+    elif action == "aggregate":
+        aggregate_udp(*args)
     elif action == "link-respond":
         link = json.loads(args[0])
         print("ready", flush=True)

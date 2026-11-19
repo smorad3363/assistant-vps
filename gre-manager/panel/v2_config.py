@@ -1,7 +1,7 @@
 """Validation and local listener claims for the v2 topology."""
 from collections import defaultdict
 
-from .model import DEFAULTS, PanelError, address, connection, integer, port_ranges, ranges_for
+from .model import DEFAULTS, PanelError, address, bandwidth_limits, connection, integer, port_ranges, ranges_for
 from .transactions import identity, overlaps
 from .v2_forwarding import segments
 
@@ -13,12 +13,31 @@ def enabled(value):
 
 
 def listener_profile(listener, settings, service_ip):
-    keys = ("protocols", "ports", "target_port", "port_map", "exclude_ports")
+    keys = ("protocols", "ports", "target_port", "port_map", "exclude_ports", "port_limits")
     profile = {key: listener[key] for key in keys if key in listener}
     return connection(
         dict(profile, kind="direct", listen_ip=listener["ip"], target_host=service_ip),
         settings, resolver=lambda ip: ip,
     )
+
+
+def link_settings(raw):
+    if not isinstance(raw, dict) or set(raw) - {"ingress", "destination"}:
+        raise PanelError("Configure GRE link settings on either side.", field="link_settings")
+    result = {}
+    for side, values in raw.items():
+        if not isinstance(values, dict) or set(values) - {"mtu", "mss", "mss_mode"}:
+            raise PanelError("Provide MTU and MSS settings for the link.", field="link_settings")
+        mode = values.get("mss_mode", "mtu")
+        if mode not in ("mtu", "pmtu", "manual", "off"):
+            raise PanelError("Choose an MSS mode.", field="mss_mode")
+        settings = {"mss_mode": mode}
+        if "mtu" in values:
+            settings["mtu"] = integer(values["mtu"], 576, 1476, "mtu")
+        if mode == "manual":
+            settings["mss"] = integer(values.get("mss"), 64, 1436, "mss")
+        result[side] = settings
+    return result
 
 
 def normalize_group(raw):
@@ -35,6 +54,8 @@ def normalize_group(raw):
         raise PanelError("Provide 1..128 listeners.")
     result = {"id": identity(raw.get("id"), group=True), "name": name, "selection": selection,
               "enabled": enabled(raw.get("enabled", True)), "listeners": []}
+    if "limits" in raw:
+        result["limits"] = bandwidth_limits(raw["limits"])
     neutral = dict(DEFAULTS, port=22)
     used = set()
     edges = defaultdict(set)
@@ -83,6 +104,12 @@ def normalize_group(raw):
                 "priority": integer(member.get("priority", 0), 0, 1000, "priority"),
                 "enabled": is_enabled, "draining": draining,
             })
+            if "limits" in member:
+                normalized_members[-1]["limits"] = bandwidth_limits(member["limits"])
+            if "link_settings" in member:
+                if method != "gre":
+                    raise PanelError("Only GRE has link MTU and MSS settings.", field="link_settings")
+                normalized_members[-1]["link_settings"] = link_settings(member["link_settings"])
         first = normalized_members[0]
         profile = listener_profile(dict(listener, ip=listen_ip), neutral, first["service_ip"])
         result["listeners"].append({
@@ -93,6 +120,10 @@ def normalize_group(raw):
         })
         if listener.get("watch_link") is not None:
             result["listeners"][-1]["watch_link"] = enabled(listener["watch_link"])
+        if "limits" in listener:
+            result["listeners"][-1]["limits"] = bandwidth_limits(listener["limits"])
+        if "port_limits" in listener:
+            result["listeners"][-1]["port_limits"] = profile["port_limits"]
         probe = listener.get("probe")
         if probe is not None:
             if not isinstance(probe, dict) or probe.get("protocol") not in profile["protocols"]:

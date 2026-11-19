@@ -12,6 +12,7 @@ import time
 
 from .model import PanelError, ranges_for
 from .v2_forwarding import LINK_PROBE_PROTOCOL, checks_admission, gre_link, health_signature
+from .v2_resources import admission_pressure, boot_id, pressure_file
 
 PROBE_REQUEST = b"gremgr2?"
 PROBE_REPLY = b"gremgr2!"
@@ -130,6 +131,7 @@ class Watchdog:
         self.management, self.clock = management, clock
         self.peer_links = {}
         self.offset = 0
+        self.boot_id = boot_id()
         self.management_pool = None
         self.management_lock = threading.Lock()
         self.management_checks = {}
@@ -220,7 +222,9 @@ class Watchdog:
             current, _ = self.paths(state)
             before = copy.deepcopy(state)
             health = state.setdefault("health", {})
-            changed = False
+            settings = self.config()["settings"]
+            was_busy = pressure_file(self.participant.paths).exists()
+            changed = admission_pressure(settings, was_busy) != was_busy
             for key in list(health):
                 if key not in current:
                     del health[key]
@@ -230,10 +234,10 @@ class Watchdog:
                 record, listener, member = targets[key]
                 previous = health.get(key, {})
                 path = health_signature(record["owner"], listener, member)
-                if previous.get("path") != path:
+                if previous.get("path") != path or previous.get("boot_id") != self.boot_id:
                     previous = {}
                 following = transition(previous, sample, self.clock())
-                health[key] = dict(following, path=path, revision=record["revision"])
+                health[key] = dict(following, path=path, revision=record["revision"], boot_id=self.boot_id)
                 if checks_admission(listener, member) and previous.get("available", False) != following["available"]:
                     changed = True
             if changed:

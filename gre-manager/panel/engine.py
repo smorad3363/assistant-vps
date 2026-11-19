@@ -16,10 +16,13 @@ import uuid
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
 from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology, require_ssh_protection
+from .v2_resources import admission_pressure, pressure_file
 
-CHAINS = {"nat": ["GMP_PRE", "GMP_POST", "GMP_LOCAL"], "filter": ["GMP_FWD", "GMP_INPUT", "GMP_COUNT"], "mangle": ["GMP_MSS"]}
+CHAINS = {"nat": ["GMP_PRE", "GMP_POST", "GMP_LOCAL"], "filter": ["GMP_FWD", "GMP_INPUT", "GMP_COUNT"],
+          "mangle": ["GMP_MSS", "GMP_MSS_LOCAL"]}
 HOOKS = [("nat", "PREROUTING", "GMP_PRE"), ("nat", "POSTROUTING", "GMP_POST"), ("nat", "INPUT", "GMP_LOCAL"),
-         ("filter", "FORWARD", "GMP_FWD"), ("filter", "INPUT", "GMP_INPUT"), ("mangle", "FORWARD", "GMP_MSS")]
+         ("filter", "FORWARD", "GMP_FWD"), ("filter", "INPUT", "GMP_INPUT"), ("mangle", "FORWARD", "GMP_MSS"),
+         ("mangle", "OUTPUT", "GMP_MSS_LOCAL")]
 
 
 def run(*args, check=True, timeout=20, input=None):
@@ -142,14 +145,14 @@ def build_rules(config, interfaces, docker_udp=False):
         if panel_enabled:
             add("filter", "GMP_INPUT", "-i", interfaces[ip], "-d", ip, "-p", "tcp", "--dport", config["settings"]["port"], "-j", "ACCEPT")
 
-    def limiter(base, identity, direction, speed, port="all"):
+    def limiter(base, identity, direction, speed, port="all", minimum=1000):
         if not speed:
             return
         # Byte-rate policing is confined to this flow. No host qdisc is replaced.
-        per_second = max(1000, int(speed * 1000000 / 8))
-        # xt_hashlimit requires a byte burst at least as large as one second's
-        # rate. Keep it explicit in bytes and never replace the host qdisc.
-        burst = max(2048, per_second)
+        per_second = max(minimum, int(speed * 1000000 / 8))
+        # Older xt_hashlimit rounds the encoded rate up before checking the
+        # burst. Leave room for that quantization while keeping the same rate.
+        burst = max(2048, per_second + 1024)
         rate_name = f"gm{identity}{direction[0]}{port}"[:30]
         add("filter", "GMP_FWD", *base, "-m", "hashlimit", "--hashlimit-above", f"{per_second}b/s",
             "--hashlimit-burst", str(burst) + "b", "--hashlimit-name", rate_name, "--hashlimit-htable-expire", "1000",
@@ -243,7 +246,7 @@ def build_rules(config, interfaces, docker_udp=False):
             for switch in ("-i", "-o"):
                 add("mangle", "GMP_MSS", switch, device, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
                     "-j", "TCPMSS", "--set-mss", c["mtu"] - 40)
-    add_listener_rules(add, config, interfaces)
+    add_listener_rules(add, config, interfaces, limiter)
     return tables
 
 
@@ -371,9 +374,14 @@ class Engine:
     def _apply(self, config, previous):
         previous = installed_topology(self.paths, previous) if previous is not None else None
         config = installed_topology(self.paths, config)
+        marker = pressure_file(self.paths)
+        was_busy = marker.exists()
+        busy = admission_pressure(config["settings"], was_busy)
+        config = dict(config, v2_conntrack_busy=busy)
         require_ssh_protection(config, previous)
         interfaces = self.preflight(config)
         previous = previous or dict(config, connections=[], v2_listeners=[], v2_devices=[])
+        previous = dict(previous, v2_conntrack_busy=was_busy)
         old_gre = {g["tunnel"]: g for g in self.gre_devices(previous)}
         try:
             for g in self.gre_devices(config):
@@ -396,6 +404,10 @@ class Engine:
         for name, g in old_gre.items():
             if name not in wanted:
                 self.remove_gre(g)
+        if busy:
+            marker.touch()
+        else:
+            marker.unlink(missing_ok=True)
 
     def sync_reply_routes(self, config, interfaces):
         for c in config["connections"]:

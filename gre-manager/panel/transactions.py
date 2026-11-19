@@ -83,6 +83,7 @@ def overlaps(left, right):
 
 class Participant:
     def __init__(self, paths, node_id, claims, clock=time.time, materialize=None):
+        self.paths = paths
         self.journal = Journal(paths.var / "v2-participant.json")
         self.network_lock = paths.etc / "network.lock"
         self.node_id = node_id
