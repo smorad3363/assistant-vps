@@ -212,10 +212,23 @@ Specify the outer IPv4 address on both ends and allow protocol 47 between
 those addresses. Use an inner MTU with at least 42 bytes of underlay headroom.
 The EoIP task stops with its member and the kernel releases its TAP interface.
 
-Under Settings → Path test, select two paired nodes and their outer IPv4
-addresses. The preview shows the effective time and volume budget. The test
-prepares a separate GRE or IPIP link and measures two TCP streams over that
-link in each direction. A 37-second test transfers for 18 seconds from A to
+L2TPv2 / PPP requires `xl2tpd`, `pppd` and kernel PPP support on both Linux
+hosts. Choose the LAC side and a separate UDP port on each host. Store the
+same 32-byte hex secret in a root-owned mode-0600 file on each host under
+`/etc/gremgr/ppp-credentials/`. Enter only those local file names in the
+panel. The two daemons use a private PPP configuration and assign addresses
+for the link. This mode carries unencrypted L2TPv2 traffic on its underlay.
+
+Static L2TPv3 uses an Ethernet pseudowire over UDP and a dedicated tunnel ID,
+session ID and port on each host. The panel reverses local and peer settings
+between the two ends and limits the carrier rule to the configured session.
+If another administrator attaches a session to the same kernel tunnel, the
+panel removes its own session and leaves the adjacent session and tunnel in place.
+
+In Path test, select two paired nodes and their outer IPv4 addresses. The
+preview shows the effective time and volume budget. The test prepares a
+separate GRE, IPIP or SIT link and measures two TCP streams over that link
+in each direction. A 37-second test transfers for 18 seconds from A to
 B and 19 seconds from B to A. Preparation is separate from that duration.
 
 Every method reports delivered application bytes and the fastest complete
@@ -223,8 +236,19 @@ second observed at a receiver. Parallel methods share the effective host
 rate and total volume budget. The default ceiling is 100 Mbps and 1 GB, with
 the rate reduced to respect a lower configured host policy. Cancelling
 requests cleanup on both nodes. After a restart, saved receipts remain
-available and active leases expire without replaying traffic. An IPIP test
-requires an outer endpoint pair free of another IPIP device.
+available and active leases expire without replaying traffic. IPIP and SIT
+tests require an outer endpoint pair free of another device of that
+type. The SIT test carries TCP over temporary inner IPv6 addresses.
+
+For a persistent SIT / 6in4 link, create a separate listener using SIT
+members. Select the two outer IPv4 endpoints and two distinct inner IPv6
+addresses in the same /64 to /126 subnet. IPv6 must be enabled on both hosts
+and on new interfaces. Use an MTU of at least 1280. Applications reach the
+other host at its inner IPv6 address, subject to its existing IPv6 firewall.
+Use a group without a shared rate limit. Service forwarding limits and member
+drain apply to the IPv4 forwarding methods.
+To replace inner addresses on the same outer pair, stop the member before
+changing its configuration.
 
 For a VXLAN member, select the outer IPv4 address at each end, set the VNI and
 choose a shared UDP destination port (4789 by default). Separate VNIs can share
@@ -233,6 +257,10 @@ Ethernet segment with a fixed remote endpoint and MAC learning disabled. Use
 an MTU that is at least 50 bytes below the underlying interface MTU. If the
 host already runs a separate VXLAN or another UDP service on the port, use a
 different UDP port for the panel's links.
+
+GENEVE members also carry Ethernet between two IPv4 endpoints. Both sides use
+the same VNI and UDP destination port (6081 by default). On each node, select
+the source address that the kernel route to its peer would use.
 
 The direct-forwarding feature was informed by the behavior requested from
 [IPTABLE-Tunnel-multi-port](https://github.com/azavaxhuman/IPTABLE-Tunnel-multi-port).

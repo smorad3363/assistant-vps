@@ -85,7 +85,9 @@ class EoIP:
             identity = link["outer_local"], link["outer_peer"], link["eoip_id"]
             if identities.setdefault(identity, link["tunnel"]) != link["tunnel"]:
                 raise PanelError("Choose a different EoIP ID for this endpoint pair.", "device_conflict", "eoip")
-            device = interfaces[link["outer_local"]]
+            device = interfaces.get(link["outer_local"])
+            if not device:
+                raise PanelError("The selected EoIP source address is unavailable.", "local_ip", "outer_ip")
             outer = json.loads(run("ip", "-j", "link", "show", "dev", device).stdout)[0]
             if link["mtu"] + self.overhead > outer["mtu"]:
                 raise PanelError("Lower the EoIP MTU to fit the underlay.", "link_policy", "mtu")
