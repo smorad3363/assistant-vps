@@ -207,6 +207,13 @@ GRETAP members use a separate Ethernet interface to carry IPv4 between the
 two configured outer addresses. The panel generates matching keys on both
 ends unless a key is supplied. The link stays separate from the WAN bridge.
 
+L2TPv2 / PPP requires `xl2tpd`, `pppd` and kernel PPP support on both Linux
+hosts. Choose the LAC side and a separate UDP port on each host. Store the
+same 32-byte hex secret in a root-owned mode-0600 file on each host under
+`/etc/gremgr/ppp-credentials/`. Enter only those local file names in the
+panel. The two daemons use a private PPP configuration and assign addresses
+for the link. This mode carries unencrypted L2TPv2 traffic on its underlay.
+
 Under Settings → Path test, select two paired nodes and their outer IPv4
 addresses. The preview shows the effective time and volume budget. The test
 prepares a separate GRE or IPIP link and measures two TCP streams over that

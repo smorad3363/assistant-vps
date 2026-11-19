@@ -427,7 +427,7 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs, keyed_pairs, vxlan, wg_links = {}, {}, [], []
+        unkeyed_pairs, keyed_pairs, vxlan, wg_links, ppp_links = {}, {}, [], [], []
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
@@ -437,6 +437,8 @@ class Engine:
                 vxlan.append(link)
             if link.get("method") == "wireguard":
                 wg_links.append(link)
+            if link.get("method") == "l2tpv2":
+                ppp_links.append(link)
             if link.get("method") == "gretap":
                 key = link["outer_local"], link["outer_peer"], link["key"]
                 if keyed_pairs.setdefault(key, link)["tunnel"] != link["tunnel"]:
@@ -458,8 +460,13 @@ class Engine:
                     raise PanelError("An existing GRETAP interface uses that endpoint pair and key.", "device_conflict", "key")
         self.check_vxlan(vxlan, interfaces)
         self.check_wireguard(wg_links, interfaces)
-        if {x["listen_port"] for x in vxlan} & {x["listen_port"] for x in wg_links}:
-            raise PanelError("VXLAN and WireGuard require different UDP ports on this node.", "device_conflict", "port")
+        if ppp_links:
+            driver_for(ppp_links[0]).check(ppp_links, interfaces, self.paths, self.run)
+        carriers = [*vxlan, *wg_links, *ppp_links]
+        port_methods = {}
+        for link in carriers:
+            if port_methods.setdefault(link["listen_port"], link["method"]) != link["method"]:
+                raise PanelError("Different UDP tunnel types require separate ports on this node.", "device_conflict", "port")
         for c in forwarding:
             if not c.get("enabled", True):
                 continue
@@ -469,7 +476,7 @@ class Engine:
             if c["kind"] == "direct" and c["resolved_ip"] in interfaces:
                 raise PanelError("A direct destination cannot be the input server itself.", "loop")
         existing = self.run("iptables-save", "-t", "nat").stdout
-        for link in [*vxlan, *wg_links]:
+        for link in carriers:
             if external_carrier_forward(existing, link, interfaces[link["outer_local"]]):
                 raise PanelError("An external port forward already handles this tunnel endpoint.", "external_conflict", "port")
         for line in existing.splitlines():
@@ -503,6 +510,9 @@ class Engine:
     def ensure_gre(self, g, interfaces):
         driver = driver_for(g)
         interface = interfaces[g["outer_local"]]
+        if driver.method == "l2tpv2":
+            driver.configure(g, self.paths, self.run)
+            return
         self.run("modprobe", driver.module, check=False)
         row = self.inspect_link(g, driver)
         stage = self.staging_path(g) if getattr(driver, "staged_marker", False) else None
@@ -625,7 +635,10 @@ class Engine:
                     self.remove_gre(g)
             raise
         wanted = {g["tunnel"] for g in self.gre_devices(config)}
-        for name, g in old_gre.items():
+        retired = dict(old_gre)
+        for snapshot in (previous, config):
+            retired.update((link["tunnel"], link) for link in snapshot.get("v2_unavailable_devices", []))
+        for name, g in retired.items():
             if name not in wanted:
                 self.remove_gre(g)
         if busy:
@@ -638,6 +651,8 @@ class Engine:
             if c["kind"] != "peer" or not c.get("enabled", True):
                 continue
             g = c["gre"]
+            if g.get("method") == "l2tpv2":
+                continue
             source = c["service_ip"] if c["service_ip"] in interfaces else g["local_tun"]
             # Changes only the host route created for our own GRE address.
             # Public service-address routes and the default route are untouched.
@@ -659,6 +674,9 @@ class Engine:
     def remove_gre(self, g):
         # Verify ownership even on deletion. Never deletes an arbitrary name.
         driver = driver_for(g)
+        if driver.method == "l2tpv2":
+            driver.remove(g, self.paths, self.run)
+            return
         row = self.inspect_link(g, driver)
         if row and self.owns_link(g, row):
             self.run(*driver.delete(g))

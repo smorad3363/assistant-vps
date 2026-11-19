@@ -4,6 +4,7 @@ set -euo pipefail
 [[ "${GITHUB_ACTIONS:-}" == true ]]
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 lab=$(mktemp -d)
+method=${GREMGR_REBOOT_METHOD:-gre}
 suffix=${lab: -5}
 bridge=gmb${suffix}
 taps=()
@@ -85,9 +86,15 @@ ready() {
 }
 
 install_side() {
-  local side=$1 port=$2 mac address
+  local side=$1 port=$2 mac address attempt status
   read -r mac address <"$lab/$side/link"
-  guest "$port" sudo cloud-init status --wait
+  for ((attempt=1; attempt<=6; attempt++)); do
+    status=0
+    guest "$port" sudo cloud-init status --wait || status=$?
+    if ((status != 255)); then break; fi
+    sleep 3
+  done
+  ((status == 0))
   tar -C "$repo" -cf - gre-manager | guest "$port" tar -xf -
   guest "$port" sudo bash -s -- "$mac" "$address" <<'GUEST'
 set -euo pipefail
@@ -120,12 +127,17 @@ systemctl enable --now gremgr-fixture-network.service
 env GRE_PANEL_SKIP_ACME=1 bash /home/fixture/gre-manager/install.sh --source-dir /home/fixture/gre-manager
 systemctl is-active gremgr-worker.service
 GUEST
+  if [[ $method == l2tpv2 ]]; then
+    guest "$port" 'sudo apt-get update -qq && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xl2tpd ppp'
+    guest "$port" 'sudo install -d -m 700 /etc/gremgr/ppp-credentials && sudo install -m 600 /dev/stdin /etc/gremgr/ppp-credentials/lab' <"$lab/ppp-secret"
+  fi
 }
 
 start_vm in 25222 25251 52:54:00:32:60:01 198.51.100.50
 start_vm out 25223 '' 52:54:00:32:60:02 198.51.100.51
 boot_in=$(ready 25222)
 boot_out=$(ready 25223)
+if [[ $method == l2tpv2 ]]; then openssl rand -hex 32 >"$lab/ppp-secret"; fi
 install_side in 25222 &
 setup_in=$!
 install_side out 25223 &
@@ -158,7 +170,6 @@ GUEST
 node() {
   guest "$1" 'cd /opt/gremgr/current && sudo python3 -c "from panel.store import Paths, topology_node_id; print(topology_node_id(Paths()))"'
 }
-method=${GREMGR_REBOOT_METHOD:-gre}
 owner=$(node 25222)
 receiver=$(node 25223)
 PYTHONPATH="$repo/gre-manager" python3 - "$owner" "$receiver" "$method" >"$lab/change.json" <<'PY'
@@ -167,10 +178,14 @@ from panel.v2_config import normalize_group
 src, dst, method = sys.argv[1:]
 def identity(): return uuid.uuid4().hex
 group_id = identity()
+member = {"id": identity(), "node_id": dst, "method": method, "service_ip": "198.51.100.51",
+          "outer_ip": "198.51.100.51", "mtu": 1280}
+if method == "l2tpv2":
+    member["l2tpv2"] = {"lac": "ingress", "ingress": {"port": 37401, "credential": "lab"},
+                       "destination": {"port": 37402, "credential": "lab"}}
 group = normalize_group({"id": group_id, "name": method.upper() + " reboot", "limits": {"up": 10, "down": 20}, "listeners": [{
     "id": identity(), "node_id": src, "ip": "10.0.2.15", "outer_ip": "198.51.100.50", "protocols": ["tcp"],
-    "ports": "all", "port_map": {"5100": 25244}, "members": [{"id": identity(), "node_id": dst, "method": method,
-    "service_ip": "198.51.100.51", "outer_ip": "198.51.100.51", "mtu": 1280}],
+    "ports": "all", "port_map": {"5100": 25244}, "members": [member],
 }]})
 print(json.dumps({"id": identity(), "owner": src, "group_id": group_id, "group": group, "expected_revision": 0,
                   "participants": [dst, src], "joining": [dst]}))
@@ -210,6 +225,9 @@ guest 25223 sudo systemctl reboot || true
 ready 25222 "$boot_in" >/dev/null
 ready 25223 "$boot_out" >/dev/null
 verify_restored
+if [[ $method == l2tpv2 ]]; then
+  for port in 25222 25223; do guest "$port" ip -o -4 addr show | grep -Eq 'p2-[0-9a-f]{12} .* peer '; done
+fi
 guest 25222 sudo iptables-save -t filter >"$lab/restored-filter"
 python3 - "$lab/restored-filter" <<'PY'
 import re, sys

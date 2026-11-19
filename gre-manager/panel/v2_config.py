@@ -1,5 +1,6 @@
 """Validation and local listener claims for the v2 topology."""
 from collections import defaultdict
+import re
 
 from .model import DEFAULTS, PanelError, address, bandwidth_limits, connection, integer, port_ranges, ranges_for
 from .transactions import identity, overlaps
@@ -11,6 +12,21 @@ def enabled(value):
     if type(value) is not bool:
         raise PanelError("The enabled flag must be true or false.", field="enabled")
     return value
+
+
+def l2tpv2_settings(value):
+    if not isinstance(value, dict) or set(value) != {"lac", "ingress", "destination"} or value["lac"] not in ("ingress", "destination"):
+        raise PanelError("Select the LAC role and configure both L2TPv2 endpoints.", field="l2tpv2")
+    cooked = {"lac": value["lac"]}
+    for side in ("ingress", "destination"):
+        endpoint = value[side]
+        if not isinstance(endpoint, dict) or set(endpoint) != {"port", "credential"}:
+            raise PanelError("Provide a UDP port and local credential reference for each end.", field="l2tpv2")
+        name = endpoint["credential"]
+        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,48}", name):
+            raise PanelError("Use a local PPP credential name of up to 48 letters, digits, dashes or underscores.", field="credential")
+        cooked[side] = {"port": integer(endpoint["port"], 1024, 65535, "port"), "credential": name}
+    return cooked
 
 
 def listener_profile(listener, settings, service_ip):
@@ -136,6 +152,8 @@ def normalize_group(raw):
                                                    "port": integer(parameters.get("port", 4789), 1, 65535, "port")}
             if method == "wireguard":
                 normalized_members[-1]["wireguard"] = wireguard_settings(member.get("wireguard"))
+            if method == "l2tpv2":
+                normalized_members[-1]["l2tpv2"] = l2tpv2_settings(member.get("l2tpv2"))
             if method == "gretap":
                 settings = member.get("gretap", {})
                 if not isinstance(settings, dict) or set(settings) - {"key"}:

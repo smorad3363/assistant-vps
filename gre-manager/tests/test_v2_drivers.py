@@ -11,13 +11,34 @@ from unittest.mock import patch
 from panel.engine import Engine, build_rules, external_carrier_forward, udp_carrier_matches
 from panel.model import DEFAULTS, PanelError
 from panel.store import Paths
-from panel.v2_config import normalize_group
+from panel.v2_config import l2tpv2_settings, normalize_group
 from panel.v2_drivers import driver_for, local_wireguard_key
 from panel.v2_forwarding import gre_link, topology_views
 from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_l2tpv2_uses_distinct_roles_and_scopes_public_and_inner_traffic(self):
+        settings = {"lac": "destination", "ingress": {"port": 37401, "credential": "in-lab"},
+                    "destination": {"port": 37402, "credential": "out-lab"}}
+        group = data([{"id": key(4), "node_id": key(5), "method": "l2tpv2", "service_ip": "203.0.113.20", "l2tpv2": settings}])
+        listener = group["listeners"][0]
+        member = listener["members"][0]
+        first, second = (gre_link(key(3), listener, member, receiving=side) for side in (False, True))
+        self.assertFalse(first["lac"])
+        self.assertTrue(second["lac"])
+        self.assertEqual(first["peer_tun"], second["local_tun"])
+        self.assertEqual(driver_for(first).firewall(first), ["-p", "udp", "--sport", 37402, "--dport", 37401])
+        state = {"groups": {group["id"]: {"active": True, "owner": key(3), "group": group}}, "operations": {}}
+        config = {"settings": DEFAULTS, "connections": []}
+        view = topology_views(config, state, key(3))
+        rules = build_rules(view, {"192.0.2.10": "eth0", "192.0.2.11": "eth0"})
+        self.assertTrue(any(rule[-7:] == ["-d", first["peer_tun"], "!", "-o", first["tunnel"], "-j", "DROP"]
+                            for rule in rules["filter"]["GMP_FWD"]))
+        for ref in ("../chap", "/temp/file", "a\npassword", "", 42):
+            with self.subTest(ref=ref), self.assertRaises(PanelError):
+                l2tpv2_settings(dict(settings, ingress={"port": 37401, "credential": ref}))
+
     def test_vxlan_falls_back_to_kernel_text_when_detailed_json_is_malformed(self):
         driver = driver_for({"method": "vxlan"})
         def tool(*args, **kwargs):
