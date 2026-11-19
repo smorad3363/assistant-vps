@@ -111,6 +111,13 @@ def gre_for(c):
     return result
 
 
+def restore_token(value):
+    """Render an argument for iptables-restore's double-quoted rules format."""
+    if value and not any(letter.isspace() or letter in '\"\\' for letter in value):
+        return value
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
 def match_port(low, high):
     return str(low) if low == high else f"{low}:{high}"
 
@@ -574,8 +581,7 @@ class Engine:
             lines += ["-F " + name for name in chains]
             for name, rules in chains.items():
                 # iptables-restore parses a rules file, not a shell command.
-                # Inversion must remain a bare token; shlex.join quotes '!'.
-                lines += ["-A " + name + " " + " ".join("!" if x == "!" else shlex.quote(x) for x in rule) for rule in rules]
+                lines += ["-A " + name + " " + " ".join(map(restore_token, rule)) for rule in rules]
             lines.append("COMMIT")
             self.run("iptables-restore", "-w", "10", "--noflush", input="\n".join(lines) + "\n")
         for table, parent, own in HOOKS:
