@@ -207,6 +207,20 @@ GRETAP members use a separate Ethernet interface to carry IPv4 between the
 two configured outer addresses. The panel generates matching keys on both
 ends unless a key is supplied. The link stays separate from the WAN bridge.
 
+Under Settings → Path test, select two paired nodes and their outer IPv4
+addresses. The preview shows the effective time and volume budget. The test
+prepares a separate GRE or IPIP link and measures two TCP streams over that
+link in each direction. A 37-second test transfers for 18 seconds from A to
+B and 19 seconds from B to A. Preparation is separate from that duration.
+
+Every method reports delivered application bytes and the fastest complete
+second observed at a receiver. Parallel methods share the effective host
+rate and total volume budget. The default ceiling is 100 Mbps and 1 GB, with
+the rate reduced to respect a lower configured host policy. Cancelling
+requests cleanup on both nodes. After a restart, saved receipts remain
+available and active leases expire without replaying traffic. An IPIP test
+requires an outer endpoint pair free of another IPIP device.
+
 For a VXLAN member, select the outer IPv4 address at each end, set the VNI and
 choose a shared UDP destination port (4789 by default). Separate VNIs can share
 a GRE Manager UDP socket. Each device carries IPv4 packets over its own

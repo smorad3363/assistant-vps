@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import subprocess
 import time
@@ -359,11 +360,12 @@ class Engine:
             if port not in ports:
                 continue
             expected = identifiers.get((port, data.get("id")))
-            if expected and (row.get("ifname") != expected["tunnel"] or not driver_for(expected).owns(expected, row)):
+            if expected and (row.get("ifname") != expected["tunnel"] or not self.owns_link(expected, row)):
                 raise PanelError("An existing VXLAN interface uses the requested VNI and UDP port.", "device_conflict", "vni")
             if expected and (data.get("link") != interfaces[expected["outer_local"]] or data.get("learning") is not False):
                 raise PanelError("The VXLAN underlay or learning setting was changed outside the panel.", "device_conflict", "outer_ip")
-            if not row.get("ifalias", "").startswith("gremgr:v2:"):
+            managed = expected and self.owns_link(expected, row)
+            if not managed and not row.get("ifalias", "").startswith("gremgr:v2:"):
                 raise PanelError("An existing VXLAN interface already uses this UDP port.", "device_conflict", "port")
             kernel_ports.add(port)
         unused = ports - kernel_ports
@@ -438,14 +440,14 @@ class Engine:
                 for row in json.loads(inspected.stdout):
                     data = row.get("linkinfo", {}).get("info_data", {})
                     link = unkeyed_pairs.get((data.get("local"), data.get("remote")))
-                    if link and (row.get("ifname") != link["tunnel"] or not driver_for(link).owns(link, row)):
+                    if link and (row.get("ifname") != link["tunnel"] or not self.owns_link(link, row)):
                         raise PanelError("An existing IPIP interface uses the requested outer addresses.", "device_conflict")
         if keyed_pairs:
             observed = self.run("ip", "-j", "-d", "link", "show", "type", "gretap").stdout
             for row in json.loads(observed):
                 data = row.get("linkinfo", {}).get("info_data", {})
                 link = keyed_pairs.get((data.get("local"), data.get("remote"), gre_key(data.get("ikey", 0))))
-                if link and (row.get("ifname") != link["tunnel"] or not driver_for(link).owns(link, row)):
+                if link and (row.get("ifname") != link["tunnel"] or not self.owns_link(link, row)):
                     raise PanelError("An existing GRETAP interface uses that endpoint pair and key.", "device_conflict", "key")
         self.check_vxlan(vxlan, interfaces)
         self.check_wireguard(wg_links, interfaces)
@@ -496,9 +498,14 @@ class Engine:
         interface = interfaces[g["outer_local"]]
         self.run("modprobe", driver.module, check=False)
         row = self.inspect_link(g, driver)
+        stage = self.staging_path(g) if getattr(driver, "staged_marker", False) else None
         if row:
-            if not driver.owns(g, row):
+            if not self.owns_link(g, row):
                 raise PanelError("Another program owns this tunnel interface.", "device_conflict")
+            if stage:
+                if not row.get("ifalias"):
+                    self.run("ip", "link", "set", "dev", g["tunnel"], "alias", driver.marker(g))
+                stage.unlink(missing_ok=True)
             refresh = driver.refresh(g, row.get("linkinfo", {}), interface)
             if refresh:
                 self.run(*refresh)
@@ -506,7 +513,14 @@ class Engine:
             for route in json.loads(self.run("ip", "-j", "-4", "route", "show").stdout):
                 if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
                     raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
-            self.run(*driver.create(g, interface))
+            create = driver.create(g, interface)
+            if stage:
+                suffix = secrets.token_hex(5)
+                mac = "02:" + ":".join(suffix[i:i + 2] for i in range(0, len(suffix), 2))
+                atomic_json(stage, {"id": g["id"], "mac": mac})
+                position = create.index("type")
+                create[position:position] = ["address", mac]
+            self.run(*create)
             marker = driver.marker(g)
             if marker:
                 try:
@@ -515,11 +529,29 @@ class Engine:
                     with contextlib.suppress(PanelError):
                         self.run(*driver.delete(g))
                     raise
+            if stage:
+                stage.unlink(missing_ok=True)
         if driver.method == "wireguard":
             driver.configure(g, self.paths, self.run)
         self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
         self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
         self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
+
+    def staging_path(self, link):
+        return self.paths.var / "link-staging" / (link["tunnel"] + ".json")
+
+    def owns_link(self, link, row):
+        driver = driver_for(link)
+        if driver.owns(link, row):
+            return True
+        if row.get("ifalias") or not getattr(driver, "staged_marker", False):
+            return False
+        try:
+            saved = json.loads(self.staging_path(link).read_text())
+        except (OSError, ValueError):
+            return False
+        return (saved.get("id") == link["id"] and saved.get("mac") == row.get("address")
+                and bool(saved.get("mac")) and driver.owns(link, dict(row, ifalias=driver.marker(link))))
 
     def inspect_link(self, link, driver):
         if driver.method == "vxlan":
@@ -622,8 +654,10 @@ class Engine:
         # Verify ownership even on deletion. Never deletes an arbitrary name.
         driver = driver_for(g)
         row = self.inspect_link(g, driver)
-        if row and driver.owns(g, row):
+        if row and self.owns_link(g, row):
             self.run(*driver.delete(g))
+            if getattr(driver, "staged_marker", False):
+                self.staging_path(g).unlink(missing_ok=True)
 
     def retire_legacy(self, config):
         """Adopt only matching pair profiles, after their replacement is active."""

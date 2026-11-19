@@ -27,6 +27,8 @@ from .store import Store, atomic_json, check_password
 from .topology import legacy_topology
 from .transactions import Coordinator, fingerprint, identity, overlaps
 from .v2_access import AUTH_ROUTES, Access
+from .v2_bench_agent import configure as configure_benchmark
+from .v2_bench_jobs import Benchmarks
 from .v2_config import managed_nodes, normalize_group, participant_order
 from .v2_forwarding import topology_views
 from .v2_resources import last_metrics
@@ -48,6 +50,7 @@ class Controller:
         self.stats_cache, self.stats_cached_at = None, 0
         self.v2_agent = v2_participant(self.paths, self.engine)
         self.v2_access = Access(self.paths, self.v2_agent.node_id)
+        self.benchmarks = Benchmarks(self.paths, self.dispatch_v2)
         self.v2_coordinator = Coordinator(self.paths, self.dispatch_v2)
         self.v2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="topology-job")
         self.v2_future, self.last_v2_retry = None, 0
@@ -114,6 +117,8 @@ class Controller:
     def participant_request(self, owner, action, change):
         with open(self.paths.etc / "network.lock", "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
+            if isinstance(action, str) and action.startswith("benchmark/"):
+                return configure_benchmark(self.paths, self.engine, owner, action, change)
             return self.v2_agent.request(owner, action, change)
 
     def dispatch_v2(self, node_id, action, change):
@@ -749,7 +754,8 @@ class Controller:
                 return self.v2_access.exchange(payload)
             owner = self.v2_access.trusted_owner(payload, "https")
             return self.participant_request(owner, payload.get("action"), payload.get("change"))
-        reads = ("state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers", "v2/metrics")
+        reads = ("state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers", "v2/metrics",
+                 "v2/benchmark.status")
         session = self.store.session(token, None if route in reads else csrf or "")
         if route == "auth.check":
             return {}
@@ -762,6 +768,16 @@ class Controller:
             return self.v2_group_state()
         if route == "v2/metrics":
             return last_metrics(self.paths)
+        if route == "v2/benchmark.capabilities":
+            return self.benchmarks.capabilities(payload.get("node_id"))
+        if route == "v2/benchmark.plan":
+            return self.benchmarks.plan(payload)
+        if route == "v2/benchmark.start":
+            return self.benchmarks.start(payload)
+        if route == "v2/benchmark.status":
+            return self.benchmarks.status(payload.get("id"))
+        if route == "v2/benchmark.cancel":
+            return self.benchmarks.cancel(payload.get("id"))
         if route == "v2/peers":
             return self.v2_access.peers()
         if route == "v2/jobs":

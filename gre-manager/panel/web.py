@@ -15,9 +15,11 @@ from .v2_access import AUTH_ROUTES
 
 MAX_REQUEST = 48 * 1024 * 1024
 STATIC = Path(__file__).parent / "static"
-GET_ROUTES = {"state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers", "v2/metrics"}
+GET_ROUTES = {"state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers", "v2/metrics",
+              "v2/benchmark.status"}
 POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "v2/migration.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update",
-               "v2/plan", "v2/apply", "v2/pairing.invite", "v2/pairing.connect", "v2/pairing.revoke"} | AUTH_ROUTES
+               "v2/plan", "v2/apply", "v2/pairing.invite", "v2/pairing.connect", "v2/pairing.revoke",
+               "v2/benchmark.capabilities", "v2/benchmark.plan", "v2/benchmark.start", "v2/benchmark.cancel"} | AUTH_ROUTES
 
 
 class RPC:

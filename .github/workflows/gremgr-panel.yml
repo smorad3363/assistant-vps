@@ -52,6 +52,8 @@ jobs:
       - name: Real SSH provisioning and peer recovery
         run: |
           sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/ssh_lab.py
+      - name: Benchmark lease cleanup after cancellation and process death
+        run: sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/bench_systemd_lab.py
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

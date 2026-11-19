@@ -57,6 +57,8 @@ class IPTunnel:
 
 
 class GreTap(IPTunnel):
+    staged_marker = True
+
     def create(self, link, interface):
         return ["ip", "link", "add", "dev", link["tunnel"], "type", self.method,
                 "local", link["outer_local"], "remote", link["outer_peer"], "key", link["key"], "ttl", 64, "dev", interface]
@@ -70,6 +72,11 @@ class GreTap(IPTunnel):
 
     def delete(self, link):
         return ["ip", "link", "del", "dev", link["tunnel"]]
+
+    def firewall(self, link):
+        header = "0>>22&0x3C"
+        match = f"{header}@0&0xF000FFFF=0x20006558 && {header}@4=0x{link['key']:08x}"
+        return ["-p", self.protocol, "-m", "u32", "--u32", match]
 
 
 def wireguard_public_key(value):
@@ -139,6 +146,7 @@ class WireGuard:
 
 class Vxlan:
     method = module = "vxlan"
+    staged_marker = True
     overhead = 50
 
     def create(self, link, interface):
