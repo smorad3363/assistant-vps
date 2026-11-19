@@ -1,6 +1,7 @@
 """Kernel command and ownership contracts for v2 tunnel drivers."""
 import copy
 import base64
+import errno
 import json
 import random
 import ipaddress
@@ -12,15 +13,47 @@ from unittest.mock import patch
 
 from panel.engine import Engine, build_rules, external_carrier_forward, udp_carrier_matches
 from panel.model import DEFAULTS, PanelError
-from panel.store import Paths
+from panel.store import Paths, atomic_json
 from panel.v2_config import normalize_group
 from panel.v2_drivers import driver_for, local_wireguard_key
-from panel.v2_eoip import decode_frame, encode_frame
+from panel.v2_eoip import decode_frame, encode_frame, send_frame
 from panel.v2_forwarding import gre_link, topology_views
 from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_eoip_reconfigures_a_daemon_started_from_an_older_release(self):
+        link = {"id": "f4f8921acb", "tunnel": "e2-f4f8921acb7a", "method": "eoip"}
+        transport = driver_for(link)
+        row = {"ifalias": transport.marker(link), "link_type": "ether", "flags": ["UP"]}
+        calls = []
+
+        def run(*args, **options):
+            calls.append(args)
+            state = f"LoadState=loaded\nTransient=yes\nActiveState=active\nDescription={transport.description(link)}\n"
+            return subprocess.CompletedProcess(args, 0, json.dumps([row]) if args[0] == "ip" else state, "")
+
+        with tempfile.TemporaryDirectory() as root:
+            paths = Paths(root)
+            atomic_json(transport.settings(paths, link), dict(link, interface="eth0", source="/older/release"))
+            transport.configure(link, paths, "eth0", row, run)
+            self.assertIn(("systemctl", "stop", transport.unit(link)), calls)
+            self.assertEqual(sum(cmd[0] == "systemd-run" for cmd in calls), 1)
+            transport.configure(link, paths, "eth0", row, run)
+            self.assertEqual(sum(cmd[0] == "systemd-run" for cmd in calls), 1)
+
+    def test_eoip_does_not_stop_for_a_path_mtu_error(self):
+        class Socket:
+            def send(self, packet):
+                if len(packet) > 1400:
+                    raise OSError(errno.EMSGSIZE, "too large")
+                self.packet = packet
+
+        carrier = Socket()
+        send_frame(carrier, 2800, b"a" * 1500)
+        send_frame(carrier, 2800, b"b" * 1280)
+        self.assertEqual(carrier.packet, encode_frame(2800, b"b" * 1280))
+
     def test_eoip_encoding_and_input_validation(self):
         rng = random.Random(6400)
         local, remote = [ipaddress.IPv4Address(a).packed for a in ("192.0.2.10", "203.0.113.20")]

@@ -349,6 +349,8 @@ def add_listener_rules(add, config, interfaces, limit):
                            "--ctorigdstport", port]
                 routes = {(ip, item["tunnel"] if item else ""): item for ip, item in targets.values()}
                 for (destination, gre), link in sorted(routes.items()):
+                    if link and link.get("method") == "eoip":
+                        add("filter", "GMP_FWD", *tracked, "--ctdir", "ORIGINAL", "-d", destination, "!", "-o", gre, "-j", "DROP")
                     send = ["-o", gre] if link else []
                     receive = ["-i", gre] if link else []
                     snat = ["-j", "SNAT", "--to-source", link["local_tun"]] if link else ["-j", "MASQUERADE"]

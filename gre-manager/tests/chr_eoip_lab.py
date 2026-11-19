@@ -50,9 +50,12 @@ class Router:
         raise AssertionError("RouterOS did not present its operational CLI prompt.")
 
     def call(self, command):
-        self.guest.send(command + "\r")
+        complete = "__gremgr_" + secrets.token_hex(6)
+        self.guest.send(f'{command}; :put "{complete}"\r')
+        self.guest.expect(r"[\r\n]" + complete + r"[\r\n]", timeout=45)
+        result = self.guest.before
         self.guest.expect(PROMPT)
-        return self.guest.before
+        return result
 
     def fetch(self):
         log = self.call(f"/tool/fetch url=http://{INNER_LINUX}:25244/payload output=user")

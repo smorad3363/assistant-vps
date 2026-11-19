@@ -1,5 +1,6 @@
 """Linux TAP adapter for the EoIP GRE version 1 wire format."""
 from contextlib import suppress
+import errno
 import fcntl
 import ipaddress
 import json
@@ -92,7 +93,8 @@ class EoIP:
 
     def configure(self, link, paths, interface, row, run):
         record = self.settings(paths, link)
-        desired = dict(link, interface=interface)
+        source = str(Path(__file__).resolve().parents[1])
+        desired = dict(link, interface=interface, source=source)
         status = self.status(link, run)
         if row and (not status or not self.owns(link, row)):
             raise PanelError("A different interface uses the EoIP link name.", "device_conflict", "eoip")
@@ -104,8 +106,16 @@ class EoIP:
         atomic_json(record, desired)
         run("systemd-run", "--quiet", "--collect", "--unit=" + self.unit(link), "--description=" + self.description(link),
             "--property=Type=notify", "--property=TimeoutStartSec=12", "--property=Restart=on-failure",
-            "--property=RestartSec=3", "--property=WorkingDirectory=" + str(Path(__file__).resolve().parents[1]),
+            "--property=RestartSec=3", "--property=WorkingDirectory=" + source,
             sys.executable, "-m", "panel.v2_eoip", str(record))
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            observed = run("ip", "-j", "link", "show", "dev", link["tunnel"], check=False)
+            if observed.returncode == 0 and any(self.owns(link, row) and "UP" in row.get("flags", [])
+                                               for row in json.loads(observed.stdout)):
+                return
+            time.sleep(.15)
+        raise PanelError("The EoIP service did not keep its managed TAP interface up.", "method", "eoip")
 
     def remove(self, link, paths, run):
         if self.status(link, run):
@@ -120,6 +130,14 @@ def ready():
             address = "\0" + address[1:]
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notification:
             notification.sendto(b"READY=1", address)
+
+
+def send_frame(carrier, tunnel_id, frame):
+    try:
+        carrier.send(encode_frame(tunnel_id, frame))
+    except OSError as error:
+        if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.ECONNREFUSED, errno.EMSGSIZE):
+            raise
 
 
 def run_link(link):
@@ -146,8 +164,7 @@ def run_link(link):
             while True:
                 now = time.monotonic()
                 if now >= next_keepalive:
-                    with suppress(BlockingIOError, ConnectionRefusedError):
-                        carrier.send(encode_frame(tunnel_id, b""))
+                    send_frame(carrier, tunnel_id, b"")
                     next_keepalive = now + 3
                 readable, _, _ = select.select([carrier, tap], [], [], max(0, next_keepalive - now))
                 if carrier in readable:
@@ -159,7 +176,7 @@ def run_link(link):
                     with suppress(BlockingIOError, ConnectionRefusedError):
                         frame = os.read(tap, maximum + 1)
                         if 14 <= len(frame) <= maximum:
-                            carrier.send(encode_frame(tunnel_id, frame))
+                            send_frame(carrier, tunnel_id, frame)
     finally:
         os.close(tap)
 
