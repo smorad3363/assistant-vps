@@ -89,6 +89,7 @@ def health_signature(owner, listener, member):
 
 def topology_views(config, state, node_id, *, paths=None, require_keys_for=None):
     listeners, devices, receivers = [], {}, {}
+    unavailable_devices = {}
     policies = {}
     unavailable = {}
     local_key = None
@@ -96,7 +97,7 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
     routes = {}
     settings = dict(DEFAULTS, **config["settings"])
 
-    def usable_member(listener, group, member):
+    def usable_member(owner, listener, group, member):
         nonlocal key_read, local_key
         method = member["method"]
         if (not paths or group["id"] == require_keys_for or method not in ("wireguard", "geneve")
@@ -117,7 +118,7 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
                 return member
             problem = "wireguard_key"
         else:
-            link = gre_link(group["id"], listener, member, receiving=side == "destination")
+            link = gre_link(owner, listener, member, receiving=side == "destination")
             key = link["outer_peer"], link["listen_port"]
             if key not in routes:
                 try:
@@ -126,6 +127,7 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
                     routes[key] = None
             if routes[key] == link["outer_local"]:
                 return member
+            unavailable_devices[link["tunnel"]] = link
             problem = "geneve_route"
         unavailable[group["id"] + ":" + member["id"]] = problem
         return dict(member, enabled=False, draining=False)
@@ -146,7 +148,7 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
             return
         for listener in group["listeners"]:
             if paths:
-                listener = dict(listener, members=[usable_member(listener, group, member) for member in listener["members"]])
+                listener = dict(listener, members=[usable_member(owner, listener, group, member) for member in listener["members"]])
             ingress = listener["node_id"] == node_id
             if ingress and not staged:
                 if "probe" in listener or listener.get("watch_link"):
@@ -188,7 +190,8 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
         if record["phase"] == "prepared" and record.get("change"):
             add_group(record["owner"], record["change"]["group"], True)
     return dict(config, settings=settings, connections=[*config["connections"], *receivers.values()],
-                v2_listeners=listeners, v2_devices=list(devices.values()), v2_driver_unavailable=unavailable)
+                v2_listeners=listeners, v2_devices=list(devices.values()), v2_driver_unavailable=unavailable,
+                v2_unavailable_devices=list(unavailable_devices.values()))
 
 
 def installed_topology(paths, config):

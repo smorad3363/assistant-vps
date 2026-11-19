@@ -637,7 +637,10 @@ class Engine:
                     self.remove_gre(g)
             raise
         wanted = {g["tunnel"] for g in self.gre_devices(config)}
-        for name, g in old_gre.items():
+        retired = dict(old_gre)
+        for snapshot in (previous, config):
+            retired.update((link["tunnel"], link) for link in snapshot.get("v2_unavailable_devices", []))
+        for name, g in retired.items():
             if name not in wanted:
                 self.remove_gre(g)
         if busy:

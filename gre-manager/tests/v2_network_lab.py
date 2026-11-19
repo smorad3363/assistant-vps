@@ -124,7 +124,7 @@ def render(home, node, with_panel, crash=None):
             os.kill(os.getpid(), signal.SIGKILL)
         return result
 
-    Engine(paths, execute).apply(topology_views(config, current, node), topology_views(config, previous, node))
+    Engine(paths, execute).apply(topology_views(config, current, node, paths=paths), topology_views(config, previous, node, paths=paths))
     atomic_json(prior, current)
 
 
@@ -546,11 +546,15 @@ def lab(root):
             assert exchanges("gm-ir", 6, proto, port=5300) == {"M": 6}
             assert exchanges("gm-ir", 6, proto, port=5340) == {"1": 6}
             assert exchanges("gm-ir", 6, proto, port=5100) == {"0": 6}
+        command("ip", "-n", "gm-ir", "addr", "add", "192.0.2.199/32", "dev", "eth0")
+        command("ip", "-n", "gm-ir", "route", "replace", nodes[first_target][0] + "/32", "dev", "eth0", "src", "192.0.2.199")
         apply([first])
+        command("ip", "-n", "gm-ir", "route", "del", nodes[first_target][0] + "/32", "dev", "eth0")
+        command("ip", "-n", "gm-ir", "addr", "del", "192.0.2.199/32", "dev", "eth0")
         for host in ("gm-ir", first_target):
             assert subprocess.run(["ip", "-n", host, "link", "show", geneve_link["tunnel"]], capture_output=True).returncode != 0
         assert exchanges("gm-ir", 6) == {"0": 6}
-        print("v2 GENEVE verified both kernel VNIs and UDP port, then recovered the same VXLAN data path after removal.", flush=True)
+        print("v2 GENEVE carried two peers, cleaned up after preferred-route loss and preserved the independent VXLAN path.", flush=True)
         wg = listener("gm-ir", [first_target], "wireguard", [1])
         sides = {}
         for name, host, port in (("ingress", "gm-ir", 35379), ("destination", first_target, 35389)):
