@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.2.0",
-  "revision": "6f2e4302de2e659ac5617c05b2ea2441302ec79c",
+  "revision": "a4c5aa7cec640d7cc80cd9e705243ba9894c7f13",
   "files": {
     "gremgr-certificate.service": "ecaad1b0a845d02eda7dc0072d5fb9bbbdea4b874047e6c4401f5c441cec37b5",
     "gremgr-certificate.timer": "717a6d83996fdf54d8485b597bdfe339d6fff823feec19b1337ab400b70d6dc9",
@@ -11,22 +11,23 @@
     "gremgr-web.service": "3c85549f067c2bf82016fdcdf7f221d88c4f644437742d93aa4da2f0fb2ca263",
     "gremgr-worker.service": "061490d1887f5be1a67f825d1c07257f8dea929848481d51f349a404f8ef90b4",
     "gremgr.sh": "162fae9d1d68de09c6bcd2d886db4f0600d696b2de47821c8b088eda3277eab2",
-    "install.sh": "fe929563cf654f22c2a5a2a95eceafb9deb74c064c39f40d87f56f79fc4f0bc4",
+    "install.sh": "3dfb7fc88175fc0b118b6ba026187e7f981aad4561cc4f45b438a35d6a0f69d7",
     "legacy-restore.sh": "a2d40a8eb9a2afc875e1789e22e39d19fcc1a7c7d58f5dac1b667b8054fe71d5",
     "pair.py": "3ecc0ccd12b192bd8630d07c8d3e6410ff4b76e9a8a30afc700a9459eeb9099f",
     "panel/__init__.py": "d14599f656ac634743b08c03335287e2a4956b592c34a4432bffb4a0aa799308",
     "panel/agent.py": "561cb25c8116dbca7b9487a25f12ac47b781e8539210b16ee21d5d859c238537",
     "panel/certificates.py": "09c2f988eb700d308ca6254e5a4fed9fe940cad56cde2f2d3d99286b474423d4",
     "panel/cli.py": "a1f356de06965e342603d27207bc901d91025e48ae40077a5beedc0fd33c8d6f",
-    "panel/controller.py": "35a13de02bc73cf035701683a1566ce362c69ede145f0fd2eb4f7b219ced16f6",
+    "panel/controller.py": "d3913d7dd92e9f41075da2dcb524013035b43314fe336a098d7b5371433be031",
     "panel/demo.py": "4c7bdb2173565695654712bd9dd8d2db7649bb00d6a571c0a3da2440485fd0d3",
     "panel/engine.py": "f6794f5cdf08419df173ec0939bae10a858597b48eb0e85a33cb2c016eb1c8c4",
     "panel/model.py": "bbd5dd004fbd340125fd406c66c8c60f9c6735a98cc4d1f3e0491d8fe31d6cdb",
     "panel/remote.py": "01566bed37f26ac657075d8975b506d3186d52af1f78c66b47be4c4b528f5834",
-    "panel/static/app.js": "c5cb7cb0e3ead41287aa8ec84d5985880fdaa0d92fec85c5fb5f1da45d289abd",
+    "panel/static/app.js": "963ef060cf7e380880c383256fbbe47381c235d50e5614282fc97679be497456",
     "panel/static/favicon.svg": "c9c1421e8344aafc6d61c94b694ab51ed17505b1b3f779ef26a6d8b77efda5b1",
-    "panel/static/index.html": "a74b3fd8ab4d1d39d34c03ec5e066050fecf1c7b44329c63a52dd6833cff4a1f",
-    "panel/static/style.css": "7c6220f53fcd34d49d818707b367e12cb74f9ec95c02a9b0a4fb8f7a31b4b1fd",
+    "panel/static/index.html": "f47cdb2790be4a53c5abb8cc7b9e1c9e8fd40d8092b677cff5bc9b7fe5e7ea52",
+    "panel/static/style.css": "a7725dd83ce2d7aa2c8c52c4244f00df281d3b61f5a9fcc13af4bc630c73c2c1",
+    "panel/static/v2-fields.js": "4603686fb2072e9f9108f732384e7a417dfac961297d9ad1b911c4bed389814a",
     "panel/store.py": "3dc41a1c8964d1f1ce8b6fb1c2245801c26d84c45c58b3178bd5cd2d29fdaca9",
     "panel/topology.py": "33f7aacc83d43287dd93c5396685fe883014bcdca4c6b41c207c72b064f7ff0d",
     "panel/transactions.py": "e457758d83c78945976ea5c4a62bca26ed7642fbd5c23f17898aeea57dd4d907",
@@ -39,7 +40,7 @@
     "panel/v2_forwarding.py": "72d40cee35dfd674866f77f34c2c8a96ca3b937591d42f7de2bf9360c17d1af8",
     "panel/v2_health.py": "9e9f204a735f57c260d6fa704c2c3fedf03ca1e19ad413d1012664a650d3dae2",
     "panel/v2_resources.py": "81a8cf05033ed7e096fe37d39cde766d22e43ab4ad3732559cd6843adce511a2",
-    "panel/web.py": "4d84f9ceb423e58994b8fb91b463e79a8a9f3a1940812da0fae1bb2e5fd36133",
-    "panel/worker.py": "a2e98cfc19e2eec7f33f508427bf8c0f5c3e886547b2454cba8436befb5dede2"
+    "panel/web.py": "bd3adbad79c78229da9ef3de1680aac149dd4f712c1d57bf0e44d67bbfeb52d8",
+    "panel/worker.py": "de08dae33fd38061ff8822b2e322f5610441d064d6d3ddf3efc3293450ee12e9"
   }
 }
