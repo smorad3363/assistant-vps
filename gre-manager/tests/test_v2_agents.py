@@ -40,6 +40,18 @@ class TransactionsTest(unittest.TestCase):
         participant = Participant(self.roots[node], node, lambda change: [("192.0.2.10", "tcp", 5000, 5100)])
         return participant.request(change["owner"], action, change)
 
+    def test_preview_never_prepares_the_kernel_or_claims_a_reservation(self):
+        node = self.nodes[0]
+        applied = []
+        peer = Participant(self.roots[node], node, lambda _: [], materialize=lambda *_: applied.append(True))
+        self.assertEqual(peer.request(node, "plan", self.change)["phase"], "prepared")
+        self.assertEqual(peer.request(node, "status", self.change)["phase"], "unknown")
+        self.assertFalse(peer.journal.read()["operations"])
+        self.assertFalse(applied)
+        peer.request(node, "prepare", self.change)
+        self.assertEqual(peer.request(node, "status", self.change)["phase"], "prepared")
+        self.assertEqual(applied, [True])
+
     def test_missing_fourth_participant_aborts_all_after_restart(self):
         missing = self.nodes[-1]
 

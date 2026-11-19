@@ -1,15 +1,18 @@
 """Translate v2 listener groups into scoped, conntrack-preserving Linux rules."""
 import hashlib
 import ipaddress
+import json
 
-from .model import DEFAULTS, ranges_for, subtract
-from .store import topology_node_id
+from .model import DEFAULTS, PanelError, ranges_for, subtract
+from .store import atomic_json, topology_node_id
 from .transactions import Journal
 
 
 def gre_link(owner, listener, member, receiving=False):
-    source, target = listener["outer_ip"], member["outer_ip"]
-    identity = hashlib.sha256(f"{owner}|{source}|{target}|{member['service_ip']}|{member['mtu']}".encode()).hexdigest()
+    source = listener.get("outer_ip") or listener["ip"]
+    target = member.get("outer_ip") or member["service_ip"]
+    mtu = member.get("mtu") or 1280
+    identity = hashlib.sha256(f"{owner}|{source}|{target}|{member['service_ip']}|{mtu}".encode()).hexdigest()
     start = int(ipaddress.IPv4Address("10.224.0.0")) + 4 * (int(identity[12:20], 16) % 262144)
     addresses = [str(ipaddress.IPv4Address(start + offset)) for offset in (1, 2)]
     if receiving:
@@ -18,7 +21,7 @@ def gre_link(owner, listener, member, receiving=False):
     return {
         "id": identity[:10], "tunnel": "g2-" + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
-        "peer_tun": addresses[1], "key": int(identity[20:28], 16) or 1, "mtu": member["mtu"],
+        "peer_tun": addresses[1], "key": int(identity[20:28], 16) or 1, "mtu": mtu,
     }
 
 
@@ -31,7 +34,7 @@ def segments(listener, settings):
 
 
 def active_members(listener, selection):
-    eligible = [member for member in listener["members"] if member["enabled"] and not member["draining"]]
+    eligible = [member for member in listener["members"] if member["enabled"] and not member.get("draining")]
     if not eligible:
         return []
     priority = min(member["priority"] for member in eligible)
@@ -51,7 +54,7 @@ def topology_views(config, state, node_id):
             if ingress and not staged:
                 listeners.append((group, owner, listener))
             for member in listener["members"]:
-                if member["method"] != "gre" or not (member["enabled"] or member["draining"]):
+                if member["method"] != "gre" or not (member["enabled"] or member.get("draining")):
                     continue
                 receiving = member["node_id"] == node_id
                 if not ingress and not receiving:
@@ -88,26 +91,63 @@ def installed_topology(paths, config):
     state = Journal(paths.var / "v2-participant.json").read()
     if not state["groups"] and not state["operations"]:
         return config
-    return topology_views(config, state, topology_node_id(paths))
+    return topology_views(with_ssh_protection(config, paths, remember=True), state, topology_node_id(paths))
+
+
+def with_ssh_protection(config, paths=None, *, remember=False):
+    from .engine import discovered_ssh_ports
+
+    settings = dict(DEFAULTS, **config["settings"])
+    cache = paths.var / "ssh-ports.json" if paths else None
+    error = None
+    try:
+        observed = discovered_ssh_ports()
+    except PanelError as exc:
+        error = str(exc)
+        observed = json.loads(cache.read_text()) if cache and cache.exists() else []
+    else:
+        if remember and cache:
+            atomic_json(cache, observed)
+    settings["ssh_ports"] = sorted(set(settings["ssh_ports"] + observed))
+    return dict(config, settings=settings, ssh_discovery_error=error)
+
+
+def require_ssh_protection(config):
+    error = config.get("ssh_discovery_error")
+    if not error:
+        return
+    incoming = any("tcp" in listener["protocols"] for _, _, listener in config.get("v2_listeners", []))
+    receiving = any(peer.get("v2_ports", {}).get("tcp") for peer in config["connections"])
+    if incoming or receiving:
+        raise PanelError(error, "ssh_discovery", "ssh_ports")
 
 
 def format_port(low, high):
     return str(low) if low == high else f"{low}:{high}"
 
 
-def add_receiver_rules(add, peer, interfaces):
+def add_receiver_rules(add, peer, interfaces, settings):
     gre = peer["gre"]
     device, remote, service = gre["tunnel"], gre["peer_tun"], peer["service_ip"]
+    protected = {22, settings["port"], *settings["ssh_ports"], *settings["reserved_ports"]}
+    session_ports = subtract([(1, 65535)], protected)
     for proto, ports in peer["v2_ports"].items():
+        incoming = ["-i", device, "-s", remote]
+        tracked = ["-m", "conntrack", "--ctstate", "DNAT"]
+        established = ["-m", "conntrack", "--ctstate", "ESTABLISHED", "--ctdir", "ORIGINAL",
+                       "--ctorigdst", gre["local_tun"]]
+        # Conntrack remembers the translated port for a live session when a mapping changes.
+        for low, high in session_ports:
+            session = [*incoming, "-d", service, "-p", proto, "--dport", format_port(low, high), *established, *tracked]
+            add("filter", "GMP_INPUT", *session, "-j", "ACCEPT")
+            add("filter", "GMP_FWD", *session, "-j", "ACCEPT")
+        add("filter", "GMP_FWD", "-o", device, "-d", remote, "-s", service, "-p", proto,
+            "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
         for low, high in sorted(set(ports)):
             match = ["-p", proto, "--dport", format_port(low, high)]
-            incoming = ["-i", device, "-s", remote]
-            tracked = ["-m", "conntrack", "--ctstate", "DNAT"]
             add("nat", "GMP_PRE", *incoming, "-d", gre["local_tun"], *match, "-j", "DNAT", "--to-destination", service)
             add("filter", "GMP_INPUT", *incoming, "-d", service, *match, *tracked, "-j", "ACCEPT")
             add("filter", "GMP_FWD", *incoming, "-d", service, *match, *tracked, "-j", "ACCEPT")
-            add("filter", "GMP_FWD", "-o", device, "-d", remote, "-s", service, "-p", proto,
-                "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
             if service not in interfaces:
                 add("nat", "GMP_POST", "-s", remote, "-d", service, *match, *tracked, "-j", "MASQUERADE")
             elif proto == "udp":
@@ -123,7 +163,7 @@ def add_listener_rules(add, config, interfaces):
         active = active_members(listener, group["selection"])
         targets = {}
         for member in listener["members"]:
-            if not member["enabled"] and not member["draining"]:
+            if not member["enabled"] and not member.get("draining"):
                 continue
             gre = gre_link(owner, listener, member) if member["method"] == "gre" else None
             targets[member["id"]] = (gre["peer_tun"] if gre else member["service_ip"], gre)

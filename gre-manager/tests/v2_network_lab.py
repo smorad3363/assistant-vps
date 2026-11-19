@@ -1,22 +1,25 @@
 """Real namespace traffic for v2 GRE/direct groups and established sessions."""
 from collections import Counter
+from contextlib import ExitStack, suppress
 import copy
 import json
 import os
 from pathlib import Path
 import select
+import signal
 import socket
 import socketserver
 import subprocess
 import sys
 import threading
+import time
 import uuid
 
 from panel.engine import Engine
 from panel.model import DEFAULTS
 from panel.store import Paths, atomic_json
 from panel.v2_config import normalize_group
-from panel.v2_forwarding import topology_views
+from panel.v2_forwarding import topology_views, with_ssh_protection
 
 
 def command(*args, **kwargs):
@@ -27,7 +30,7 @@ def namespace(name, action, *args):
     return ["ip", "netns", "exec", name, sys.executable, __file__, action, *map(str, args)]
 
 
-def serve(address, marker):
+def serve(address, marker, port):
     class TCP(socketserver.BaseRequestHandler):
         def handle(self):
             while data := self.request.recv(256):
@@ -38,8 +41,8 @@ def serve(address, marker):
             data, sock = self.request
             sock.sendto(marker + data, self.client_address)
 
-    tcp = socketserver.ThreadingTCPServer((address, 5000), TCP)
-    udp = socketserver.UDPServer((address, 5000), UDP)
+    tcp = socketserver.ThreadingTCPServer((address, port), TCP)
+    udp = socketserver.UDPServer((address, port), UDP)
     threading.Thread(target=udp.serve_forever, daemon=True).start()
     print("ready", flush=True)
     tcp.serve_forever()
@@ -76,7 +79,8 @@ def render(home, node, with_panel):
     current = json.load(sys.stdin)
     prior = paths.var / "lab-v2.json"
     previous = json.loads(prior.read_text()) if prior.exists() else empty
-    config = {"settings": dict(DEFAULTS, ssh_ports=[22, 6111]), "connections": [], "web_enabled": with_panel}
+    config = with_ssh_protection({"settings": dict(DEFAULTS, ssh_ports=[22, 6111]),
+                                  "connections": [], "web_enabled": with_panel})
     Engine(paths).apply(topology_views(config, current, node), topology_views(config, previous, node))
     atomic_json(prior, current)
 
@@ -90,6 +94,51 @@ def receive_line(process):
     return line
 
 
+def stop_process(process):
+    try:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+    finally:
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream:
+                stream.close()
+
+
+def start_process(stack, args, **kwargs):
+    process = subprocess.Popen(args, start_new_session=True, text=True, **kwargs)
+    stack.callback(stop_process, process)
+    return process
+
+
+def ssh_client(stack, root, name, address, port):
+    root.mkdir(parents=True)
+    for key in ("user", "host"):
+        command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", root / key)
+    sshd = root / "sshd.conf"
+    sshd.write_text(f"ListenAddress {address}:{port}\nHostKey {root}/host\nPidFile {root}/sshd.pid\n"
+                    f"AuthorizedKeysFile {root}/user.pub\nPermitRootLogin prohibit-password\n"
+                    "PasswordAuthentication no\nUsePAM yes\nLogLevel ERROR\n")
+    pinned = root / "known_hosts"
+    pinned.write_text(f"[{address}]:{port} " + (root / "host.pub").read_text())
+    command("ip", "netns", "exec", name, "iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(port), "-j", "ACCEPT")
+    start_process(stack, ["ip", "netns", "exec", name, "/usr/sbin/sshd", "-D", "-e", "-f", sshd])
+    client = ["ip", "netns", "exec", "gm-client", "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "-o",
+              "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={pinned}", "-o", "IdentitiesOnly=yes",
+              "-i", root / "user", "-p", str(port), f"root@{address}"]
+    for _ in range(12):
+        ready = subprocess.run([*client, "printf ready"], capture_output=True, text=True, timeout=8)
+        if ready.returncode == 0 and ready.stdout == "ready":
+            return client
+        time.sleep(.2)
+    raise RuntimeError(f"Unable to reach namespace SSH fixture: {ready.stderr}")
+
+
 def lab(root):
     assert os.geteuid() == 0
     assert os.readlink("/proc/self/ns/net") != os.readlink("/proc/1/ns/net")
@@ -100,7 +149,6 @@ def lab(root):
         nodes[name] = outside, uuid.uuid4().hex
         services.append(name)
     owner = nodes["gm-ir"][1]
-    processes, namespaces = [], []
     group_id = uuid.uuid4().hex
 
     def listener(source, targets, method, weights):
@@ -124,12 +172,12 @@ def lab(root):
         return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto),
                                   capture_output=True).stdout)
 
-    try:
+    with ExitStack() as mounts, ExitStack() as processes:
         for index, name in enumerate(services):
             address, _ = nodes[name]
             link = f"v-v2d{index}"
             command("ip", "netns", "add", name)
-            namespaces.append(name)
+            mounts.callback(command, "ip", "netns", "del", name)
             command("ip", "link", "add", link, "type", "veth", "peer", "name", "eth0", "netns", name)
             command("ip", "link", "set", link, "master", "gm-br")
             command("ip", "link", "set", link, "up")
@@ -140,8 +188,7 @@ def lab(root):
             for proto in ("tcp", "udp"):
                 command("ip", "netns", "exec", name, "iptables", "-A", "INPUT", "-s", "192.0.2.0/24",
                         "-p", proto, "--dport", "5000", "-j", "ACCEPT")
-            process = subprocess.Popen(namespace(name, "serve", address, index), text=True, stdout=subprocess.PIPE)
-            processes.append(process)
+            process = start_process(processes, namespace(name, "serve", address, index, 5000), stdout=subprocess.PIPE)
             assert receive_line(process) == "ready"
 
         apply([listener("gm-ir", services, "gre", [1, 1, 1, 1])])
@@ -156,9 +203,8 @@ def lab(root):
         assert 700 <= counts.get("1", 0) <= 800, counts
         print(f"v2 direct weighted 1:3 across 1000 connections: {counts}", flush=True)
 
-        client = subprocess.Popen(namespace("gm-client", "hold", nodes["gm-ir"][0]), text=True,
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        processes.append(client)
+        client = start_process(processes, namespace("gm-client", "hold", nodes["gm-ir"][0]),
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         previous = receive_line(client)
         draining = copy.deepcopy(direct)
         draining["members"][int(previous)]["draining"] = True
@@ -176,13 +222,45 @@ def lab(root):
             for proto in ("tcp", "udp"):
                 assert exchanges(source, 4, proto) == {"0": 4}
         print("v2 four ingress hosts reached a shared mapped GRE service.", flush=True)
-    finally:
-        for process in processes:
-            if process.poll() is None:
-                process.terminate()
-            process.wait(timeout=5)
-        for name in reversed(namespaces):
-            command("ip", "netns", "del", name)
+
+        first_target = services[0]
+        previous_map = listener("gm-ir", [first_target], "gre", [1])
+        apply([previous_map])
+        old = start_process(processes, namespace("gm-client", "hold", nodes["gm-ir"][0]),
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        assert receive_line(old) == "0"
+        replacement = start_process(processes, namespace(first_target, "serve", nodes[first_target][0], "M", 6000),
+                                    stdout=subprocess.PIPE)
+        assert receive_line(replacement) == "ready"
+        next_map = copy.deepcopy(previous_map)
+        next_map["port_map"]["5100"] = 6000
+        apply([next_map])
+        assert exchanges("gm-ir", 8) == {"M": 8}
+        old.stdin.write("continue\n")
+        old.stdin.flush()
+        assert receive_line(old) == "0"
+        assert old.wait(timeout=10) == 0
+        print("v2 GRE remapping preserved the old TCP connection and sent new traffic to port 6000.", flush=True)
+
+        Path("/run/sshd").mkdir(exist_ok=True, mode=0o755)
+        ssh_commands = [ssh_client(processes, Path(root) / f"ssh-{host}", host, nodes[host][0], port)
+                        for host, port in [("gm-ir", 23351), (first_target, 34471)]]
+        sessions = [start_process(processes, [*args, "cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                    for args in ssh_commands]
+        for session in sessions:
+            session.stdin.write("before\n")
+            session.stdin.flush()
+            assert receive_line(session) == "before"
+        all_ports = dict(next_map, ports="all")
+        for routes in ([all_ports], [next_map]):
+            apply(routes)
+            assert exchanges("gm-ir", 4) == {"M": 4}
+            for args, session in zip(ssh_commands, sessions):
+                assert command(*args, "printf fresh", capture_output=True).stdout == "fresh"
+                session.stdin.write("after\n")
+                session.stdin.flush()
+                assert receive_line(session) == "after"
+        print("v2 all-port forwarding and rollback kept established and new SSH sessions on both custom ports.", flush=True)
 
 
 if __name__ == "__main__":
@@ -192,7 +270,7 @@ if __name__ == "__main__":
     elif action == "render":
         render(args[0], args[1], bool(int(args[2])))
     elif action == "serve":
-        serve(args[0], args[1].encode())
+        serve(args[0], args[1].encode(), int(args[2]))
     elif action == "sample":
         sample(args[0], int(args[1]), args[2] == "udp")
     elif action == "hold":

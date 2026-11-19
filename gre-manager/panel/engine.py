@@ -14,7 +14,7 @@ import uuid
 
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
-from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology
+from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology, require_ssh_protection
 
 CHAINS = {"nat": ["GMP_PRE", "GMP_POST", "GMP_LOCAL"], "filter": ["GMP_FWD", "GMP_INPUT", "GMP_COUNT"], "mangle": ["GMP_MSS"]}
 HOOKS = [("nat", "PREROUTING", "GMP_PRE"), ("nat", "POSTROUTING", "GMP_POST"), ("nat", "INPUT", "GMP_LOCAL"),
@@ -53,8 +53,48 @@ def local_addresses():
 
 
 def discovered_ssh_ports():
-    result = run("sshd", "-T", check=False)
-    return sorted({int(x.split()[1]) for x in result.stdout.splitlines() if re.fullmatch(r"port [0-9]+", x)}) or [22]
+    def probe(*args):
+        with contextlib.suppress(PanelError):
+            result = run(*args, check=False, timeout=5)
+            if result.returncode == 0:
+                return result.stdout
+        return None
+
+    def port(value):
+        number = value.rsplit(":", 1)[-1]
+        if re.fullmatch(r"[0-9]{1,5}", number) and 1 <= int(number) <= 65535:
+            ports.add(int(number))
+
+    ports = set()
+    config = probe("sshd", "-T") or ""
+    for line in config.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] in ("port", "listenaddress"):
+            port(fields[1])
+    connection = os.environ.get("SSH_CONNECTION", "").split()
+    if len(connection) == 4:
+        port(connection[3])
+
+    listening = probe("ss", "-H", "-ltnp")
+    sockets = probe("systemctl", "list-sockets", "--no-legend", "--no-pager", "--plain")
+    systemd_listener = False
+    for line in (listening or "").splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        owners = " ".join(fields[5:])
+        if re.search(r'\("(?:sshd(?:-session)?|dropbear)",', owners):
+            port(fields[3])
+        systemd_listener |= '("systemd",' in owners
+    for line in (sockets or "").splitlines():
+        fields = line.split()
+        if len(fields) > 1 and any(re.fullmatch(r"(?:ssh|sshd|dropbear)(?:@\S*)?\.(?:socket|service)", f)
+                                   for f in fields[1:]):
+            port(fields[0])
+    if listening is None or (systemd_listener and sockets is None):
+        raise PanelError("Could not verify the host's SSH listeners. Check sshd, ss and systemd before applying.",
+                         "ssh_discovery", "ssh_ports")
+    return sorted(ports)
 
 
 def gre_for(c):
@@ -125,7 +165,7 @@ def build_rules(config, interfaces, docker_udp=False):
             add("filter", "GMP_INPUT", "-i", wan, "-s", g["outer_peer"], "-d", g["outer_local"], "-p", "gre", "-j", "ACCEPT")
             add("filter", "GMP_INPUT", "-i", t, "-s", peer, "-d", g["local_tun"], "-p", "icmp", "-j", "ACCEPT")
             if "v2_ports" in c:
-                add_receiver_rules(add, c, interfaces)
+                add_receiver_rules(add, c, interfaces, config["settings"])
                 continue
             for proto in ("tcp", "udp"):
                 incoming = ["-i", t, "-s", peer, "-d", g["local_tun"], "-p", proto]
@@ -325,6 +365,7 @@ class Engine:
     def apply(self, config, previous=None):
         previous = installed_topology(self.paths, previous) if previous is not None else None
         config = installed_topology(self.paths, config)
+        require_ssh_protection(config)
         interfaces = self.preflight(config)
         previous = previous or dict(config, connections=[], v2_listeners=[], v2_devices=[])
         old_gre = {g["tunnel"]: g for g in self.gre_devices(previous)}

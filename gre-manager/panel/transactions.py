@@ -89,11 +89,11 @@ class Participant:
         self.clock = clock
         self.materialize = materialize
 
-    def receipt(self, change, digest, operation):
+    def receipt(self, change, digest, operation, *, preview=False):
         phase = operation["phase"] if operation else "unknown"
         if phase == "prepared" and self.clock() >= operation["expires_at"]:
             phase = "expired"
-        elif phase == "prepared" and not operation.get("network_ready", True):
+        elif phase == "prepared" and not preview and self.materialize and not operation.get("network_ready"):
             phase = "unknown"
         return {
             "id": change["id"], "digest": digest, "node_id": self.node_id, "phase": phase,
@@ -134,8 +134,10 @@ class Participant:
                 raise PanelError("The group revision changed.", "revision")
 
             if action == "commit":
-                if not operation or not operation.get("network_ready", True):
+                if not operation:
                     raise PanelError("This operation was never prepared.", "unknown_operation")
+                if self.materialize and not operation.get("network_ready"):
+                    self.prepare_network(state, operation, change)
                 # Expiry stops a prepare from authorizing a new decision. The
                 # reservation stays fenced until the original owner commits or aborts.
                 previous = copy.deepcopy(state) if self.materialize else None
@@ -149,9 +151,9 @@ class Participant:
                     self.materialize(state, previous)
                 return self.receipt(change, digest, operation)
             if operation:
-                if action == "prepare" and not operation.get("network_ready", True):
+                if action == "prepare" and self.materialize and not operation.get("network_ready"):
                     self.prepare_network(state, operation, change)
-                return self.receipt(change, digest, operation)
+                return self.receipt(change, digest, operation, preview=action == "plan")
 
             claims = self.claims(change)
             for reserved_id, reservation in groups.items():
@@ -167,11 +169,12 @@ class Participant:
             if action == "prepare":
                 operations[change["id"]] = operation
                 if self.materialize:
-                    operation.update(change=change, network_ready=False)
                     self.prepare_network(state, operation, change)
-            return self.receipt(change, digest, operation)
+            return self.receipt(change, digest, operation, preview=action == "plan")
 
     def prepare_network(self, state, operation, change):
+        operation["change"] = change
+        operation["network_ready"] = False
         previous = copy.deepcopy(state)
         previous["operations"].pop(change["id"])
         # Keep the intent on disk even if the process dies during kernel setup.
@@ -294,6 +297,9 @@ class Coordinator:
                 results[node] = {"phase": "unconfirmed", "error": getattr(error, "code", "transport")}
             with self.journal.edit() as state:
                 state["operations"][change["id"]]["participants"] = results
-        if all(results[node]["phase"] == terminal for node in change["participants"]):
+            if decision == "commit" and results[node]["phase"] != terminal:
+                # Later ingress participants depend on this verified commit.
+                break
+        if all(results.get(node, {}).get("phase") == terminal for node in change["participants"]):
             with self.journal.edit() as state:
                 state["operations"][change["id"]]["phase"] = terminal

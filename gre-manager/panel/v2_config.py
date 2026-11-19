@@ -3,6 +3,7 @@ from collections import defaultdict
 
 from .model import DEFAULTS, PanelError, address, connection, integer, ranges_for
 from .transactions import identity, overlaps
+from .v2_forwarding import segments
 
 
 def enabled(value):
@@ -123,11 +124,23 @@ def local_claims(change, node_id, config, addresses):
     if not group["enabled"]:
         return []
     settings = dict(DEFAULTS, **config.get("settings", {}))
+    protected = {22, settings["port"], *settings["ssh_ports"], *settings["reserved_ports"]}
     claims = []
     for listener in group["listeners"]:
         for member in listener["members"]:
-            if member["enabled"] and member["method"] == "gre" and member["node_id"] == node_id and member["outer_ip"] not in addresses:
-                raise PanelError("The GRE destination address is unavailable on this node.", "local_ip")
+            if member["enabled"] and member["managed"] and member["node_id"] == node_id:
+                if member["method"] == "gre" and member["outer_ip"] not in addresses:
+                    raise PanelError("The GRE destination address is unavailable on this node.", "local_ip")
+                if member["method"] == "gre" and protected.intersection([listener["target_port"], *listener["port_map"].values()]):
+                    raise PanelError("The translated destination uses a protected port.", "reserved", "port_map")
+                if member["method"] == "direct" and member["service_ip"] in addresses and "tcp" in listener["protocols"]:
+                    if config.get("ssh_discovery_error"):
+                        raise PanelError(config["ssh_discovery_error"], "ssh_discovery", "ssh_ports")
+                    targets = ((target, target) if target else (lo, hi)
+                               for lo, hi, target in segments(listener, dict(DEFAULTS, port=22)))
+                    if any(lo <= port <= hi for lo, hi in targets for port in protected):
+                        raise PanelError("Exclude the managed direct destination's protected ports or change the mapping.",
+                                         "reserved", "port_map")
         if listener["node_id"] != node_id:
             continue
         if listener["ip"] not in addresses:

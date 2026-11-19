@@ -11,14 +11,14 @@ import sys
 import time
 import uuid
 
-from .engine import Engine, discovered_ssh_ports, pair_values, run
+from .engine import Engine, pair_values, run
 from . import __version__
 from .model import DEFAULTS, PanelError, address, integer
 from .store import Paths, atomic_json, topology_node_id
 from .transactions import Participant
 from .v2_access import Access
 from .v2_config import local_claims
-from .v2_forwarding import topology_views
+from .v2_forwarding import require_ssh_protection, topology_views, with_ssh_protection
 
 PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
                 "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py")
@@ -68,18 +68,20 @@ def v2_participant(paths, engine):
             config = {"settings": dict(DEFAULTS, port=22)}
         if not change.get("group"):
             return []
-        settings = dict(DEFAULTS, **config["settings"])
-        with contextlib.suppress(PanelError):
-            settings["ssh_ports"] = sorted(set(settings["ssh_ports"] + discovered_ssh_ports()))
-        result = local_claims(change, node_id, dict(config, settings=settings), engine.interfaces())
+        protected = with_ssh_protection(config, paths)
+        result = local_claims(change, node_id, protected, engine.interfaces())
         candidate = {"groups": {change["group_id"]: {
             "active": True, "owner": change["owner"], "group": change["group"],
         }}, "operations": {}}
-        engine.preflight(topology_views(combined(paths, read_peers(paths)), candidate, node_id))
+        current = dict(protected, connections=combined(paths, read_peers(paths))["connections"])
+        view = topology_views(current, candidate, node_id)
+        if isinstance(engine, Engine):
+            require_ssh_protection(view)
+        engine.preflight(view)
         return result
 
     def materialize(state, previous):
-        config = combined(paths, read_peers(paths))
+        config = with_ssh_protection(combined(paths, read_peers(paths)), paths, remember=True)
         engine.apply(topology_views(config, state, node_id), topology_views(config, previous, node_id))
 
     return Participant(paths, node_id, claims, materialize=materialize)
