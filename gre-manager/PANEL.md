@@ -203,6 +203,10 @@ python3 -m panel.demo --seed
 # http://127.0.0.1:8877 ; admin / Demo-Panel-2026!
 ```
 
+GRETAP members use a separate Ethernet interface to carry IPv4 between the
+two configured outer addresses. The panel generates matching keys on both
+ends unless a key is supplied. The link stays separate from the WAN bridge.
+
 Under Settings → Path test, select two paired nodes and their outer IPv4
 addresses. The preview shows the effective time and volume budget. The test
 prepares a separate GRE or IPIP link and measures two TCP streams over that

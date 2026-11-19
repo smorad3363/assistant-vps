@@ -106,7 +106,7 @@ def aggregate_udp(address):
         print(json.dumps({"bytes": total, "members": sorted(markers)}), flush=True)
 
 
-def render(home, node, with_panel):
+def render(home, node, with_panel, crash=None):
     paths = Paths(home)
     empty = {"groups": {}, "operations": {}}
     current = json.load(sys.stdin)
@@ -114,7 +114,15 @@ def render(home, node, with_panel):
     previous = json.loads(prior.read_text()) if prior.exists() else empty
     config = with_ssh_protection({"settings": dict(DEFAULTS, ssh_ports=[22, 6111]),
                                   "connections": [], "web_enabled": with_panel})
-    Engine(paths).apply(topology_views(config, current, node), topology_views(config, previous, node))
+    from panel.engine import run
+
+    def execute(*args, **kwargs):
+        result = run(*args, **kwargs)
+        if crash and args[:3] == ("ip", "link", "add") and "type" in args and args[args.index("type") + 1] == crash:
+            os.kill(os.getpid(), signal.SIGKILL)
+        return result
+
+    Engine(paths, execute).apply(topology_views(config, current, node), topology_views(config, previous, node))
     atomic_json(prior, current)
 
 
@@ -435,6 +443,43 @@ def lab(root):
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
         bench_acceptance(processes, root, "gm-ir", first_target, [nodes["gm-ir"][0], nodes[first_target][0]])
 
+        l2 = listener("gm-ir", [first_target], "gretap", [1])
+        l2["members"][0]["gretap"] = {"key": 224411}
+        command("ip", "-n", "gm-ir", "link", "add", "gm-foreign-tap", "type", "gretap", "local",
+                nodes["gm-ir"][0], "remote", nodes[first_target][0], "key", "224412")
+        command("ip", "-n", first_target, "link", "add", "gm-foreign-tap", "type", "gretap", "local",
+                nodes[first_target][0], "remote", nodes["gm-ir"][0], "key", "224412")
+        for host, overlay in (("gm-ir", "10.254.250.1"), (first_target, "10.254.250.2")):
+            command("ip", "-n", host, "addr", "add", overlay + "/30", "dev", "gm-foreign-tap")
+            command("ip", "-n", host, "link", "set", "gm-foreign-tap", "up")
+        group = normalize_group({"id": group_id, "name": "Interrupted GRETAP creation", "listeners": [l2]})
+        state = {"groups": {group_id: {"active": True, "owner": owner, "group": group}}, "operations": {}}
+        crashed = subprocess.run(namespace("gm-ir", "render", Path(root) / "gm-ir", owner, 1, "gretap"),
+                                 input=json.dumps(state), capture_output=True, text=True, timeout=30)
+        assert crashed.returncode == -signal.SIGKILL, crashed.stderr
+        compiled = apply([l2])
+        link = gre_link(owner, compiled, compiled["members"][0])
+        assert not (Path(root) / "gm-ir" / "var" / "link-staging" / (link["tunnel"] + ".json")).exists()
+        subprocess.run(["ip", "netns", "exec", "gm-ir", "ping", "-c", "1", "-w", "2", "-I", "gm-foreign-tap",
+                        "10.254.250.2"], capture_output=True, timeout=5)
+        foreign = json.loads(command("ip", "-n", "gm-ir", "-j", "neigh", "show", "dev", "gm-foreign-tap",
+                                     capture_output=True).stdout)
+        assert not any(item.get("lladdr") for item in foreign), foreign
+        for proto in ("tcp", "udp"):
+            assert exchanges("gm-ir", 6, proto) == {"0": 6}
+        for host in ("gm-ir", first_target):
+            info = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", link["tunnel"], capture_output=True).stdout)[0]
+            assert info["link_type"] == "ether" and info["linkinfo"]["info_kind"] == "gretap", info
+            neighbors = json.loads(command("ip", "-n", host, "-j", "neigh", "show", "dev", link["tunnel"],
+                                           capture_output=True).stdout)
+            assert any(item.get("lladdr") for item in neighbors), neighbors
+        apply([weighted])
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
+        command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-tap", stdout=subprocess.DEVNULL)
+        print("v2 GRETAP two-sided Ethernet learned the peer MAC and carried isolated TCP/UDP without touching the foreign device.", flush=True)
+
+
         first = listener("gm-ir", [first_target], "vxlan", [1])
         second = listener("gm-ir", [first_target], "vxlan", [1])
         second.update(ports="5200", port_map={"5200": 6000})
@@ -524,7 +569,7 @@ if __name__ == "__main__":
     if action == "lab":
         lab(*args)
     elif action == "render":
-        render(args[0], args[1], bool(int(args[2])))
+        render(args[0], args[1], bool(int(args[2])), args[3] if len(args) > 3 else None)
     elif action == "serve":
         serve(args[0], args[1].encode(), int(args[2]))
     elif action == "sample":

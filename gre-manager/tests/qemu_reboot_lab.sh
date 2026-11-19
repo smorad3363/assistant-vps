@@ -158,17 +158,18 @@ GUEST
 node() {
   guest "$1" 'cd /opt/gremgr/current && sudo python3 -c "from panel.store import Paths, topology_node_id; print(topology_node_id(Paths()))"'
 }
+method=${GREMGR_REBOOT_METHOD:-gre}
 owner=$(node 25222)
 receiver=$(node 25223)
-PYTHONPATH="$repo/gre-manager" python3 - "$owner" "$receiver" >"$lab/change.json" <<'PY'
+PYTHONPATH="$repo/gre-manager" python3 - "$owner" "$receiver" "$method" >"$lab/change.json" <<'PY'
 import json, sys, uuid
 from panel.v2_config import normalize_group
-src, dst = sys.argv[1:]
+src, dst, method = sys.argv[1:]
 def identity(): return uuid.uuid4().hex
 group_id = identity()
-group = normalize_group({"id": group_id, "name": "GRE reboot", "limits": {"up": 10, "down": 20}, "listeners": [{
+group = normalize_group({"id": group_id, "name": method.upper() + " reboot", "limits": {"up": 10, "down": 20}, "listeners": [{
     "id": identity(), "node_id": src, "ip": "10.0.2.15", "outer_ip": "198.51.100.50", "protocols": ["tcp"],
-    "ports": "all", "port_map": {"5100": 25244}, "members": [{"id": identity(), "node_id": dst, "method": "gre",
+    "ports": "all", "port_map": {"5100": 25244}, "members": [{"id": identity(), "node_id": dst, "method": method,
     "service_ip": "198.51.100.51", "outer_ip": "198.51.100.51", "mtu": 1280}],
 }]})
 print(json.dumps({"id": identity(), "owner": src, "group_id": group_id, "group": group, "expected_revision": 0,
@@ -219,4 +220,4 @@ rates = [int(value) * {"": 1, "k": 1024, "m": 1024 * 1024}[unit]
 for expected in (1250000, 2500000):
     assert any(abs(rate - expected) < expected * .01 for rate in rates), (expected, rates)
 PY
-echo 'PASS: both Debian 12 boot IDs changed. Fresh SSH and mapped GRE payload passed after each reboot and the joint reboot.'
+echo "PASS: both Debian 12 boot IDs changed. Fresh SSH and mapped ${method^^} payload passed after each reboot and the joint reboot."

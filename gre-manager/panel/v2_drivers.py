@@ -11,6 +11,12 @@ import tempfile
 from .model import PanelError
 
 
+def gre_key(value):
+    if isinstance(value, str) and "." in value:
+        return int(ipaddress.IPv4Address(value))
+    return int(value)
+
+
 @dataclass(frozen=True)
 class IPTunnel:
     method: str
@@ -34,10 +40,7 @@ class IPTunnel:
             return False
         if not self.keyed:
             return row.get("ifalias") == self.marker(link)
-        key = data.get("ikey", 0)
-        if isinstance(key, str):
-            key = int(ipaddress.IPv4Address(key)) if "." in key else int(key)
-        return key == link["key"]
+        return gre_key(data.get("ikey", 0)) == link["key"]
 
     def refresh(self, link, info, interface):
         if not self.keyed and info.get("info_data", {}).get("ttl", 0) != link.get("ttl", 64):
@@ -51,6 +54,29 @@ class IPTunnel:
 
     def firewall(self, link):
         return ["-p", self.protocol]
+
+
+class GreTap(IPTunnel):
+    staged_marker = True
+
+    def create(self, link, interface):
+        return ["ip", "link", "add", "dev", link["tunnel"], "type", self.method,
+                "local", link["outer_local"], "remote", link["outer_peer"], "key", link["key"], "ttl", 64, "dev", interface]
+
+    def marker(self, link):
+        return "gremgr:v2:" + link["id"]
+
+    def owns(self, link, row):
+        return (row.get("ifalias") == self.marker(link) and super().owns(link, row)
+                and gre_key(row["linkinfo"]["info_data"].get("okey", 0)) == link["key"])
+
+    def delete(self, link):
+        return ["ip", "link", "del", "dev", link["tunnel"]]
+
+    def firewall(self, link):
+        header = "0>>22&0x3C"
+        match = f"{header}@0&0xF000FFFF=0x20006558 && {header}@4=0x{link['key']:08x}"
+        return ["-p", self.protocol, "-m", "u32", "--u32", match]
 
 
 def wireguard_public_key(value):
@@ -120,6 +146,7 @@ class WireGuard:
 
 class Vxlan:
     method = module = "vxlan"
+    staged_marker = True
     overhead = 50
 
     def create(self, link, interface):
@@ -177,7 +204,8 @@ class Vxlan:
         return ["-p", "udp", "--dport", link["listen_port"]]
 
 
-DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan()}
+DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan(),
+           "gretap": GreTap("gretap", "ip_gre", "gre", True)}
 
 
 def driver_for(link):

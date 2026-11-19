@@ -22,6 +22,9 @@ def gre_link(owner, listener, member, receiving=False):
     identity_input = f"{base}|{mtu}" if method == "gre" else f"{method}|{base}"
     if method == "wireguard":
         identity_input += "|" + member["id"]
+    settings_key = member.get("gretap", {}).get("key") if method == "gretap" else None
+    if settings_key:
+        identity_input += "|" + str(settings_key)
     if method == "vxlan":
         settings = member["vxlan"]
         identity_input += f"|{settings['vni']}|{settings['port']}"
@@ -42,9 +45,9 @@ def gre_link(owner, listener, member, receiving=False):
                  "listen_port": settings[here]["port"], "peer_port": settings[there]["port"],
                  "keepalive": 0 if receiving else settings["keepalive"]}
     return {
-        "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "wireguard": "w2-", "vxlan": "v2-"}[method] + identity[:12],
+        "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "wireguard": "w2-", "vxlan": "v2-", "gretap": "t2-"}[method] + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
-        "peer_tun": addresses[1], "key": int(identity[20:28], 16) or 1, "mtu": parameters.get("mtu", mtu),
+        "peer_tun": addresses[1], "key": settings_key or int(identity[20:28], 16) or 1, "mtu": parameters.get("mtu", mtu),
         **({"mss_mode": parameters["mss_mode"], "mss": parameters.get("mss")} if parameters else {}),
         **({"method": method, "ttl": member.get("ttl", 64)} if method != "gre" else {}),
         **extra,
@@ -78,7 +81,7 @@ def health_signature(owner, listener, member):
     path = [listener.get(key) for key in ("id", "node_id", "ip", "outer_ip", "ports", "exclude_ports", "port_map",
                                           "target_port", "protocols", "probe", "watch_link")]
     peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled")]
-    if member["method"] in ("wireguard", "vxlan"):
+    if member["method"] in ("wireguard", "vxlan", "gretap"):
         peer.append(member[member["method"]])
     return fingerprint([owner, path, peer])
 

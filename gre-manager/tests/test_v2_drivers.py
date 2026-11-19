@@ -123,6 +123,26 @@ class DriverTests(unittest.TestCase):
         self.assertTrue(driver.owns(link, {"linkinfo": {"info_kind": "gre", "info_data": {"local": link["outer_local"],
                                                      "remote": link["outer_peer"], "ikey": str(link["key"])}}}))
 
+    def test_gretap_uses_two_way_keys_and_owns_only_its_l2_device(self):
+        rng = random.Random(224411)
+        for selected in [None, 1, 4294967295, *rng.sample(range(2, 4294967295), 32)]:
+            group = data([{"id": key(4), "node_id": key(5), "method": "gretap", "service_ip": "203.0.113.20",
+                           "gretap": {"key": selected} if selected else {}}])
+            self.assertEqual(group, normalize_group(group))
+            listener = group["listeners"][0]
+            left, right = (gre_link(key(3), listener, listener["members"][0], receiving=side) for side in (False, True))
+            self.assertEqual(left["local_tun"], right["peer_tun"])
+            self.assertEqual(left["key"], right["key"])
+            if selected:
+                self.assertEqual(left["key"], selected)
+            driver = driver_for(left)
+            args = driver.create(left, "eth0")
+            self.assertEqual(args[args.index("type") + 1], "gretap")
+            info = {"info_kind": "gretap", "info_data": {"local": left["outer_local"], "remote": left["outer_peer"],
+                                                         "ikey": str(left["key"]), "okey": str(left["key"])}}
+            self.assertFalse(driver.owns(left, {"linkinfo": info}))
+            self.assertTrue(driver.owns(left, {"linkinfo": info, "ifalias": driver.marker(left)}))
+
     def test_ipip_reverses_endpoints_and_rejects_unowned_devices(self):
         rng = random.Random(404)
         for _ in range(40):
