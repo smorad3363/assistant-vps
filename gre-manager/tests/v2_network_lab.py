@@ -61,12 +61,14 @@ def exchange(sock, payload):
     return answer[:1].decode()
 
 
-def sample(address, number, udp=False, port=5100):
+def sample(address, number, udp=False, port=5100, source_start=None):
     result = Counter()
     kind = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
     for case in range(number):
         with socket.socket(socket.AF_INET, kind) as sock:
             sock.settimeout(3)
+            if source_start is not None:
+                sock.bind(("", source_start + case))
             sock.connect((address, port))
             result[exchange(sock, str(case).encode())] += 1
     print(json.dumps(result), flush=True)
@@ -253,6 +255,7 @@ def lab(root):
         services.append(name)
     owner = nodes["gm-ir"][1]
     group_id = uuid.uuid4().hex
+    next_udp_source = 20000
 
     def listener(source, targets, method, weights):
         address, node = nodes[source]
@@ -275,7 +278,13 @@ def lab(root):
         return group["listeners"][0]
 
     def exchanges(name, count, proto="tcp", port=5100):
-        return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto, port),
+        nonlocal next_udp_source
+        source = []
+        if proto == "udp":
+            # Old UDP tuples intentionally keep their previous destination across revisions.
+            source = [next_udp_source]
+            next_udp_source += count
+        return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto, port, *source),
                                   capture_output=True).stdout)
 
     with ExitStack() as mounts, ExitStack() as processes:
@@ -596,7 +605,8 @@ if __name__ == "__main__":
     elif action == "serve":
         serve(args[0], args[1].encode(), int(args[2]))
     elif action == "sample":
-        sample(args[0], int(args[1]), args[2] == "udp", int(args[3]) if len(args) > 3 else 5100)
+        sample(args[0], int(args[1]), args[2] == "udp", int(args[3]) if len(args) > 3 else 5100,
+               int(args[4]) if len(args) > 4 else None)
     elif action == "hold":
         hold(*args)
     elif action == "aggregate":
