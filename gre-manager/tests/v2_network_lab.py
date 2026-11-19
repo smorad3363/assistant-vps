@@ -123,7 +123,7 @@ def ssh_client(stack, root, name, address, port):
     sshd = root / "sshd.conf"
     sshd.write_text(f"ListenAddress {address}:{port}\nHostKey {root}/host\nPidFile {root}/sshd.pid\n"
                     f"AuthorizedKeysFile {root}/user.pub\nPermitRootLogin prohibit-password\n"
-                    "PasswordAuthentication no\nUsePAM yes\nLogLevel ERROR\n")
+                    "PasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nLogLevel VERBOSE\n")
     pinned = root / "known_hosts"
     pinned.write_text(f"[{address}]:{port} " + (root / "host.pub").read_text())
     command("ip", "netns", "exec", name, "iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(port), "-j", "ACCEPT")
