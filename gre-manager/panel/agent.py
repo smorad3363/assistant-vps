@@ -25,7 +25,7 @@ from .v2_forwarding import require_ssh_protection, topology_views, with_ssh_prot
 
 PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
                 "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py", "v2_resources.py", "v2_drivers.py",
-                "v2_benchmark.py", "v2_bench_agent.py")
+                "v2_benchmark.py", "v2_bench_agent.py", "v2_l2tp.py")
 
 
 def validate_peer(data):
@@ -76,7 +76,8 @@ def v2_participant(paths, engine):
         result = local_claims(change, node_id, protected, engine.interfaces())
         candidate = Journal(paths.var / "v2-participant.json").read()
         current = dict(protected, connections=combined(paths, read_peers(paths))["connections"])
-        if any(member["method"] in ("ipip", "gretap", "vxlan", "geneve") for listener in change["group"]["listeners"] for member in listener["members"]):
+        if any(member["method"] in ("ipip", "gretap", "vxlan", "geneve", "l2tpv3")
+               for listener in change["group"]["listeners"] for member in listener["members"]):
             staged = dict(candidate, operations={**candidate["operations"], change["id"]: {
                 "phase": "prepared", "owner": change["owner"], "change": change,
             }})

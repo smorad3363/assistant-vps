@@ -207,6 +207,12 @@ GRETAP members use a separate Ethernet interface to carry IPv4 between the
 two configured outer addresses. The panel generates matching keys on both
 ends unless a key is supplied. The link stays separate from the WAN bridge.
 
+Static L2TPv3 uses an Ethernet pseudowire over UDP and a dedicated tunnel ID,
+session ID and port on each host. The panel reverses local and peer settings
+between the two ends and limits the carrier rule to the configured session.
+If another administrator attaches a session to the same kernel tunnel, the
+panel removes its own session and leaves the adjacent session and tunnel in place.
+
 Under Settings → Path test, select two paired nodes and their outer IPv4
 addresses. The preview shows the effective time and volume budget. The test
 prepares a separate GRE or IPIP link and measures two TCP streams over that

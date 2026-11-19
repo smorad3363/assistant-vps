@@ -18,6 +18,46 @@ from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_l2tp_has_reversed_ids_and_leaves_an_adjacent_session(self):
+        group = data([{"id": key(4), "node_id": key(5), "method": "l2tpv3", "service_ip": "203.0.113.20",
+                       "l2tpv3": {"ingress": {"tunnel_id": 100, "session_id": 101, "port": 37001},
+                                  "destination": {"tunnel_id": 200, "session_id": 201, "port": 37002}}}])
+        parent = group["listeners"][0]
+        member = parent["members"][0]
+        left, right = [gre_link(key(3), parent, member, receiving=target) for target in (False,True)]
+        self.assertEqual((left["tunnel_id"], left["session_id"], left["listen_port"]),
+                         (right["peer_tunnel_id"], right["peer_session_id"], right["peer_port"]))
+        driver = driver_for(left)
+        self.assertIn("0x00000065", driver.firewall(left)[-1])
+        known = [driver.session(left), dict(driver.session(left), session_id=999, interface="adjacent")]
+        calls = []
+        interface = {"ifname": left["tunnel"], "link_type": "ether", "ifalias": "external-owner"}
+
+        def tool(*args, **kwargs):
+            calls.append(args)
+            rows = [driver.expected(left)] if args[-1] == "tunnel" else known if args[-1] == "session" else [interface]
+            if "del" in args:
+                known.pop(0)
+            return subprocess.CompletedProcess(args, 0, json.dumps(rows), "")
+
+        with tempfile.TemporaryDirectory() as home:
+            from panel.store import atomic_json
+            paths = Paths(home)
+            driver.remove(left, paths, tool)
+            self.assertEqual(calls, [])
+            atomic_json(driver.journal(paths, left), driver.receipt(left))
+            driver.remove(left, paths, tool)
+            self.assertFalse(any("del" in call for call in calls))
+            interface["ifalias"] = ""
+            driver.remove(left, paths, tool)
+            self.assertFalse(any("del" in call for call in calls))
+            # Only a pending creation receipt can claim an unmarked kernel session.
+            atomic_json(driver.journal(paths, left), driver.receipt(left, "pending"))
+            driver.remove(left, paths, tool)
+            deletes = [call for call in calls if "del" in call]
+            self.assertEqual(deletes, [("ip", "l2tp", "del", "session", "tunnel_id", 100, "session_id", 101)])
+            self.assertTrue(driver.journal(paths, left).is_file())
+
     def test_a_saved_geneve_route_loss_leaves_other_methods_ready(self):
         group = data([{"id": key(4), "node_id": key(5), "method": "geneve", "service_ip": "203.0.113.20", "geneve": {"vni": 800}},
                       {"id": key(6), "node_id": key(7), "method": "gre", "service_ip": "203.0.113.21"}])

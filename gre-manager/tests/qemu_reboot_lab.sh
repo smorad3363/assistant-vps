@@ -25,11 +25,21 @@ trap cleanup EXIT
 
 images=https://cloud.debian.org/images/cloud/bookworm/latest
 image=debian-12-genericcloud-amd64.qcow2
-curl --fail --retry 3 --location --silent --show-error "$images/SHA512SUMS" --output "$lab/SHA512SUMS"
+sums=SHA512SUMS
+checksum=sha512sum
+os_release='Debian 12'
+if [[ ${GREMGR_REBOOT_OS:-} == ubuntu22 ]]; then
+  images=https://cloud-images.ubuntu.com/jammy/current
+  image=jammy-server-cloudimg-amd64.img
+  sums=SHA256SUMS
+  checksum=sha256sum
+  os_release='Ubuntu 22.04'
+fi
+curl --fail --retry 3 --location --silent --show-error "$images/$sums" --output "$lab/$sums"
 curl --fail --retry 3 --location --silent --show-error "$images/$image" --output "$lab/$image"
 (
   cd "$lab"
-  awk -v image="$image" '$2 == image || $2 == "*" image {print; ++n} END {exit(n != 1)}' SHA512SUMS | sha512sum --check
+  awk -v image="$image" '$2 == image || $2 == "*" image {print; ++n} END {exit(n != 1)}' "$sums" | "$checksum" --check
 )
 ssh-keygen -q -t ed25519 -N '' -f "$lab/key"
 sudo ip link add "$bridge" type bridge
@@ -126,6 +136,10 @@ systemctl enable --now gremgr-fixture-network.service
 env GRE_PANEL_SKIP_ACME=1 bash /home/fixture/gre-manager/install.sh --source-dir /home/fixture/gre-manager
 systemctl is-active gremgr-worker.service
 GUEST
+  if [[ ${GREMGR_REBOOT_OS:-} == ubuntu22 ]]; then
+    guest "$port" 'grep -E "^VERSION_ID=\"?22\.04\"?$" /etc/os-release && uname -r'
+    guest "$port" 'if ! sudo modprobe -nq l2tp_eth; then sudo apt-get update -qq && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "linux-modules-extra-$(uname -r)"; fi; sudo modprobe l2tp_eth'
+  fi
 }
 
 start_vm in 25222 25251 52:54:00:32:60:01 198.51.100.50
@@ -175,6 +189,10 @@ def identity(): return uuid.uuid4().hex
 group_id = identity()
 member = {"id": identity(), "node_id": dst, "method": method, "service_ip": "198.51.100.51",
           "outer_ip": "198.51.100.51", "mtu": 1280}
+if method == "l2tpv3":
+    member["l2tpv3"] = {"ingress": {"tunnel_id": 21701, "session_id": 21711, "port": 37001},
+                       "destination": {"tunnel_id": 21702, "session_id": 21712, "port": 37002}}
+
 if method == "geneve":
     member["geneve"] = {"vni": 814321}
 group = normalize_group({"id": group_id, "name": method.upper() + " reboot", "limits": {"up": 10, "down": 20}, "listeners": [{
@@ -229,4 +247,4 @@ rates = [int(value) * {"": 1, "k": 1024, "m": 1024 * 1024}[unit]
 for expected in (1250000, 2500000):
     assert any(abs(rate - expected) < expected * .01 for rate in rates), (expected, rates)
 PY
-echo "PASS: both Debian 12 boot IDs changed. Fresh SSH and mapped ${method^^} payload passed after each reboot and the joint reboot."
+echo "PASS: both $os_release boot IDs changed. Fresh SSH and mapped ${method^^} payload passed after each reboot and the joint reboot."

@@ -446,16 +446,20 @@ function memberForm(parent, member = {}) {
   const wgFields = (side, title) => `<label>کلید عمومی ${title}<input data-value="${side}-wg-key" dir="ltr" maxlength="44"
     value="${esc(member.wireguard?.[side]?.public_key)}"></label>
     <label>پورت UDP ${title}<input data-value="${side}-wg-port" type="number" min="1024" max="65535" value="${esc(member.wireguard?.[side]?.port)}"></label>`;
+  const l2tpFields = (side, title) => [['tunnel_id','شناسهٔ تونل',4294967295],['session_id','شناسهٔ نشست',4294967295],['port','پورت UDP',65535]].map(
+    ([key,label,max]) => `<label>${label} ${title}<input data-value="${side}-l2tp-${key}" type="number" dir="ltr" min="1" max="${max}"
+      value="${esc(member.l2tpv3?.[side]?.[key])}"></label>`).join('');
   row.innerHTML = `<label>سرور مقصد<select data-value="node">${nodeOptions(member.node_id, true)}</select></label>
     <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option>
       <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option>
       <option value="wireguard" ${member.method === 'wireguard' ? 'selected' : ''}>WireGuard</option>
       <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option>
       <option value="gretap" ${member.method === 'gretap' ? 'selected' : ''}>GRETAP</option>
-      <option value="geneve" ${member.method === 'geneve' ? 'selected' : ''}>GENEVE</option></select></label>
+      <option value="geneve" ${member.method === 'geneve' ? 'selected' : ''}>GENEVE</option>
+      <option value="l2tpv3" ${member.method === 'l2tpv3' ? 'selected' : ''}>L2TPv3</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
-    <label data-method="gre ipip wireguard vxlan gretap geneve">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
-    <label data-method="gre ipip wireguard vxlan gretap geneve">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
+    <label data-method="gre ipip wireguard vxlan gretap geneve l2tpv3">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
+    <label data-method="gre ipip wireguard vxlan gretap geneve l2tpv3">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
     <label data-method="ipip">TTL در IPIP<input data-value="ttl" dir="ltr" type="number" min="0" max="255" value="${esc(member.ttl ?? 64)}" required></label>
     <label>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
     <label>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
@@ -466,7 +470,7 @@ function memberForm(parent, member = {}) {
       <label>شناسهٔ VNI<input data-value="vxlan-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.vxlan?.vni)}"></label>
       <label>پورت UDP هر دو سر<input data-value="vxlan-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.vxlan?.port ?? 4789)}"></label>
     </div></details>
-    <details data-method="gre ipip wireguard vxlan gretap geneve"><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
+    <details data-method="gre ipip wireguard vxlan gretap geneve l2tpv3"><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
       ${sideFields('ingress','ورودی')}${sideFields('destination','مقصد')}</div></details>
     <details data-method="wireguard" ${member.method === 'wireguard' ? 'open' : ''}><summary>تنظیمات WireGuard</summary><div class="form-grid">
       ${wgFields('ingress','ورودی')}${wgFields('destination','مقصد')}
@@ -474,6 +478,9 @@ function memberForm(parent, member = {}) {
       </div><small>کلید عمومی هر نود را از <code>sudo gremgr wireguard-key</code> بگیرید.</small></details>
     <details data-method="gretap" ${member.method === 'gretap' ? 'open' : ''}><summary>تنظیمات GRETAP</summary><label>کلید GRETAP (اختیاری)<input
       data-value="gretap-key" type="number" min="1" max="4294967295" dir="ltr" value="${esc(member.gretap?.key)}"></label></details>
+    <details data-method="l2tpv3" ${member.method === 'l2tpv3' ? 'open' : ''}><summary>تنظیمات L2TPv3 دو سر</summary><div class="form-grid">
+      ${l2tpFields('ingress','ورودی')}${l2tpFields('destination','مقصد')}</div></details>
+
     <details data-method="geneve"><summary>تنظیمات GENEVE</summary><div class="form-grid">
       <label>شناسهٔ VNI<input data-value="geneve-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.geneve?.vni)}"></label>
       <label>پورت UDP هر دو سر<input data-value="geneve-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.geneve?.port ?? 6081)}"></label>
@@ -747,6 +754,8 @@ function groupRequest() {
   const wireguard = member => ({keepalive:Number(value(member,'keepalive')),
     ...Object.fromEntries(['ingress','destination'].map(side => [side,
       {public_key:value(member,side+'-wg-key'),port:Number(value(member,side+'-wg-port'))}]))});
+  const l2tpv3 = member => Object.fromEntries(['ingress','destination'].map(side => [side,Object.fromEntries(
+    ['tunnel_id','session_id','port'].map(key => [key,Number(value(member,side+'-l2tp-'+key))]))]));
   const listeners = $$('[data-v2-listener]', groupForm).map(row => ({
     id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
     ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
@@ -765,6 +774,8 @@ function groupRequest() {
       ...(value(member,'method') === 'vxlan' && {vxlan:{vni:Number(value(member,'vxlan-vni')), port:Number(value(member,'vxlan-port'))}}),
       ...(value(member,'method') === 'wireguard' && {wireguard:wireguard(member)}),
       ...(value(member,'method') === 'gretap' && {gretap:value(member,'gretap-key') ? {key:Number(value(member,'gretap-key'))} : {}}),
+      ...(value(member,'method') === 'l2tpv3' && {l2tpv3:l2tpv3(member)}),
+
       ...(value(member,'method') === 'geneve' && {geneve:{vni:Number(value(member,'geneve-vni')), port:Number(value(member,'geneve-port'))}}),
       weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
       limits:readRateFields(member),

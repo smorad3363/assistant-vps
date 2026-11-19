@@ -13,6 +13,18 @@ def enabled(value):
     return value
 
 
+def l2tpv3_settings(value):
+    if not isinstance(value, dict) or set(value) != {"ingress", "destination"}:
+        raise PanelError("Provide tunnel and session IDs and a UDP port for both L2TPv3 endpoints.", field="l2tpv3")
+    result = {}
+    for side, settings in value.items():
+        if not isinstance(settings, dict) or set(settings) != {"tunnel_id", "session_id", "port"}:
+            raise PanelError("Provide tunnel and session IDs and a UDP port for each L2TPv3 endpoint.", field="l2tpv3")
+        result[side] = {field: integer(settings[field], 1, high, field)
+                        for field, high in (("tunnel_id", 4294967295), ("session_id", 4294967295), ("port", 65535))}
+    return result
+
+
 def listener_profile(listener, settings, service_ip):
     keys = ("protocols", "ports", "target_port", "port_map", "exclude_ports", "port_limits")
     profile = {key: listener[key] for key in keys if key in listener}
@@ -137,6 +149,8 @@ def normalize_group(raw):
                                                    "port": integer(parameters.get("port", default_port), 1, 65535, "port")}
             if method == "wireguard":
                 normalized_members[-1]["wireguard"] = wireguard_settings(member.get("wireguard"))
+            if method == "l2tpv3":
+                normalized_members[-1]["l2tpv3"] = l2tpv3_settings(member.get("l2tpv3"))
             if method == "gretap":
                 settings = member.get("gretap", {})
                 if not isinstance(settings, dict) or set(settings) - {"key"}:
