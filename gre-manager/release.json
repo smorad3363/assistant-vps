@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.2.0",
-  "revision": "33b790d2687c8bb79dc536e1202e2c32c4e62a7a",
+  "revision": "2d99f4c4ba8df5172caf626b20b6079270e479e9",
   "files": {
     "gremgr-certificate.service": "ecaad1b0a845d02eda7dc0072d5fb9bbbdea4b874047e6c4401f5c441cec37b5",
     "gremgr-certificate.timer": "717a6d83996fdf54d8485b597bdfe339d6fff823feec19b1337ab400b70d6dc9",
@@ -9,9 +9,9 @@
     "gremgr-docker-sync.timer": "9e2540abaa0d77aa6db77a0e2085149f90be7e0c97298dfc7ca5e50622f4cdd4",
     "gremgr-pair@.service": "e443deb74e913d519bfb0cc430cf5149eb60984b2f136e792e85d73234b0388b",
     "gremgr-web.service": "3c85549f067c2bf82016fdcdf7f221d88c4f644437742d93aa4da2f0fb2ca263",
-    "gremgr-worker.service": "279a8ceda84dd5b003f6b744fc37ca6487af5c41fba9dc5f55dab4b89813c601",
+    "gremgr-worker.service": "061490d1887f5be1a67f825d1c07257f8dea929848481d51f349a404f8ef90b4",
     "gremgr.sh": "162fae9d1d68de09c6bcd2d886db4f0600d696b2de47821c8b088eda3277eab2",
-    "install.sh": "9834f40d1c330dbc81ca138ab887bc1366c8a3c67942a8c3acb5337f60a0e3e0",
+    "install.sh": "fe929563cf654f22c2a5a2a95eceafb9deb74c064c39f40d87f56f79fc4f0bc4",
     "legacy-restore.sh": "a2d40a8eb9a2afc875e1789e22e39d19fcc1a7c7d58f5dac1b667b8054fe71d5",
     "pair.py": "3ecc0ccd12b192bd8630d07c8d3e6410ff4b76e9a8a30afc700a9459eeb9099f",
     "panel/__init__.py": "d14599f656ac634743b08c03335287e2a4956b592c34a4432bffb4a0aa799308",
@@ -37,6 +37,6 @@
     "panel/v2_health.py": "9e9f204a735f57c260d6fa704c2c3fedf03ca1e19ad413d1012664a650d3dae2",
     "panel/v2_resources.py": "81a8cf05033ed7e096fe37d39cde766d22e43ab4ad3732559cd6843adce511a2",
     "panel/web.py": "99139b2188eb801f0344f0c9ed5b7f485c8fbeafbeea7ac64a6851b4842d8442",
-    "panel/worker.py": "cf4d1616ffb0ae0f0fd707e064bda2cc30850dcbf0cd2138b6fa2f24ca52e567"
+    "panel/worker.py": "ef8cc98b41cea4f72d51aed77d5bc90ee0d42049794daf36fa7d00f53452b946"
   }
 }
