@@ -45,7 +45,36 @@ class IPTunnel:
         return ["-p", self.protocol]
 
 
-DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4")}
+class Vxlan:
+    method = module = "vxlan"
+    overhead = 50
+
+    def create(self, link, interface):
+        return ["ip", "link", "add", "dev", link["tunnel"], "type", self.method, "id", link["vni"],
+                "local", link["outer_local"], "remote", link["outer_peer"], "dstport", link["listen_port"],
+                "dev", interface, "nolearning"]
+
+    def marker(self, link):
+        return "gremgr:v2:" + link["id"]
+
+    def owns(self, link, row):
+        info = row.get("linkinfo", {})
+        data = info.get("info_data", {})
+        return (info.get("info_kind") == self.method and row.get("ifalias") == self.marker(link)
+                and (data.get("id"), data.get("local"), data.get("remote"), data.get("port")) ==
+                (link["vni"], link["outer_local"], link["outer_peer"], link["listen_port"]))
+
+    def refresh(self, link, info, interface):
+        return None
+
+    def delete(self, link):
+        return ["ip", "link", "del", "dev", link["tunnel"]]
+
+    def firewall(self, link):
+        return ["-p", "udp", "--dport", link["listen_port"]]
+
+
+DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "vxlan": Vxlan()}
 
 
 def driver_for(link):

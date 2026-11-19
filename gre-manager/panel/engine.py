@@ -114,6 +114,60 @@ def match_port(low, high):
     return str(low) if low == high else f"{low}:{high}"
 
 
+def udp_carrier_matches(rule, link, interface=None):
+    if "-p" in rule:
+        position = rule.index("-p")
+        if (rule[position + 1] in ("udp", "17", "all", "0")) == (rule[position - 1] == "!"):
+            return False
+    if interface and "-i" in rule:
+        position = rule.index("-i")
+        selector = rule[position + 1]
+        matches = interface.startswith(selector[:-1]) if selector.endswith("+") else interface == selector
+        if matches == (rule[position - 1] == "!"):
+            return False
+    for flag, name in (("-s", "outer_peer"), ("-d", "outer_local")):
+        if flag in rule:
+            position = rule.index(flag)
+            network = ipaddress.IPv4Network(rule[position + 1], strict=False)
+            if (ipaddress.IPv4Address(link[name]) in network) == (rule[position - 1] == "!"):
+                return False
+    for flag in ("--dport", "--dports"):
+        if flag not in rule:
+            continue
+        try:
+            position = rule.index(flag)
+            ranges = [tuple(int(port) for port in value.split(":")) for value in rule[position + 1].split(",")]
+            matches = any(ports[0] <= link["listen_port"] <= ports[-1] for ports in ranges)
+            if matches == (rule[position - 1] == "!"):
+                return False
+        except ValueError:
+            pass
+    return True
+
+
+def external_carrier_forward(rules, link, interface):
+    chains = defaultdict(list)
+    for line in rules.splitlines():
+        if line.startswith("-A "):
+            fields = shlex.split(line)
+            chains[fields[1]].append(fields[2:])
+    visited, pending = {"GMP_PRE"}, ["PREROUTING"]
+    while pending:
+        chain = pending.pop()
+        if chain in visited:
+            continue
+        visited.add(chain)
+        for rule in chains[chain]:
+            jump = next((rule[rule.index(flag) + 1] for flag in ("-j", "-g") if flag in rule), None)
+            if not jump or not udp_carrier_matches(rule, link, interface):
+                continue
+            if jump in ("DNAT", "REDIRECT", "NETMAP"):
+                return True
+            if jump in chains:
+                pending.append(jump)
+    return False
+
+
 def monitored(c, settings):
     explicit = c.get("monitor_ports", []) + [int(x) for x in c.get("port_limits", {})] + [int(x) for x in c.get("port_map", {})]
     ranges = ranges_for(c, settings)
@@ -145,6 +199,10 @@ def build_rules(config, interfaces, docker_udp=False):
                 add("nat", "GMP_PRE", "-i", interfaces[ip], "-d", ip, "-p", proto, "--dport", p, "-j", "ACCEPT")
         if panel_enabled:
             add("filter", "GMP_INPUT", "-i", interfaces[ip], "-d", ip, "-p", "tcp", "--dport", config["settings"]["port"], "-j", "ACCEPT")
+    for link in Engine.gre_devices(config):
+        if "listen_port" in link:
+            add("nat", "GMP_PRE", "-i", interfaces[link["outer_local"]], "-s", link["outer_peer"],
+                "-d", link["outer_local"], *driver_for(link).firewall(link), "-j", "ACCEPT")
 
     def limiter(base, identity, direction, speed, port="all", minimum=1000):
         if not speed:
@@ -278,6 +336,45 @@ class Engine:
             for chain in reversed(present):
                 self.run("iptables", "-w", "5", "-t", table, "-X", chain)
 
+    def check_vxlan(self, links, interfaces):
+        if not links:
+            return
+        identifiers, ports, devices = {}, set(), {}
+        for link in links:
+            interface = interfaces.get(link["outer_local"])
+            if not interface:
+                raise PanelError("The configured VXLAN source address is unavailable.", "local_ip", "outer_ip")
+            if interface not in devices:
+                devices[interface] = json.loads(self.run("ip", "-j", "link", "show", "dev", interface).stdout)[0]
+            if link["mtu"] + driver_for(link).overhead > devices[interface]["mtu"]:
+                raise PanelError("Lower the VXLAN MTU for this underlay interface.", "link_policy", "mtu")
+            identity = link["listen_port"], link["vni"]
+            if identifiers.setdefault(identity, link)["tunnel"] != link["tunnel"]:
+                raise PanelError("Two VXLAN links on this node cannot share both VNI and UDP port.", "device_conflict", "vni")
+            ports.add(link["listen_port"])
+        observed = self.run("ip", "-j", "-d", "link", "show", "type", "vxlan").stdout
+        kernel_ports = set()
+        for row in json.loads(observed):
+            data = row.get("linkinfo", {}).get("info_data", {})
+            port = data.get("port")
+            if port not in ports:
+                continue
+            expected = identifiers.get((port, data.get("id")))
+            if expected and (row.get("ifname") != expected["tunnel"] or not driver_for(expected).owns(expected, row)):
+                raise PanelError("An existing VXLAN interface uses the requested VNI and UDP port.", "device_conflict", "vni")
+            if expected and (data.get("link") != interfaces[expected["outer_local"]] or data.get("learning") is not False):
+                raise PanelError("The VXLAN underlay or learning setting was changed outside the panel.", "device_conflict", "outer_ip")
+            if not row.get("ifalias", "").startswith("gremgr:v2:"):
+                raise PanelError("An existing VXLAN interface already uses this UDP port.", "device_conflict", "port")
+            kernel_ports.add(port)
+        unused = ports - kernel_ports
+        if unused:
+            for row in self.run("ss", "-H", "-una").stdout.splitlines():
+                fields = row.split()
+                port = fields[3].rsplit(":", 1)[-1] if len(fields) > 3 else ""
+                if port.isdecimal() and int(port) in unused:
+                    raise PanelError("An existing UDP socket already uses the VXLAN port.", "device_conflict", "port")
+
     def preflight(self, config):
         interfaces = self.interfaces()
         forwarding = list(config["connections"])
@@ -288,12 +385,14 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs = {}
+        unkeyed_pairs, vxlan = {}, []
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
                 if unkeyed_pairs.setdefault(pair, link)["tunnel"] != link["tunnel"]:
                     raise PanelError("IPIP cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
+            if link.get("method") == "vxlan":
+                vxlan.append(link)
         if unkeyed_pairs:
             inspected = self.run("ip", "-j", "-d", "link", "show", "type", "ipip", check=False)
             if inspected.returncode == 0:
@@ -302,6 +401,7 @@ class Engine:
                     link = unkeyed_pairs.get((data.get("local"), data.get("remote")))
                     if link and (row.get("ifname") != link["tunnel"] or not driver_for(link).owns(link, row)):
                         raise PanelError("An existing IPIP interface uses the requested outer addresses.", "device_conflict")
+        self.check_vxlan(vxlan, interfaces)
         for c in forwarding:
             if not c.get("enabled", True):
                 continue
@@ -311,6 +411,8 @@ class Engine:
             if c["kind"] == "direct" and c["resolved_ip"] in interfaces:
                 raise PanelError("A direct destination cannot be the input server itself.", "loop")
         existing = self.run("iptables-save", "-t", "nat").stdout
+        if any(external_carrier_forward(existing, link, interfaces[link["outer_local"]]) for link in vxlan):
+            raise PanelError("An external port forward already handles this VXLAN endpoint.", "external_conflict", "port")
         for line in existing.splitlines():
             if not line.startswith("-A PREROUTING ") or "-j DNAT" not in line or "gmpanel:" in line:
                 continue

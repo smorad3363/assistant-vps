@@ -72,7 +72,7 @@ def v2_participant(paths, engine):
         result = local_claims(change, node_id, protected, engine.interfaces())
         candidate = Journal(paths.var / "v2-participant.json").read()
         current = dict(protected, connections=combined(paths, read_peers(paths))["connections"])
-        if any(member["method"] == "ipip" for listener in change["group"]["listeners"] for member in listener["members"]):
+        if any(member["method"] in ("ipip", "vxlan") for listener in change["group"]["listeners"] for member in listener["members"]):
             staged = dict(candidate, operations={**candidate["operations"], change["id"]: {
                 "phase": "prepared", "owner": change["owner"], "change": change,
             }})

@@ -427,7 +427,8 @@ function memberForm(parent, member = {}) {
   };
   row.innerHTML = `<label>سرور مقصد<select data-value="node">${nodeOptions(member.node_id, true)}</select></label>
     <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option>
-      <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option></select></label>
+      <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option>
+      <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
     <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
     <label>MTU تونل<input data-value="mtu" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
@@ -437,7 +438,11 @@ function memberForm(parent, member = {}) {
     ${rateFields(member.limits)}
     <label>وضعیت<select data-value="state"><option value="on">فعال</option><option value="drain" ${member.draining ? 'selected' : ''}>در حال تخلیه</option>
       <option value="off" ${member.enabled === false ? 'selected' : ''}>متوقف</option></select></label>
-    <details><summary>MTU و MSS دو سر GRE</summary><div class="form-grid">
+    <details ${member.method === 'vxlan' ? 'open' : ''}><summary>تنظیمات VXLAN</summary><div class="form-grid">
+      <label>شناسهٔ VNI<input data-value="vxlan-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.vxlan?.vni)}"></label>
+      <label>پورت UDP هر دو سر<input data-value="vxlan-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.vxlan?.port ?? 4789)}"></label>
+    </div></details>
+    <details><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
       ${sideFields('ingress','ورودی')}${sideFields('destination','مقصد')}</div></details>
     <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
   parent.append(row);
@@ -450,7 +455,7 @@ function listenerForm(listener = {}) {
   section.innerHTML = `<legend>ورودی</legend><div class="form-grid">
     <label>سرور ورودی<select data-value="node">${nodeOptions(listener.node_id || v2Local)}</select></label>
     <label>IP شنونده<input data-value="ip" dir="ltr" required value="${esc(listener.ip)}"></label>
-    <label>IP بیرونی GRE<input data-value="outer" dir="ltr" value="${esc(listener.outer_ip)}"></label>
+    <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(listener.outer_ip)}"></label>
     <label>پورت‌ها<input data-value="ports" dir="ltr" required placeholder="5100,3300 یا all" value="${esc(listener.ports)}"></label>
     <label>نگاشت پورت<input data-value="map" dir="ltr" placeholder="5100:5000,3300:3000" value="${esc(portMap)}"></label>
     <label>استثناها<input data-value="excluded" dir="ltr" value="${esc((listener.exclude_ports || []).join(','))}"></label>
@@ -459,7 +464,7 @@ function listenerForm(listener = {}) {
     <label>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
       <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label>${rateFields(listener.limits)}</div>
     <details ${listener.probe ? 'open' : ''}><summary>سنجش سلامت سرویس</summary><div class="form-grid">
-      <label><input data-value="watch-link" type="checkbox" ${(listener.watch_link ?? !listener.id) ? 'checked' : ''}> پذیرش بر اساس سلامت لینک GRE</label>
+      <label><input data-value="watch-link" type="checkbox" ${(listener.watch_link ?? !listener.id) ? 'checked' : ''}> پذیرش بر اساس سلامت لینک تونل</label>
       <label>روش سنجش<select data-value="probe-protocol"><option value="">تنظیم نشده</option>
         <option value="tcp" ${listener.probe?.protocol === 'tcp' ? 'selected' : ''}>TCP</option>
         <option value="udp" ${listener.probe?.protocol === 'udp' ? 'selected' : ''}>UDP</option></select></label>
@@ -557,6 +562,7 @@ function groupRequest() {
       mtu:Number(value(member,'mtu')),
       ...(value(member,'method') !== 'direct' && {link_settings:linkSettings(member)}),
       ...(value(member,'method') === 'ipip' && {ttl:Number(value(member,'ttl'))}),
+      ...(value(member,'method') === 'vxlan' && {vxlan:{vni:Number(value(member,'vxlan-vni')), port:Number(value(member,'vxlan-port'))}}),
       weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
       limits:readRateFields(member),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',

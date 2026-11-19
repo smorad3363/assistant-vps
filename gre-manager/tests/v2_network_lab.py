@@ -57,13 +57,13 @@ def exchange(sock, payload):
     return answer[:1].decode()
 
 
-def sample(address, number, udp=False):
+def sample(address, number, udp=False, port=5100):
     result = Counter()
     kind = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
     for case in range(number):
         with socket.socket(socket.AF_INET, kind) as sock:
             sock.settimeout(3)
-            sock.connect((address, 5100))
+            sock.connect((address, port))
             result[exchange(sock, str(case).encode())] += 1
     print(json.dumps(result), flush=True)
 
@@ -200,8 +200,8 @@ def lab(root):
             command(*namespace(name, "render", Path(root) / name, node, int(name == "gm-ir")), input=json.dumps(state))
         return group["listeners"][0]
 
-    def exchanges(name, count, proto="tcp"):
-        return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto),
+    def exchanges(name, count, proto="tcp", port=5100):
+        return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto, port),
                                   capture_output=True).stdout)
 
     with ExitStack() as mounts, ExitStack() as processes:
@@ -368,6 +368,44 @@ def lab(root):
         command("ip", "-n", "gm-ir", "link", "show", "gm-other-ipip", stdout=subprocess.DEVNULL)
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
 
+        first = listener("gm-ir", [first_target], "vxlan", [1])
+        second = listener("gm-ir", [first_target], "vxlan", [1])
+        second.update(ports="5200", port_map={"5200": 6000})
+        for route, vni in ((first, 172), (second, 274)):
+            route["members"][0]["vxlan"] = {"vni": vni, "port": 34789}
+        command("ip", "-n", "gm-ir", "link", "add", "gm-foreign-vx", "type", "vxlan", "id", "172", "local",
+                nodes["gm-ir"][0], "remote", nodes[first_target][0], "dstport", "34790", "dev", "eth0")
+        conflict = copy.deepcopy(second)
+        conflict["members"][0]["vxlan"]["port"] = 34790
+        candidate = normalize_group({"id": group_id, "name": "Foreign VXLAN", "listeners": [conflict]})
+        state = {"groups": {group_id: {"active": True, "owner": owner, "group": candidate}}, "operations": {}}
+        rejected = subprocess.run(namespace("gm-ir", "render", Path(root) / "gm-ir", owner, 1), input=json.dumps(state),
+                                  capture_output=True, text=True, timeout=30)
+        assert rejected.returncode and "already uses this UDP port" in rejected.stderr, rejected.stderr
+        apply([first, second])
+        links = []
+        for route, marker, port in ((first, "0", 5100), (second, "M", 5200)):
+            member = route["members"][0]
+            link = gre_link(owner, route, member)
+            links.append(link["tunnel"])
+            for host in ("gm-ir", first_target):
+                info = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", link["tunnel"],
+                                          capture_output=True).stdout)[0]["linkinfo"]
+                attrs = info["info_data"]
+                assert info["info_kind"] == "vxlan" and attrs["id"] == member["vxlan"]["vni"], info
+                assert attrs["port"] == 34789 and attrs["local"] == nodes[host][0], info
+                assert attrs["remote"] == nodes[first_target if host == "gm-ir" else "gm-ir"][0], info
+                assert attrs["link"] == "eth0" and attrs["learning"] is False, info
+            for proto in ("tcp", "udp"):
+                assert exchanges("gm-ir", 6, proto, port=port) == {marker: 6}
+        apply([first])
+        for host in ("gm-ir", first_target):
+            command("ip", "-n", host, "link", "show", links[0], stdout=subprocess.DEVNULL)
+            assert subprocess.run(["ip", "-n", host, "link", "show", links[1]], capture_output=True).returncode != 0
+        assert exchanges("gm-ir", 6) == {"0": 6}
+        command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-vx", stdout=subprocess.DEVNULL)
+        print("v2 independent unicast VXLAN VNIs verified their kernel settings, TCP/UDP round trips, and selective removal.", flush=True)
+
 
 if __name__ == "__main__":
     action, *args = sys.argv[1:]
@@ -378,7 +416,7 @@ if __name__ == "__main__":
     elif action == "serve":
         serve(args[0], args[1].encode(), int(args[2]))
     elif action == "sample":
-        sample(args[0], int(args[1]), args[2] == "udp")
+        sample(args[0], int(args[1]), args[2] == "udp", int(args[3]) if len(args) > 3 else 5100)
     elif action == "hold":
         hold(*args)
     elif action == "aggregate":
