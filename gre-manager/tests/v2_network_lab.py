@@ -519,6 +519,34 @@ def lab(root):
         assert exchanges("gm-ir", 6) == {"0": 6}
         command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-vx", stdout=subprocess.DEVNULL)
         print("v2 independent unicast VXLAN VNIs verified their kernel settings, TCP/UDP round trips, and selective removal.", flush=True)
+
+        l2tp = listener("gm-ir", [first_target], "l2tpv3", [1])
+        l2tp["members"][0]["l2tpv3"] = {"ingress": {"tunnel_id": 21701, "session_id": 21711, "port": 37001},
+                                      "destination": {"tunnel_id": 21702, "session_id": 21712, "port": 37002}}
+        normalized = apply([l2tp])
+        member = normalized["members"][0]
+        for (host, local_ip, peer_ip, local_id, peer_id), receiving in (
+                (("gm-ir", "198.19.200.1", "198.19.200.2", 21911, 21912), False),
+                ((first_target, "198.19.200.2", "198.19.200.1", 21912, 21911), True)):
+            link = gre_link(owner, normalized, member, receiving=receiving)
+            prefix = ["ip", "netns", "exec", host]
+            command(*prefix, "ip", "l2tp", "add", "session", "tunnel_id", str(link["tunnel_id"]), "session_id", str(local_id),
+                    "peer_session_id", str(peer_id), "name", "gm-adjacent-v3")
+            command(*prefix, "ip", "addr", "add", local_ip + "/30", "dev", "gm-adjacent-v3")
+            command(*prefix, "ip", "link", "set", "gm-adjacent-v3", "up")
+            carrier = driver_for(link).firewall(dict(link, session_id=local_id))
+            command(*prefix, "iptables", "-A", "INPUT", "-i", "eth0", "-s", link["outer_peer"],
+                    "-d", link["outer_local"], *map(str, carrier), "-j", "ACCEPT")
+            command(*prefix, "iptables", "-A", "INPUT", "-i", "gm-adjacent-v3", "-s", peer_ip, "-d", local_ip,
+                    "-p", "tcp", "-j", "ACCEPT")
+        adjacent = start_process(processes, namespace(first_target, "serve", "198.19.200.2", "L", 5699), stdout=subprocess.PIPE)
+        assert receive_line(adjacent) == "ready"
+        for proto in ("tcp", "udp"):
+            assert exchanges("gm-ir", 5, proto) == {"0": 5}
+        apply([weighted])
+        neighbor = json.loads(command(*namespace("gm-ir", "sample", "198.19.200.2", 5, "tcp", 5699), capture_output=True).stdout)
+        assert neighbor == {"L": 5}
+        print("v2 L2TPv3 carried mapped TCP/UDP and preserved a second Ethernet session on the same tunnel.", flush=True)
         wg = listener("gm-ir", [first_target], "wireguard", [1])
         sides = {}
         for name, host, port in (("ingress", "gm-ir", 35379), ("destination", first_target, 35389)):

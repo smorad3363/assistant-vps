@@ -28,6 +28,8 @@ def gre_link(owner, listener, member, receiving=False):
     if method == "vxlan":
         settings = member["vxlan"]
         identity_input += f"|{settings['vni']}|{settings['port']}"
+    if method == "l2tpv3":
+        identity_input += "|" + fingerprint(member["l2tpv3"])
     identity = hashlib.sha256(identity_input.encode()).hexdigest()
     start = int(ipaddress.IPv4Address("10.224.0.0")) + 4 * (int(identity[12:20], 16) % 262144)
     addresses = [str(ipaddress.IPv4Address(start + offset)) for offset in (1, 2)]
@@ -44,8 +46,14 @@ def gre_link(owner, listener, member, receiving=False):
         extra = {"public_key": settings[here]["public_key"], "peer_public_key": settings[there]["public_key"],
                  "listen_port": settings[here]["port"], "peer_port": settings[there]["port"],
                  "keepalive": 0 if receiving else settings["keepalive"]}
+    if method == "l2tpv3":
+        here, there = ("destination", "ingress") if receiving else ("ingress", "destination")
+        local, peer = member["l2tpv3"][here], member["l2tpv3"][there]
+        extra = {"tunnel_id": local["tunnel_id"], "session_id": local["session_id"], "listen_port": local["port"],
+                 "peer_tunnel_id": peer["tunnel_id"], "peer_session_id": peer["session_id"], "peer_port": peer["port"]}
     return {
-        "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "wireguard": "w2-", "vxlan": "v2-", "gretap": "t2-"}[method] + identity[:12],
+        "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "wireguard": "w2-", "vxlan": "v2-",
+                                       "gretap": "t2-", "l2tpv3": "l2-"}[method] + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
         "peer_tun": addresses[1], "key": settings_key or int(identity[20:28], 16) or 1, "mtu": parameters.get("mtu", mtu),
         **({"mss_mode": parameters["mss_mode"], "mss": parameters.get("mss")} if parameters else {}),
@@ -81,7 +89,7 @@ def health_signature(owner, listener, member):
     path = [listener.get(key) for key in ("id", "node_id", "ip", "outer_ip", "ports", "exclude_ports", "port_map",
                                           "target_port", "protocols", "probe", "watch_link")]
     peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled")]
-    if member["method"] in ("wireguard", "vxlan", "gretap"):
+    if member["method"] in ("wireguard", "vxlan", "gretap", "l2tpv3"):
         peer.append(member[member["method"]])
     return fingerprint([owner, path, peer])
 

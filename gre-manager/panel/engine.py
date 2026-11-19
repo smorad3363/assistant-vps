@@ -427,7 +427,7 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs, keyed_pairs, vxlan, wg_links = {}, {}, [], []
+        unkeyed_pairs, keyed_pairs, vxlan, wg_links, l2tp = {}, {}, [], [], []
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
@@ -437,6 +437,8 @@ class Engine:
                 vxlan.append(link)
             if link.get("method") == "wireguard":
                 wg_links.append(link)
+            if link.get("method") == "l2tpv3":
+                l2tp.append(link)
             if link.get("method") == "gretap":
                 key = link["outer_local"], link["outer_peer"], link["key"]
                 if keyed_pairs.setdefault(key, link)["tunnel"] != link["tunnel"]:
@@ -458,8 +460,13 @@ class Engine:
                     raise PanelError("An existing GRETAP interface uses that endpoint pair and key.", "device_conflict", "key")
         self.check_vxlan(vxlan, interfaces)
         self.check_wireguard(wg_links, interfaces)
-        if {x["listen_port"] for x in vxlan} & {x["listen_port"] for x in wg_links}:
-            raise PanelError("VXLAN and WireGuard require different UDP ports on this node.", "device_conflict", "port")
+        if l2tp:
+            driver_for(l2tp[0]).check(l2tp, interfaces, self.paths, self.run)
+        carriers = [*vxlan, *wg_links, *l2tp]
+        transports = {}
+        for link in carriers:
+            if transports.setdefault(link["listen_port"], link["method"]) != link["method"]:
+                raise PanelError("Different UDP tunnel types require separate ports on this node.", "device_conflict", "port")
         for c in forwarding:
             if not c.get("enabled", True):
                 continue
@@ -469,7 +476,7 @@ class Engine:
             if c["kind"] == "direct" and c["resolved_ip"] in interfaces:
                 raise PanelError("A direct destination cannot be the input server itself.", "loop")
         existing = self.run("iptables-save", "-t", "nat").stdout
-        for link in [*vxlan, *wg_links]:
+        for link in carriers:
             if external_carrier_forward(existing, link, interfaces[link["outer_local"]]):
                 raise PanelError("An external port forward already handles this tunnel endpoint.", "external_conflict", "port")
         for line in existing.splitlines():
@@ -505,6 +512,23 @@ class Engine:
         interface = interfaces[g["outer_local"]]
         self.run("modprobe", driver.module, check=False)
         row = self.inspect_link(g, driver)
+        if not row:
+            for route in json.loads(self.run("ip", "-j", "-4", "route", "show").stdout):
+                if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
+                    raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
+        if driver.method == "l2tpv3":
+            if row and not driver.owns(g, row) and (row.get("ifalias") or not driver.recorded(self.paths, g)):
+                raise PanelError("Another program owns this tunnel interface.", "device_conflict")
+            driver.configure(g, self.paths, self.run)
+        else:
+            self.ensure_ip_link(g, driver, interface, row)
+        if driver.method == "wireguard":
+            driver.configure(g, self.paths, self.run)
+        self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
+        self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
+        self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
+
+    def ensure_ip_link(self, g, driver, interface, row):
         stage = self.staging_path(g) if getattr(driver, "staged_marker", False) else None
         if row:
             if not self.owns_link(g, row):
@@ -517,9 +541,6 @@ class Engine:
             if refresh:
                 self.run(*refresh)
         else:
-            for route in json.loads(self.run("ip", "-j", "-4", "route", "show").stdout):
-                if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
-                    raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
             create = driver.create(g, interface)
             if stage:
                 suffix = secrets.token_hex(5)
@@ -538,11 +559,6 @@ class Engine:
                     raise
             if stage:
                 stage.unlink(missing_ok=True)
-        if driver.method == "wireguard":
-            driver.configure(g, self.paths, self.run)
-        self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
-        self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
-        self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
 
     def staging_path(self, link):
         return self.paths.var / "link-staging" / (link["tunnel"] + ".json")
@@ -659,6 +675,9 @@ class Engine:
     def remove_gre(self, g):
         # Verify ownership even on deletion. Never deletes an arbitrary name.
         driver = driver_for(g)
+        if driver.method == "l2tpv3":
+            driver.remove(g, self.paths, self.run)
+            return
         row = self.inspect_link(g, driver)
         if row and self.owns_link(g, row):
             self.run(*driver.delete(g))
