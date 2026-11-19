@@ -77,9 +77,9 @@ def v2_participant(paths, engine):
             staged = dict(candidate, operations={**candidate["operations"], change["id"]: {
                 "phase": "prepared", "owner": change["owner"], "change": change,
             }})
-            engine.preflight(topology_views(current, staged, node_id))
+            engine.preflight(topology_views(current, staged, node_id, paths=paths, require_keys_for=change["group_id"]))
         candidate["groups"][change["group_id"]] = {"active": True, "owner": change["owner"], "group": change["group"]}
-        view = topology_views(current, candidate, node_id)
+        view = topology_views(current, candidate, node_id, paths=paths, require_keys_for=change["group_id"])
         if isinstance(engine, Engine):
             require_ssh_protection(view)
         engine.preflight(view)
@@ -87,7 +87,7 @@ def v2_participant(paths, engine):
 
     def materialize(state, previous):
         config = with_ssh_protection(combined(paths, read_peers(paths)), paths, remember=True)
-        engine.apply(topology_views(config, state, node_id), topology_views(config, previous, node_id))
+        engine.apply(topology_views(config, state, node_id, paths=paths), topology_views(config, previous, node_id, paths=paths))
 
     return Participant(paths, node_id, claims, materialize=materialize)
 

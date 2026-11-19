@@ -28,6 +28,7 @@ from .topology import legacy_topology
 from .transactions import Coordinator, fingerprint, identity, overlaps
 from .v2_access import AUTH_ROUTES, Access
 from .v2_config import managed_nodes, normalize_group, participant_order
+from .v2_forwarding import topology_views
 from .v2_resources import last_metrics
 
 
@@ -153,22 +154,26 @@ class Controller:
         saved = self.v2_agent.journal.read()
         result = []
         remote = self.v2_remote_health.copy()
+        unavailable = topology_views(self.store.config(), saved, self.v2_agent.node_id, paths=self.paths)["v2_driver_unavailable"]
         for key, record in sorted(saved["groups"].items()):
             if not record["active"]:
                 continue
             revision = record["revision"]
-            health = {}
+            health, driver_issues = {}, {}
             for listener in record["group"]["listeners"]:
                 node = listener["node_id"]
                 samples = remote.get((key, node), {})
                 for member in listener["members"]:
                     identity = member["id"]
+                    if issue := unavailable.get(key + ":" + identity):
+                        driver_issues[identity] = issue
                     sample = (saved.get("health", {}).get(key + ":" + identity, {}) if node == self.v2_agent.node_id
                               else samples.get(identity, {}))
                     if isinstance(sample, dict) and sample.get("revision") == revision:
                         health[identity] = sample
             result.append({"id": key, "owner": record["owner"], "revision": revision,
-                           "group": record["group"], "health": health, "rates": self.rates.get((key, "all"))})
+                           "group": record["group"], "health": health, "driver_issues": driver_issues,
+                           "rates": self.rates.get((key, "all"))})
         return result
 
     def v2_uses_node(self, node_id):

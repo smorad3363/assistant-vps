@@ -20,7 +20,7 @@ if [[ -n "$PANEL_PORT" ]]; then
 fi
 if command -v apt-get >/dev/null; then
   missing=0
-  for binary in python3 ip iptables ping curl openssl ssh sshpass modprobe flock; do
+  for binary in python3 ip iptables ping curl openssl ssh sshpass modprobe flock wg; do
     command -v "$binary" >/dev/null || missing=1
   done
   if ((missing)); then

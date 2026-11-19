@@ -509,7 +509,8 @@ async function refreshGroups() {
   const status = value => value === true ? 'سالم' : value === false ? 'قطع' : 'نامشخص';
   const evidence = record => record.group.listeners.flatMap(listener => listener.members.filter(member => member.enabled).map(member => {
     const sample = record.health?.[member.id] || {};
-    const summary = `مدیریت ${status(sample.management)} · لینک ${status(sample.link)} · سرویس ${status(sample.service)} · ICMP ${status(sample.icmp)}`;
+    const summary = record.driver_issues?.[member.id] === 'wireguard_key' ? 'نیاز به کلید WireGuard روی این سرور' :
+      `مدیریت ${status(sample.management)} · لینک ${status(sample.link)} · سرویس ${status(sample.service)} · ICMP ${status(sample.icmp)}`;
     const checked = sample.checked ? ' · ' + new Date(sample.checked * 1000).toLocaleTimeString('fa-IR') : '';
     return `<small><bdi>${esc(member.service_ip)}</bdi> ${esc(summary + checked)}</small>`;
   })).join('');

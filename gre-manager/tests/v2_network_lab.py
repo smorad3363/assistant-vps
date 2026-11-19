@@ -375,16 +375,34 @@ def lab(root):
             sides[name] = {"public_key": public, "port": port}
         wg["members"][0]["wireguard"] = dict(sides, keepalive=5)
         command("ip", "netns", "exec", first_target, "ip", "link", "add", "gm-existing-wg", "type", "wireguard")
+        sentinel = ["ip", "netns", "exec", first_target, "wg"]
+        command(*sentinel, "set", "gm-existing-wg", "listen-port", "35390")
+        command("ip", "-n", first_target, "link", "set", "gm-existing-wg", "up")
+        conflicting = copy.deepcopy(wg)
+        conflicting["members"][0]["wireguard"]["destination"]["port"] = 35390
+        revision = normalize_group({"id": group_id, "name": "WireGuard conflict", "listeners": [conflicting]})
+        candidate = {"groups": {group_id: {"active": True, "owner": owner, "group": revision}}, "operations": {}}
+        rejected = subprocess.run(namespace(first_target, "render", Path(root) / first_target, nodes[first_target][1], 0),
+                                  input=json.dumps(candidate), capture_output=True, text=True, timeout=30)
+        assert rejected.returncode and "already listens on this UDP port" in rejected.stderr, rejected.stderr
         compiled_wg = apply([wg])
         link = gre_link(owner, compiled_wg, compiled_wg["members"][0])
+        deadline = time.monotonic() + 14
+        while True:
+            handshakes = [command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], "latest-handshakes",
+                                  capture_output=True).stdout.split() for host in ("gm-ir", first_target)]
+            if all(len(row) == 2 and int(row[-1]) > 0 for row in handshakes):
+                break
+            if time.monotonic() >= deadline:
+                for host in ("gm-ir", first_target):
+                    command("ip", "netns", "exec", host, "iptables", "-nvL", "GMP_INPUT")
+                    command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], "endpoints")
+                raise AssertionError("WireGuard did not negotiate a handshake at both endpoints.")
+            time.sleep(.2)
         for proto in ("tcp", "udp"):
             assert exchanges("gm-ir", 6, proto) == {"0": 6}
-        for host in ("gm-ir", first_target):
-            handshakes = command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], "latest-handshakes",
-                                 capture_output=True).stdout.split()
-            assert len(handshakes) == 2 and int(handshakes[-1]) > 0, handshakes
         apply([weighted])
-        command("ip", "-n", first_target, "link", "show", "gm-existing-wg", stdout=subprocess.DEVNULL)
+        assert command(*sentinel, "show", "gm-existing-wg", "listen-port", capture_output=True).stdout.strip() == "35390"
         for host in ("gm-ir", first_target):
             assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
         print("v2 WireGuard proved the handshake and TCP/UDP payload in both namespaces. A separate interface survived removal.", flush=True)
