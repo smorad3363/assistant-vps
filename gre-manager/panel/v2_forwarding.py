@@ -97,6 +97,7 @@ def health_signature(owner, listener, member):
 
 def topology_views(config, state, node_id, *, paths=None, require_keys_for=None):
     listeners, devices, receivers = [], {}, {}
+    unavailable_devices = {}
     policies = {}
     unavailable = {}
     local_key = None
@@ -104,7 +105,7 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
     ipv6 = None
     settings = dict(DEFAULTS, **config["settings"])
 
-    def usable_member(listener, group, member):
+    def usable_member(owner, listener, group, member):
         nonlocal key_read, local_key, ipv6
         method = member["method"]
         if (not paths or group["id"] == require_keys_for or method not in ("wireguard", "sit")
@@ -120,6 +121,8 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
             if ipv6:
                 return member
             unavailable[group["id"] + ":" + member["id"]] = "ipv6_disabled"
+            link = gre_link(owner, listener, member, receiving=side == "destination")
+            unavailable_devices[link["tunnel"]] = link
             return dict(member, enabled=False, draining=False)
         if not key_read:
             from .engine import run
@@ -149,7 +152,7 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
             return
         for listener in group["listeners"]:
             if paths:
-                listener = dict(listener, members=[usable_member(listener, group, member) for member in listener["members"]])
+                listener = dict(listener, members=[usable_member(owner, listener, group, member) for member in listener["members"]])
             ingress = listener["node_id"] == node_id
             if ingress and not staged and listener["protocols"]:
                 if "probe" in listener or listener.get("watch_link"):
@@ -164,6 +167,8 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
                 listeners.append((group, owner, listener))
             for member in listener["members"]:
                 if member["method"] not in DRIVERS or not (member["enabled"] or member.get("draining")):
+                    continue
+                if member["method"] == "sit" and staged and require_keys_for is None:
                     continue
                 receiving = member["node_id"] == node_id
                 if not ingress and not receiving:
@@ -194,7 +199,8 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
         if record["phase"] == "prepared" and record.get("change"):
             add_group(record["owner"], record["change"]["group"], True)
     return dict(config, settings=settings, connections=[*config["connections"], *receivers.values()],
-                v2_listeners=listeners, v2_devices=list(devices.values()), v2_driver_unavailable=unavailable)
+                v2_listeners=listeners, v2_devices=list(devices.values()), v2_driver_unavailable=unavailable,
+                v2_unavailable_devices=list(unavailable_devices.values()))
 
 
 def installed_topology(paths, config):

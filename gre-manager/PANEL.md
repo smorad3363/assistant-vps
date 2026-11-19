@@ -227,6 +227,8 @@ members. Select the two outer IPv4 endpoints and two distinct inner IPv6
 addresses in the same /64 to /126 subnet. IPv6 must be enabled on both hosts
 and on new interfaces. Use an MTU of at least 1280. Applications reach the
 other host at its inner IPv6 address, subject to its existing IPv6 firewall.
+Use a group without a shared rate limit. Service forwarding limits and member
+drain apply to the IPv4 forwarding methods.
 To replace inner addresses on the same outer pair, stop the member before
 changing its configuration.
 

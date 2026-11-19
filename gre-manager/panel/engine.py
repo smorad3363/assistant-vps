@@ -123,9 +123,10 @@ def match_port(low, high):
 
 
 def udp_carrier_matches(rule, link, interface=None):
+    protocol = ("ipv6", "41") if link.get("family") == 6 else ("udp", "17")
     if "-p" in rule:
         position = rule.index("-p")
-        if (rule[position + 1] in ("udp", "17", "all", "0")) == (rule[position - 1] == "!"):
+        if (rule[position + 1] in (*protocol, "all", "0")) == (rule[position - 1] == "!"):
             return False
     if interface and "-i" in rule:
         position = rule.index("-i")
@@ -142,6 +143,8 @@ def udp_carrier_matches(rule, link, interface=None):
     for flag in ("--dport", "--dports"):
         if flag not in rule:
             continue
+        if "listen_port" not in link:
+            return False
         try:
             position = rule.index(flag)
             ranges = [tuple(int(port) for port in value.split(":")) for value in rule[position + 1].split(",")]
@@ -208,7 +211,7 @@ def build_rules(config, interfaces, docker_udp=False):
         if panel_enabled:
             add("filter", "GMP_INPUT", "-i", interfaces[ip], "-d", ip, "-p", "tcp", "--dport", config["settings"]["port"], "-j", "ACCEPT")
     for link in Engine.gre_devices(config):
-        if "listen_port" in link:
+        if "listen_port" in link or link.get("family") == 6:
             add("nat", "GMP_PRE", "-i", interfaces[link["outer_local"]], "-s", link["outer_peer"],
                 "-d", link["outer_local"], *driver_for(link).firewall(link), "-j", "ACCEPT")
         if link.get("family") == 6:
@@ -474,7 +477,7 @@ class Engine:
             if c["kind"] == "direct" and c["resolved_ip"] in interfaces:
                 raise PanelError("A direct destination cannot be the input server itself.", "loop")
         existing = self.run("iptables-save", "-t", "nat").stdout
-        for link in [*vxlan, *wg_links]:
+        for link in [*vxlan, *wg_links, *unkeyed_pairs.get("sit", {}).values()]:
             if external_carrier_forward(existing, link, interfaces[link["outer_local"]]):
                 raise PanelError("An external port forward already handles this tunnel endpoint.", "external_conflict", "port")
         for line in existing.splitlines():
@@ -524,7 +527,8 @@ class Engine:
             if refresh:
                 self.run(*refresh)
         else:
-            for route in json.loads(self.run("ip", "-j", "-6" if v6 else "-4", "route", "show").stdout):
+            routes = ["ip", "-j", "-6", "route", "show", "table", "all"] if v6 else ["ip", "-j", "-4", "route", "show"]
+            for route in json.loads(self.run(*routes).stdout):
                 destination = route.get("dst")
                 if destination in (None, "default"):
                     continue
@@ -638,7 +642,10 @@ class Engine:
                     self.remove_gre(g)
             raise
         wanted = {g["tunnel"] for g in self.gre_devices(config)}
-        for name, g in old_gre.items():
+        retired = dict(old_gre)
+        for snapshot in (previous, config):
+            retired.update((link["tunnel"], link) for link in snapshot.get("v2_unavailable_devices", []))
+        for name, g in retired.items():
             if name not in wanted:
                 self.remove_gre(g)
         if busy:

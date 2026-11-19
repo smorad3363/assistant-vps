@@ -130,6 +130,8 @@ def normalize_group(raw):
                 normalized_members[-1]["link_settings"] = link_settings(member["link_settings"])
                 if method == "sit" and any(side.get("mtu", 1280) < 1280 for side in normalized_members[-1]["link_settings"].values()):
                     raise PanelError("An IPv6 SIT interface requires at least 1280 bytes of MTU.", field="mtu")
+                if method == "sit" and any(side["mss_mode"] not in ("mtu", "off") for side in normalized_members[-1]["link_settings"].values()):
+                    raise PanelError("SIT uses IPv6 path MTU discovery. Configure only its link MTU.", field="mtu")
             if method == "ipip":
                 normalized_members[-1]["ttl"] = integer(member.get("ttl", 64), 0, 255, "ttl")
             if method == "vxlan":
@@ -147,6 +149,9 @@ def normalize_group(raw):
                 normalized_members[-1]["gretap"] = ({"key": integer(settings["key"], 1, 4294967295, "key")}
                                                        if "key" in settings else {})
             if method == "sit":
+                if (draining or normalized_members[-1]["weight"] != 1 or normalized_members[-1]["priority"]
+                        or any(normalized_members[-1].get("limits", {}).values())):
+                    raise PanelError("SIT supports start and stop. Weight, priority, rate limits and drain require service forwarding.", field="sit")
                 normalized_members[-1]["sit"] = sit_settings(member.get("sit"))
         first = normalized_members[0]
         sit = [member for member in normalized_members if member["method"] == "sit"]
@@ -155,6 +160,8 @@ def normalize_group(raw):
                     or listener.get("watch_link") or listener.get("ports", "all") != "all"
                     or any(listener.get(field) for field in ("port_limits", "target_port", "exclude_ports", "port_map"))):
                 raise PanelError("Use a separate SIT listener for IPv6 links without IPv4 port forwarding or service probes.", field="sit")
+            if any(result.get("limits", {}).values()) or any(bandwidth_limits(listener.get("limits", {})).values()):
+                raise PanelError("Place SIT in a group without shared rate limits.", field="sit")
             profile = {"listen_ip": listen_ip, "ports": "all", "protocols": [], "exclude_ports": [], "port_map": {},
                        "target_port": None, "port_limits": {}}
         else:

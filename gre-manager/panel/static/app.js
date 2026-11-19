@@ -423,8 +423,8 @@ function nodeOptions(selected, unmanaged = false) {
   return (unmanaged ? '<option value="">مقصد مستقیم بدون مدیریت</option>' : '') +
     v2Nodes.map(node => `<option value="${esc(node.id)}" ${node.id === selected ? 'selected' : ''}>${esc(node.name)}</option>`).join('');
 }
-function rateFields(limits = {}) {
-  return ['up','down'].map((direction,index) => `<label>سقف ${index ? 'دریافت' : 'ارسال'} (Mbps)
+function rateFields(limits = {}, visibility = '') {
+  return ['up','down'].map((direction,index) => `<label ${visibility}>سقف ${index ? 'دریافت' : 'ارسال'} (Mbps)
     <input data-value="rate-${direction}" type="number" dir="ltr" min="0" max="100000" step="0.001" placeholder="ارث‌بری" value="${esc(limits[direction])}"></label>`).join('');
 }
 function readRateFields(row) {
@@ -457,9 +457,9 @@ function memberForm(parent, member = {}) {
     <label data-method="gre ipip wireguard vxlan gretap sit">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
     <label data-method="gre ipip wireguard vxlan gretap sit">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
     <label data-method="ipip">TTL در IPIP<input data-value="ttl" dir="ltr" type="number" min="0" max="255" value="${esc(member.ttl ?? 64)}" required></label>
-    <label>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
-    <label>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
-    ${rateFields(member.limits)}
+    <label data-sit-excluded>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
+    <label data-sit-excluded>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
+    ${rateFields(member.limits,'data-sit-excluded')}
     <label>وضعیت<select data-value="state"><option value="on">فعال</option><option value="drain" ${member.draining ? 'selected' : ''}>در حال تخلیه</option>
       <option value="off" ${member.enabled === false ? 'selected' : ''}>متوقف</option></select></label>
     <details data-method="vxlan" ${member.method === 'vxlan' ? 'open' : ''}><summary>تنظیمات VXLAN</summary><div class="form-grid">
@@ -485,10 +485,15 @@ function memberForm(parent, member = {}) {
 }
 function syncMemberMethod(row) {
   const method = $('[data-value="method"]', row).value;
-  $('[data-value="mtu"]',row).min = method === 'sit' ? 1280 : 576;
-  $('[data-value="outer"]',row).required = method === 'sit';
-  for (const field of $$('[data-method]',row)) {
-    const visible = field.dataset.method.split(' ').includes(method);
+  const ipv6 = method === 'sit';
+  $('[data-value="mtu"]',row).min = ipv6 ? 1280 : 576;
+  $('[data-value="outer"]',row).required = ipv6;
+  const state = $('[data-value="state"]',row);
+  const drain = $('option[value="drain"]',state);
+  if (ipv6 && state.value === 'drain') state.value = 'on';
+  drain.hidden = drain.disabled = ipv6;
+  for (const field of $$('[data-method],[data-sit-excluded]',row)) {
+    const visible = field.dataset.method ? field.dataset.method.split(' ').includes(method) : !ipv6;
     field.hidden = !visible;
     const wrapper = field.closest('.field-with-help');
     if (wrapper) wrapper.hidden = !visible;
@@ -524,7 +529,7 @@ function listenerForm(listener = {}) {
     <label data-forwarding>سقف هر پورت<input data-value="port-rates" dir="ltr" placeholder="5100:20:10" value="${esc(
       Object.entries(listener.port_limits || {}).map(([port,limits]) => [port,limits.up,limits.down].join(':')).join(','))}"></label>
     <label data-forwarding>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
-      <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label>${rateFields(listener.limits)}</div>
+      <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label>${rateFields(listener.limits,'data-forwarding')}</div>
     <details data-forwarding ${listener.probe ? 'open' : ''}><summary>سنجش سلامت سرویس</summary><div class="form-grid">
       <label><input data-value="watch-link" type="checkbox" ${(listener.watch_link ?? !listener.id) ? 'checked' : ''}> پذیرش بر اساس سلامت لینک تونل</label>
       <label>روش سنجش<select data-value="probe-protocol"><option value="">تنظیم نشده</option>
@@ -786,8 +791,9 @@ function groupRequest() {
       ...(value(member,'method') === 'wireguard' && {wireguard:wireguard(member)}),
       ...(value(member,'method') === 'gretap' && {gretap:value(member,'gretap-key') ? {key:Number(value(member,'gretap-key'))} : {}}),
       ...(value(member,'method') === 'sit' && {sit:{ingress:value(member,'ingress-sit-ip'), destination:value(member,'destination-sit-ip')}}),
-      weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
-      limits:readRateFields(member),
+      ...(value(member,'method') !== 'sit' && {
+        weight:Number(value(member,'weight')), priority:Number(value(member,'priority')), limits:readRateFields(member),
+      }),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',
     })),
   }));

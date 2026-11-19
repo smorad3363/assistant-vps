@@ -131,7 +131,7 @@ def render(home, node, with_panel, crash=None):
             os.kill(os.getpid(), signal.SIGKILL)
         return result
 
-    Engine(paths, execute).apply(topology_views(config, current, node), topology_views(config, previous, node))
+    Engine(paths, execute).apply(topology_views(config, current, node, paths=paths), topology_views(config, previous, node, paths=paths))
     atomic_json(prior, current)
 
 
@@ -459,6 +459,12 @@ def lab(root):
         sit["members"][0]["sit"] = {"ingress": "fd34:5d09:ee5::1/64", "destination": "fd34:5d09:ee5::2/64"}
         command("ip", "-n", "gm-ir", "link", "add", "gm-foreign-sit", "type", "sit", "local", nodes["gm-ir"][0],
                 "remote", nodes[services[-1]][0])
+        staged = normalize_group({"id": group_id, "name": "SIT prepare", "listeners": [sit]})
+        plan = {"groups": {}, "operations": {"prepared": {"phase": "prepared", "owner": owner, "change": {"group": staged}}}}
+        pending = gre_link(owner, staged["listeners"][0], staged["listeners"][0]["members"][0])
+        for host in ("gm-ir", first_target):
+            command(*namespace(host, "render", Path(root) / host, nodes[host][1], int(host == "gm-ir")), input=json.dumps(plan))
+            assert subprocess.run(["ip", "-n", host, "link", "show", pending["tunnel"]], capture_output=True).returncode != 0
         compiled = apply([sit])
         link = gre_link(owner, compiled, compiled["members"][0])
         endpoint = link["peer_tun"]
@@ -473,11 +479,14 @@ def lab(root):
             ipv6 = json.loads(command("ip", "-n", host, "-j", "-6", "addr", "show", "dev", link["tunnel"], capture_output=True).stdout)
             assert any(a["local"] == inner and a["prefixlen"] == 64 for a in ipv6[0]["addr_info"]), ipv6
         stop_process(echo)
+        ipv6_default = ("ip", "netns", "exec", "gm-ir", "sysctl", "-qw", "net.ipv6.conf.default.disable_ipv6=")
+        command(*ipv6_default[:-1], ipv6_default[-1] + "1")
         apply([weighted])
+        command(*ipv6_default[:-1], ipv6_default[-1] + "0")
         for host in ("gm-ir", first_target):
             assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
         command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-sit", stdout=subprocess.DEVNULL)
-        print("v2 SIT carried IPv6 TCP and UDP over protocol 41 and removed only the owned device.", flush=True)
+        print("v2 SIT reserved without installing, carried IPv6 TCP and UDP, and removed only the owned device with IPv6 disabled.", flush=True)
         bench_acceptance(processes, root, "gm-ir", first_target, [nodes["gm-ir"][0], nodes[first_target][0]])
 
         l2 = listener("gm-ir", [first_target], "gretap", [1])

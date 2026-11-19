@@ -38,6 +38,8 @@ def run(page, output):
     expect(first.locator('[data-value="ingress-sit-ip"]')).to_be_visible()
     expect(first.locator('[data-value="mtu"]')).to_have_attribute("min", "1280")
     expect(form.locator('[data-value="ports"]')).not_to_be_visible()
+    expect(first.locator('[data-value="weight"]')).not_to_be_visible()
+    expect(first.locator('[data-value="state"] option[value="drain"]')).to_be_disabled()
     first.locator('[data-value="method"]').select_option("direct")
     expect(form.locator('[data-value="ports"]')).to_be_visible()
     expect(first.locator('[data-value="vxlan-vni"]')).not_to_be_visible()

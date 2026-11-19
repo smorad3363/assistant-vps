@@ -35,14 +35,32 @@ class DriverTests(unittest.TestCase):
         for view, link in ((first, left), (second, right)):
             self.assertEqual((view["connections"], view["v2_listeners"]), ([], []))
             rules = build_rules(view, {link["outer_local"]: "eth0"})
-            self.assertEqual(rules["nat"]["GMP_PRE"], [])
-            self.assertEqual(rules["filter"]["GMP_INPUT"], [["-i", "eth0", "-s", link["outer_peer"], "-d",
-                                                            link["outer_local"], "-p", "41", "-j", "ACCEPT"]])
+            carrier = ["-i", "eth0", "-s", link["outer_peer"], "-d", link["outer_local"], "-p", "41", "-j", "ACCEPT"]
+            self.assertEqual(rules["nat"]["GMP_PRE"], [carrier])
+            self.assertEqual(rules["filter"]["GMP_INPUT"], [carrier])
+            foreign = f"-A PREROUTING -d {link['outer_local']} -p ipv6 -j DNAT --to-destination 198.51.100.1"
+            self.assertTrue(external_carrier_forward(foreign, link, "eth0"))
+            self.assertFalse(external_carrier_forward(foreign.replace("-p ipv6", "-p udp --dport 41"), link, "eth0"))
         with tempfile.TemporaryDirectory() as root, patch("panel.v2_forwarding.ipv6_enabled", return_value=False):
             restored = topology_views(config, state, key(3), paths=Paths(root))
             self.assertEqual(restored["v2_devices"], [])
             self.assertEqual(restored["v2_driver_unavailable"], {group["id"] + ":" + key(4): "ipv6_disabled"})
+            self.assertEqual(restored["v2_unavailable_devices"], [left])
             self.assertEqual(topology_views(config, state, key(3), paths=Paths(root), require_keys_for=group["id"])["v2_devices"], [left])
+        pending = {"groups": {}, "operations": {"op": {"phase": "prepared", "owner": key(3), "change": {"group": group}}}}
+        self.assertEqual(topology_views(config, pending, key(3))["v2_devices"], [])
+        self.assertEqual(topology_views(config, pending, key(3), require_keys_for=group["id"])["v2_devices"], [left])
+        for settings in ({"draining": True}, {"weight": 2}, {"limits": {"up": 10}}):
+            rejected = copy.deepcopy(group)
+            rejected["listeners"][0]["members"][0].update(settings)
+            with self.assertRaises(PanelError):
+                normalize_group(rejected)
+        mixed = copy.deepcopy(group)
+        other = copy.deepcopy(data([dict(member, id=key(9), method="gre", service_ip=member["outer_ip"])])["listeners"][0])
+        mixed["listeners"].append(dict(other, id=key(8)))
+        self.assertEqual(len(normalize_group(mixed)["listeners"]), 2)
+        with self.assertRaises(PanelError):
+            normalize_group(dict(mixed, limits={"up": 100}))
 
     def test_sit_address_canonicalization_and_invalid_subnets(self):
         randomizer = random.Random(6141)
