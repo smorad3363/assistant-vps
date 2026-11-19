@@ -109,6 +109,7 @@ def main():
     finally:
         stop.set()
         server.server_close()
+        controller.benchmarks.close()
         controller.executor.shutdown(wait=True, cancel_futures=True)
         controller.v2_executor.shutdown(wait=True, cancel_futures=True)
         with contextlib.suppress(Exception):

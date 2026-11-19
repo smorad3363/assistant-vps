@@ -17,12 +17,15 @@ from .model import DEFAULTS, PanelError, address, integer
 from .store import Paths, atomic_json, topology_node_id
 from .transactions import Journal, Participant
 from .v2_access import Access
+from .v2_bench_agent import configure as configure_benchmark
+from .v2_bench_agent import pending_for_owner
 from .v2_config import local_claims
 from .v2_drivers import local_wireguard_key
 from .v2_forwarding import require_ssh_protection, topology_views, with_ssh_protection
 
 PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
-                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py", "v2_resources.py", "v2_drivers.py")
+                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py", "v2_resources.py", "v2_drivers.py",
+                "v2_benchmark.py", "v2_bench_agent.py")
 
 
 def validate_peer(data):
@@ -150,6 +153,8 @@ def uninstall_peer(paths, engine):
     """Remove the dedicated helper only. Shared software and host tuning stay intact."""
     if paths.etc != Path("/etc/gremgr"):
         raise PanelError("Peer removal requires the system installation.")
+    if pending_for_owner(paths):
+        raise PanelError("A benchmark is still using this helper. Wait until its resources are released.", "busy")
     wrapper = Path("/usr/local/sbin/gremgr-peer")
     if "/opt/gremgr-peer" not in wrapper.read_text():
         raise PanelError("The peer wrapper is not owned by this installer.")
@@ -183,7 +188,10 @@ def action(paths, request, engine=None):
     if operation == "v2/request":
         participant = v2_participant(paths, engine)
         owner = Access(paths, participant.node_id).trusted_owner(request, "ssh")
-        return participant.request(owner, request.get("step"), request.get("change"))
+        step = request.get("step")
+        if isinstance(step, str) and step.startswith("benchmark/"):
+            return configure_benchmark(paths, engine, owner, step, request.get("change"))
+        return participant.request(owner, step, request.get("change"))
     # Reconcile expired leases even if a rollback unit failed or was killed.
     # Active leases retain their full commit window.
     for pending in (paths.etc / "transactions").glob("*.json"):
@@ -206,6 +214,8 @@ def action(paths, request, engine=None):
         participant = v2_participant(paths, engine)
         access = Access(paths, participant.node_id)
         owner = access.ssh_owner(blob)
+        if owner and pending_for_owner(paths, owner):
+            raise PanelError("A benchmark is still using the SSH management key.", "busy")
         state = participant.journal.read()
         if owner and (any(item["active"] and item["owner"] == owner for item in state["groups"].values())
                       or any(op["phase"] == "prepared" and op["owner"] == owner for op in state["operations"].values())):
