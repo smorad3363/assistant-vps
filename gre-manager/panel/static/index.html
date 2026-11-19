@@ -82,6 +82,23 @@
           <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-shield"/></svg><h2>ورود و ارتباط امن</h2></div><p id="certificate-status" class="muted">در حال بررسی گواهی HTTPS…</p><p class="field-hint">تمدید خودکار هر ۶ ساعت بررسی می‌شود. پورت ۸۰ هنگام اعتبارسنجی، موقتاً برای گواهی استفاده می‌شود.</p><div class="button-row"><button class="button secondary" data-action="password">تغییر رمز عبور</button><button class="button secondary" data-action="tls-auto">گواهی خودکار IP</button><button class="button secondary" data-action="tls">گواهی دستی</button></div></section>
           <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-refresh"/></svg><h2>به‌روزرسانی برنامه</h2></div><p class="muted small">نسخه جدید پس از بررسی فایل‌ها نصب می‌شود. تنظیمات و سابقه مصرف حفظ می‌شوند.</p><button class="button secondary" data-action="update">بررسی و نصب نسخه جدید</button></section>
         </div>
+        <section class="panel wide" aria-labelledby="v2-pairing-title">
+          <div class="section-heading"><h2 id="v2-pairing-title">جفت‌سازی پنل‌ها</h2><button type="button" class="button secondary" id="v2-peers-refresh">نمایش همتاها</button></div>
+          <label>شناسهٔ این پنل<input id="v2-local-node" dir="ltr" readonly></label>
+          <div class="form-grid">
+            <form id="v2-invite-form">
+              <label>آدرس این پنل<input name="host" dir="ltr" placeholder="panel.example.com" required></label>
+              <label>شناسهٔ پنلی که مجاز به مدیریت است<input name="owner" dir="ltr" pattern="[0-9a-f]{32}" maxlength="32" required></label>
+              <p class="form-error" role="alert"></p><button type="submit" class="button secondary">ساخت دعوت پنج‌دقیقه‌ای</button>
+              <label id="v2-invite-output" hidden>دعوت یک‌بارمصرف<textarea name="invitation" dir="ltr" rows="3" readonly></textarea></label>
+            </form>
+            <form id="v2-pair-form">
+              <label>دعوت پنل مقابل<textarea name="invitation" dir="ltr" rows="3" autocomplete="off" required></textarea></label>
+              <p class="form-error" role="alert"></p><button type="submit" class="button primary">جفت کردن</button>
+            </form>
+          </div>
+          <div id="v2-peer-list" class="server-list" aria-live="polite"></div>
+        </section>
         <section class="panel wide"><div class="section-heading"><div><h2>بکاپ و بازیابی</h2><p class="muted small">تنظیمات و آمار؛ کلیدهای خصوصی SSH و رمز ورود داخل بکاپ قرار نمی‌گیرند.</p></div><div class="button-row"><button class="button secondary" data-action="restore"><svg class="icon"><use href="#i-up"/></svg>بازیابی</button><button class="button primary" data-action="backup"><svg class="icon"><use href="#i-plus"/></svg>ساخت بکاپ</button></div></div><div id="backup-list" class="backup-list"></div><input id="backup-file" type="file" accept=".zip,application/zip" hidden></section>
       </div>
     </section>

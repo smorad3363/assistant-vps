@@ -79,7 +79,10 @@ function showToast(text) {
   clearTimeout(toastTimer); $('#toast').textContent = text; $('#toast').hidden = false;
   toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 4200);
 }
-function showLogin() { $('#app').hidden = true; $('#login-view').hidden = false; }
+function showLogin() {
+  $('#app').hidden = true; $('#login-view').hidden = false;
+  $('#v2-invite-form').reset(); $('#v2-pair-form').reset(); $('#v2-invite-output').hidden = true;
+}
 function setError(form, error) {
   $('.form-error', form).textContent = failText(error);
   $$('[aria-invalid]', form).forEach(x => x.removeAttribute('aria-invalid'));
@@ -336,6 +339,48 @@ $('#connection-form').addEventListener('submit',async e=>{
 $('#server-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const id=await runJob('server.connect',Object.fromEntries(new FormData(form)),form,$('#server-dialog'));if(id){form.elements.password.value='';form.elements.private_key.value='';}});
 $('#settings-form').addEventListener('input',e=>e.currentTarget.dataset.dirty='true');
 $('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,p=Object.fromEntries(new FormData(form));p.watchdog=form.elements.watchdog.checked;const id=await runJob('settings.save',p,form);if(id)delete form.dataset.dirty;});
+
+async function refreshV2Peers() {
+  const list = $('#v2-peer-list');
+  try {
+    const {peers, node_id} = await api('v2/peers');
+    $('#v2-local-node').value = node_id;
+    list.innerHTML = peers.length ? peers.map(peer => {
+      const directions = [peer.outbound ? 'مدیریت مقصد' : '', peer.inbound.length ? 'دسترسی ورودی' : ''].filter(Boolean);
+      return `<div class="server-item"><div class="server-info"><strong dir="ltr">${esc(peer.hostname || peer.id)}</strong>
+        <small>${directions.join(' · ')}</small></div><button type="button" class="button secondary compact"
+        data-action="v2-revoke" data-node="${esc(peer.id)}">لغو دسترسی</button></div>`;
+    }).join('') : '<p class="empty-line">همتایی ثبت نشده است.</p>';
+  } catch (error) { list.textContent = failText(error); }
+}
+
+$('#v2-peers-refresh').addEventListener('click', refreshV2Peers);
+$('#v2-invite-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  setBusy(form, true);
+  try {
+    const invite = await api('v2/pairing.invite', {host: form.elements.host.value.trim(), owner: form.elements.owner.value.trim()});
+    form.elements.invitation.value = JSON.stringify(invite);
+    $('#v2-invite-output').hidden = false;
+  } catch (error) { setError(form, error); }
+  finally { setBusy(form, false); }
+});
+$('#v2-pair-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  setBusy(form, true);
+  try {
+    let invite;
+    try { invite = JSON.parse(form.elements.invitation.value); }
+    catch { throw new Error('متن دعوت را کامل وارد کن.'); }
+    await api('v2/pairing.connect', invite);
+    form.reset();
+    showToast('پنل مقابل جفت شد.');
+    await refreshV2Peers();
+  } catch (error) { setError(form, error); }
+  finally { setBusy(form, false); }
+});
 $('#password-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;setBusy(form,true);try{await api('password',Object.fromEntries(new FormData(form)));form.reset();$('#password-dialog').close();showLogin();showToast('رمز تغییر کرد؛ دوباره وارد شو.');}catch(error){setError(form,error);}finally{setBusy(form,false);}});
 $('#tls-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const certificate=await form.elements.certificate.files[0].text(),key=await form.elements.key.files[0].text();await runJob('tls.save',{certificate,key},form,$('#tls-dialog'));form.reset();});
 $('#job-dismiss').addEventListener('click',()=>$('#job-status').hidden=true);
@@ -345,6 +390,12 @@ document.addEventListener('click',async e=>{
   const action=e.target.closest('[data-action]');if(!action)return;
   const row=action.closest('[data-id]'),c=row?state.connections.find(x=>x.id===row.dataset.id):null;
   switch(action.dataset.action){
+    case 'v2-revoke':
+      if(await confirmAction('لغو دسترسی همتا','برای مدیریت دوباره باید یک دعوت تازه ساخته شود.','لغو دسترسی')){
+        try { await api('v2/pairing.revoke',{node_id:action.dataset.node}); await refreshV2Peers(); }
+        catch(error){showToast(failText(error));}
+      }
+      break;
     case 'add':openConnection();break;
     case 'edit':openConnection(c);break;
     case 'expand':expanded.has(c.id)?expanded.delete(c.id):expanded.add(c.id);action.setAttribute('aria-expanded',expanded.has(c.id));$('.connection-details',row).hidden=!expanded.has(c.id);break;

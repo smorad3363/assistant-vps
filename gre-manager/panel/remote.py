@@ -5,14 +5,18 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import subprocess
 import tempfile
 import uuid
 
+from .agent import PEER_MODULES
 from .engine import run
 from .model import PanelError, address, hostname, integer, resolve
-
+from .store import atomic_json, topology_node_id
+from .transactions import identity
+from .v2_access import digest
 
 def server_metadata(data):
     if not isinstance(data, dict) or not re.fullmatch(r"[0-9a-f]{10}", str(data.get("id", ""))):
@@ -20,10 +24,13 @@ def server_metadata(data):
     user = str(data.get("username", ""))
     if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
         raise PanelError("Invalid SSH user.")
-    return {"id": data["id"], "username": user, "port": integer(data.get("port"), 1, 65535, "port"),
+    result = {"id": data["id"], "username": user, "port": integer(data.get("port"), 1, 65535, "port"),
             "host": hostname(data.get("host", "")), "resolved_ip": address(data.get("resolved_ip", "")),
             "name": str(data.get("name", ""))[:80],
             "fingerprints": [str(x)[:128] for x in data.get("fingerprints", [])[:10]]}
+    if "v2_node_id" in data:
+        result["v2_node_id"] = identity(data["v2_node_id"])
+    return result
 
 BOOTSTRAP = r'''
 import base64,fcntl,json,os,pathlib,subprocess,sys,tempfile
@@ -33,7 +40,7 @@ pathlib.Path('/etc/gremgr').mkdir(parents=True,exist_ok=True,mode=0o700)
 network_lock=open('/etc/gremgr/network.lock','a');fcntl.flock(network_lock,fcntl.LOCK_EX)
 base=pathlib.Path('/opt/gremgr-peer/panel');base.mkdir(parents=True,exist_ok=True,mode=0o755)
 for name,content in payload['files'].items():
- if name not in ('__init__.py','model.py','store.py','engine.py','agent.py'): raise SystemExit('Invalid package')
+ if name not in %r: raise SystemExit('Invalid package')
  p=base/name
  with tempfile.NamedTemporaryFile(dir=base,delete=False) as staged: staged.write(base64.b64decode(content));temporary=pathlib.Path(staged.name)
  temporary.chmod(0o644);temporary.replace(p)
@@ -55,8 +62,13 @@ unit=pathlib.Path('/etc/systemd/system/gremgr-peer.service')
 unit.write_text('[Unit]\nDescription=GRE Manager peer restore\nWants=network-online.target\nAfter=network-online.target\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/gremgr-peer --restore\nRemainAfterExit=yes\n[Install]\nWantedBy=multi-user.target\n')
 subprocess.run(['systemctl','daemon-reload'],check=True)
 subprocess.run(['systemctl','enable','gremgr-peer.service'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+sys.path.insert(0, str(base.parent))
+from panel.store import Paths, topology_node_id
+from panel.v2_access import Access
+paths=Paths()
+Access(paths,topology_node_id(paths)).trust_ssh(payload['v2_owner'],payload['v2_credential_hash'],payload['public_key'].split()[1])
 print(json.dumps({'ok':True}))
-'''
+''' % (PEER_MODULES,)
 
 
 class Remote:
@@ -96,9 +108,12 @@ class Remote:
         server["fingerprints"] = fingerprints
         server["key_ready"] = True
         bundle = {}
-        for name in ("__init__.py", "model.py", "store.py", "engine.py", "agent.py"):
+        for name in PEER_MODULES:
             bundle[name] = base64.b64encode((Path(__file__).parent / name).read_bytes()).decode()
-        content = json.dumps({"files": bundle, "username": user, "public_key": key.with_suffix(".pub").read_text(), "revoke_key": data.get("_revoke_key", "")})
+        token = secrets.token_urlsafe(32)
+        content = json.dumps({"files": bundle, "username": user, "public_key": key.with_suffix(".pub").read_text(),
+                              "revoke_key": data.get("_revoke_key", ""), "v2_owner": topology_node_id(self.paths),
+                              "v2_credential_hash": digest(token)})
         try:
             with tempfile.TemporaryDirectory(dir=self.paths.ssh) as temporary:
                 initial_key = Path(temporary) / "initial"
@@ -128,12 +143,14 @@ class Remote:
                 if result.returncode:
                     raise PanelError("SSH setup failed. Check the credentials and root/passwordless sudo access.", "ssh")
             status = self.call(server, {"action": "status"})
+            server["v2_node_id"] = identity(status["v2_node_id"])
+            atomic_json(key.with_suffix(".v2"), {"token": token})
             server["addresses"] = [address(x) for x in status.get("addresses", {})][:128]
             server["service_profiles"] = [{"gre_id": str(x["gre_id"]), "service_ip": address(x["service_ip"]), "mtu": integer(x["mtu"], 576, 1476, "mtu")} for x in status.get("pair_profiles", [])[:128]]
             if data.get("_revoke_key"):
                 self.call(server, {"action": "revoke-key", "username": user, "key": data["_revoke_key"]})
         except Exception:
-            for path in (key, key.with_suffix(".pub"), known):
+            for path in (key, key.with_suffix(".pub"), key.with_suffix(".v2"), known):
                 path.unlink(missing_ok=True)
             raise
         return server
@@ -154,6 +171,15 @@ class Remote:
         if result.returncode:
             raise PanelError("The foreign helper exited unsuccessfully.", "ssh")
         return response.get("result", {})
+
+    def v2_call(self, server, action, change):
+        credential = self.paths.ssh / (server_metadata(server)["id"] + ".v2")
+        try:
+            token = json.loads(credential.read_text())["token"]
+        except FileNotFoundError as error:
+            raise PanelError("Reconnect the SSH node to register its v2 identity.", "ssh_key") from error
+        return self.call(server, {"action": "v2/request", "owner": topology_node_id(self.paths),
+                                  "token": token, "step": action, "change": change}, timeout=12)
 
     def prepare(self, server, connection, remove=False):
         from .engine import gre_for, pair_values

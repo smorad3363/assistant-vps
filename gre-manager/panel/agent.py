@@ -11,10 +11,16 @@ import sys
 import time
 import uuid
 
-from .engine import Engine, pair_values, run
+from .engine import Engine, discovered_ssh_ports, pair_values, run
 from . import __version__
 from .model import DEFAULTS, PanelError, address, integer
-from .store import Paths, atomic_json
+from .store import Paths, atomic_json, topology_node_id
+from .transactions import Participant
+from .v2_access import Access
+from .v2_config import local_claims
+
+PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
+                "transactions.py", "v2_access.py", "v2_config.py")
 
 
 def validate_peer(data):
@@ -49,6 +55,24 @@ def combined(paths, peers):
     config = json.loads(path.read_text()) if path.exists() else {"settings": dict(DEFAULTS), "connections": []}
     config["connections"] = config["connections"] + peers
     return config
+
+
+def v2_participant(paths, engine):
+    node_id = topology_node_id(paths)
+
+    def claims(change):
+        try:
+            config = json.loads(paths.config.read_text())
+        except FileNotFoundError:
+            config = {"settings": dict(DEFAULTS, port=22)}
+        if not change.get("group"):
+            return []
+        settings = dict(DEFAULTS, **config["settings"])
+        with contextlib.suppress(PanelError):
+            settings["ssh_ports"] = sorted(set(settings["ssh_ports"] + discovered_ssh_ports()))
+        return local_claims(change, node_id, dict(config, settings=settings), engine.interfaces())
+
+    return Participant(paths, node_id, claims)
 
 
 def recover(paths, transaction, engine):
@@ -118,9 +142,9 @@ def uninstall_peer(paths, engine):
     Path("/etc/sudoers.d/gremgr-peer").unlink(missing_ok=True)
     run("systemctl", "daemon-reload")
     base = Path("/opt/gremgr-peer/panel")
-    for name in ("__init__", "model", "store", "engine", "agent"):
-        (base / (name + ".py")).unlink(missing_ok=True)
-        for cached in (base / "__pycache__").glob(name + ".*.pyc"):
+    for name in PEER_MODULES:
+        (base / name).unlink(missing_ok=True)
+        for cached in (base / "__pycache__").glob(Path(name).stem + ".*.pyc"):
             cached.unlink()
     wrapper.unlink(missing_ok=True)
     (paths.etc / "peers.json").unlink(missing_ok=True)
@@ -136,15 +160,20 @@ def uninstall_peer(paths, engine):
 
 def action(paths, request, engine=None):
     engine = engine or Engine(paths)
+    operation = request.get("action")
+    if operation == "v2/request":
+        participant = v2_participant(paths, engine)
+        owner = Access(paths, participant.node_id).trusted_owner(request, "ssh")
+        return participant.request(owner, request.get("step"), request.get("change"))
     # Reconcile expired leases even if a rollback unit failed or was killed.
     # Active leases retain their full commit window.
     for pending in (paths.etc / "transactions").glob("*.json"):
         if json.loads(pending.read_text()).get("deadline", 0) <= time.time():
             recover(paths, pending.stem, engine)
     peers = read_peers(paths)
-    operation = request.get("action")
     if operation == "status":
-        return {"version": __version__, "addresses": engine.interfaces(), "peers": len(peers),
+        return {"version": __version__, "v2_node_id": topology_node_id(paths), "v2_protocol": 2,
+                "addresses": engine.interfaces(), "peers": len(peers),
                 "routes": engine.routes(),
                 "pair_profiles": [{"gre_id": x["gre"]["id"], "service_ip": x["service_ip"], "mtu": x["gre"]["mtu"],
                                    "slot": x["gre"].get("slot", 0), "enabled": x.get("enabled", True),
@@ -155,9 +184,18 @@ def action(paths, request, engine=None):
             raise PanelError("The management key was not found.")
         if list((paths.etc / "transactions").glob("*.json")):
             raise PanelError("A peer transaction is still pending.", "busy")
+        participant = v2_participant(paths, engine)
+        access = Access(paths, participant.node_id)
+        owner = access.ssh_owner(blob)
+        state = participant.journal.read()
+        if owner and (any(item["active"] and item["owner"] == owner for item in state["groups"].values())
+                      or any(op["phase"] == "prepared" and op["owner"] == owner for op in state["operations"].values())):
+            raise PanelError("The SSH key is still used by a v2 group or reservation.", "busy")
         reason = ("peers" if peers else "panel" if paths.config.exists() or Path("/opt/gremgr/current/panel/worker.py").exists() else
                   "legacy" if list((paths.etc / "pairs").glob("*.json")) else
                   "managers" if other_managers(path, blob) else "")
+        if owner:
+            access.forget_ssh(blob)
         if not reason:
             uninstall_peer(paths, engine)
         revoke_key(path, blob)
@@ -165,6 +203,9 @@ def action(paths, request, engine=None):
     if operation == "revoke-key":
         path, blob = management_key(request)
         revoke_key(path, blob)
+        access = Access(paths, topology_node_id(paths))
+        if access.ssh_owner(blob):
+            access.forget_ssh(blob)
         return {"revoked": True}
     if operation == "prepare":
         changes = request.get("changes", [{"peer": request.get("peer"), "remove": request.get("remove", False)}])
