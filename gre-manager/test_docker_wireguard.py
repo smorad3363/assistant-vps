@@ -63,5 +63,90 @@ class DockerWireGuardTests(unittest.TestCase):
         self.assertFalse(any("-I" in call.args for call in mocked.call_args_list))
 
 
+    def test_nondefault_public_port_tracks_real_wg0(self):
+        published = "-A DOCKER ! -i br-a -p udp --dport 51822 -j DNAT --to-destination 172.18.0.2:51821\n"
+        calls = []
+        def mock_run(*args, **kwargs):
+            calls.append(args)
+            if args[-2:] == ("-S", "DOCKER"):
+                return subprocess.CompletedProcess(args, 0, published, "")
+            if args[-2:] == ("-S", "PREROUTING"):
+                return subprocess.CompletedProcess(args, 0, "-P PREROUTING ACCEPT\n", "")
+            if args[:2] == ("docker", "exec"):
+                return subprocess.CompletedProcess(args, 0, "51821\n", "")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        with patch.object(pair, "run", side_effect=mock_run):
+            pair.sync_docker_wireguard(self.cfg)
+        inserted = [x for x in calls if "-I" in x]
+        self.assertEqual(len(inserted), 1)
+        self.assertIn("51822", inserted[0])
+        self.assertNotIn("51820", inserted[0])
+
+    def test_mismatch_removes_owned_jump_and_defers_to_wireguard_sync(self):
+        published = "-A DOCKER -p udp --dport 51820 -j DNAT --to-destination 172.18.0.2:51820\n"
+        owned = "-A PREROUTING " + " ".join(pair.docker_wireguard_rule(self.cfg)) + "\n"
+        calls = []
+        def mock_run(*args, **kwargs):
+            calls.append(args)
+            if args[-2:] == ("-S", "DOCKER"):
+                return subprocess.CompletedProcess(args, 0, published, "")
+            if args[-2:] == ("-S", "PREROUTING"):
+                return subprocess.CompletedProcess(args, 0, owned, "")
+            if args[:2] == ("docker", "exec"):
+                return subprocess.CompletedProcess(args, 0, "51821\n", "")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        with patch.object(pair, "run", side_effect=mock_run):
+            pair.sync_docker_wireguard(self.cfg)
+        self.assertTrue(any("-D" in x for x in calls))
+        self.assertFalse(any("-I" in x for x in calls))
+
+    def test_change_from_old_port_removes_old_rule_and_adds_new(self):
+        published = "-A DOCKER -p udp --dport 41821 -j DNAT --to-destination 172.18.0.2:51821\n"
+        old = "-A PREROUTING " + " ".join(pair.docker_wireguard_rule(self.cfg)) + "\n"
+        calls = []
+        def mock_run(*args, **kwargs):
+            calls.append(args)
+            if args[-2:] == ("-S", "DOCKER"):
+                return subprocess.CompletedProcess(args, 0, published, "")
+            if args[-2:] == ("-S", "PREROUTING"):
+                return subprocess.CompletedProcess(args, 0, old, "")
+            if args[:2] == ("docker", "exec"):
+                return subprocess.CompletedProcess(args, 0, "51821\n", "")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        with patch.object(pair, "run", side_effect=mock_run):
+            pair.sync_docker_wireguard(self.cfg)
+        self.assertEqual(sum("-D" in x for x in calls), 1)
+        self.assertEqual(sum("-I" in x for x in calls), 1)
+        self.assertTrue(any("-I" in x and "41821" in x for x in calls))
+
+    def test_ambiguous_udp_publications_cannot_hijack_other_service(self):
+        published = (
+            "-A DOCKER -p udp --dport 51820 -j DNAT --to-destination 172.18.0.2:51820\n"
+            "-A DOCKER -p udp --dport 51822 -j DNAT --to-destination 172.18.0.9:51822\n"
+        )
+        calls = []
+        def mock_run(*args, **kwargs):
+            calls.append(args)
+            if args[-2:] == ("-S", "DOCKER"):
+                return subprocess.CompletedProcess(args, 0, published, "")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        with patch.object(pair, "run", side_effect=mock_run):
+            pair.sync_docker_wireguard(self.cfg)
+        self.assertFalse(any("-I" in x for x in calls))
+
+    def test_property_port_validation_and_differential_default(self):
+        import random
+        rng = random.Random(51821)
+        self.assertEqual(pair.docker_wireguard_rule(self.cfg),
+                         pair.docker_wireguard_rule(self.cfg, 51820))
+        for _ in range(2000):
+            p = rng.randrange(1, 65536)
+            rule = pair.docker_wireguard_rule(self.cfg, p)
+            self.assertIn(str(p), rule)
+            self.assertEqual(rule[rule.index("--dport")+1], str(p))
+        for bad in (0, -1, 65536, True, "51821;rm"):
+            with self.assertRaises(ValueError):
+                pair.docker_wireguard_rule(self.cfg, bad)
+
 if __name__ == "__main__":
     unittest.main()
