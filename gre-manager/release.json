@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.2.0",
-  "revision": "6d8be74a4701e7cbdb6e962f5b8991ac7358caaf",
+  "revision": "87500fffee54656e312aa94e0b599ac13182855b",
   "files": {
     "gremgr-certificate.service": "ecaad1b0a845d02eda7dc0072d5fb9bbbdea4b874047e6c4401f5c441cec37b5",
     "gremgr-certificate.timer": "717a6d83996fdf54d8485b597bdfe339d6fff823feec19b1337ab400b70d6dc9",
@@ -39,7 +39,7 @@
     "panel/v2_drivers.py": "0e35cbca2d8266acf9790a7bcb423a549d2cec6496ee77fc0153debcada1adf1",
     "panel/v2_forwarding.py": "f854e1d2406cdc52ae2052f282b9f68292a51385161ee8978d36d9745899bbc9",
     "panel/v2_health.py": "9e9f204a735f57c260d6fa704c2c3fedf03ca1e19ad413d1012664a650d3dae2",
-    "panel/v2_ppp.py": "b20ede054b805a8932f3ec4ae1c4db039db6347cad3d8f8d665246c48a22444a",
+    "panel/v2_ppp.py": "4cd03c6e702a436c3525251fa7b3a5a16f7f2701ee6ed836ec6e6712ee2b98fc",
     "panel/v2_resources.py": "81a8cf05033ed7e096fe37d39cde766d22e43ab4ad3732559cd6843adce511a2",
     "panel/web.py": "bd3adbad79c78229da9ef3de1680aac149dd4f712c1d57bf0e44d67bbfeb52d8",
     "panel/worker.py": "c1604d94ad635e96fa8b509d12af75655f1485d06feed238c0014a4054aeb878"
