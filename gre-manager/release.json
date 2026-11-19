@@ -13,7 +13,7 @@
     "gremgr.sh": "cbd88fe64cd046f88ecb0433a1ed9c943bc317bb3b5cf510225b43e4d06881ea",
     "install.sh": "2f3b14e86cb39faeb527731f860658ecfb5f30dba4a34ad7ea19163909b74c58",
     "legacy-restore.sh": "a2d40a8eb9a2afc875e1789e22e39d19fcc1a7c7d58f5dac1b667b8054fe71d5",
-    "pair.py": "a85f902f9ba52748a906c8c50409410fc4f5025a05a0f47a7bbb8c85027c3cd9",
+    "pair.py": "e61e7aae9b4763109ff5caae9b9012729834bed1c5141bb860f177ad3e20fae2",
     "panel/__init__.py": "d14599f656ac634743b08c03335287e2a4956b592c34a4432bffb4a0aa799308",
     "panel/agent.py": "cbd17db174e61254f6cc9483ef0d66ab9a1600a6962ef23a99d32c5db7f01e6e",
     "panel/certificates.py": "09c2f988eb700d308ca6254e5a4fed9fe940cad56cde2f2d3d99286b474423d4",
