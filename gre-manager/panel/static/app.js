@@ -8,6 +8,7 @@ const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const icon = name => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 let state, csrf = '', page = 'gre', toastTimer, activeJob = null;
 const expanded = new Set();
+const connectionPages = ['gre','direct'];
 const errors = {
   auth:'اطلاعات ورود درست نیست یا نشست منقضی شده است.', csrf:'نشست صفحه تازه نیست؛ صفحه را دوباره بارگذاری کن.',
   rate_limit:'تعداد تلاش‌های ورود زیاد شده؛ پنج دقیقه دیگر تلاش کن.',
@@ -114,10 +115,13 @@ async function refresh(quiet = false) {
 }
 
 function navigate() {
-  page = ['gre','direct','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'gre';
+  const previous = page;
+  page = [...connectionPages,'groups','benchmark','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'gre';
+  if (previous !== page) window.scrollTo(0,0);
   $$('.tabs a').forEach(x => { if(x.dataset.page === page) x.setAttribute('aria-current','page'); else x.removeAttribute('aria-current'); });
-  $('#connections-page').hidden = page === 'settings'; $('#settings-page').hidden = page !== 'settings';
-  if (page !== 'settings') {
+  $('#connections-page').hidden = !connectionPages.includes(page);
+  for (const name of ['groups','benchmark','settings']) $('#' + name + '-page').hidden = page !== name;
+  if (connectionPages.includes(page)) {
     const gre = page === 'gre';
     $('#page-title').textContent = gre ? 'تونل‌های GRE' : 'انتقال مستقیم';
     $('#page-eyebrow').textContent = gre ? 'اتصال بین دو سرور' : 'IPTABLES';
@@ -125,6 +129,10 @@ function navigate() {
     $('#add-connection span').textContent = gre ? 'افزودن GRE' : 'افزودن انتقال';
   }
   if (state) render();
+  if (page === 'benchmark') {
+    benchJob ??= sessionStorage.getItem('gremgr-benchmark');
+    if (benchJob) pollBenchmark(benchJob);
+  }
 }
 
 function render() {
@@ -132,6 +140,15 @@ function render() {
   $('#direct-count').textContent = fa.format(state.connections.filter(x=>x.kind==='direct').length);
   $('#version').textContent = 'v' + state.version;
   if (page === 'settings') return renderSettings();
+  if (page === 'groups' || page === 'benchmark') {
+    if (!v2Load && Date.now() - v2LoadedAt >= 5000) {
+      v2Load = refreshGroups().catch(error => {
+        if (page === 'groups') $('#v2-group-list').textContent = failText(error);
+        else setError(benchForm,error);
+      }).finally(() => { v2Load = null; });
+    }
+    return;
+  }
   const items = state.connections.filter(x=>x.kind === page);
   const ids = new Set(items.map(x=>x.id));
   $('#metric-active').textContent = fa.format(items.filter(x=>x.enabled).length);
@@ -401,6 +418,7 @@ const topologyId = () => crypto.randomUUID().replaceAll('-', '');
 const groupForm = $('#v2-group-form');
 const groupOutput = $('#v2-group-result');
 let v2Nodes = [], v2Groups = [], v2Local, groupDraft, groupPlan, groupEdit = 0;
+let v2Load, v2LoadedAt = 0;
 function nodeOptions(selected, unmanaged = false) {
   return (unmanaged ? '<option value="">مقصد مستقیم بدون مدیریت</option>' : '') +
     v2Nodes.map(node => `<option value="${esc(node.id)}" ${node.id === selected ? 'selected' : ''}>${esc(node.name)}</option>`).join('');
@@ -414,7 +432,7 @@ function readRateFields(row) {
 }
 function memberForm(parent, member = {}) {
   const row = document.createElement('div');
-  row.className = 'form-grid';
+  row.className = 'form-grid topology-member';
   row.dataset.v2Member = member.id || topologyId();
   row.dataset.unmanaged = member.managed === false ? member.node_id : topologyId();
   const sideFields = (side, title) => {
@@ -434,26 +452,39 @@ function memberForm(parent, member = {}) {
       <option value="wireguard" ${member.method === 'wireguard' ? 'selected' : ''}>WireGuard</option>
       <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
-    <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
-    <label>MTU تونل<input data-value="mtu" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
-    <label>TTL در IPIP<input data-value="ttl" type="number" min="0" max="255" value="${esc(member.ttl ?? 64)}" required></label>
+    <label data-method="gre ipip wireguard vxlan">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
+    <label data-method="gre ipip wireguard vxlan">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
+    <label data-method="ipip">TTL در IPIP<input data-value="ttl" dir="ltr" type="number" min="0" max="255" value="${esc(member.ttl ?? 64)}" required></label>
     <label>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
     <label>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
     ${rateFields(member.limits)}
     <label>وضعیت<select data-value="state"><option value="on">فعال</option><option value="drain" ${member.draining ? 'selected' : ''}>در حال تخلیه</option>
       <option value="off" ${member.enabled === false ? 'selected' : ''}>متوقف</option></select></label>
-    <details ${member.method === 'vxlan' ? 'open' : ''}><summary>تنظیمات VXLAN</summary><div class="form-grid">
+    <details data-method="vxlan" ${member.method === 'vxlan' ? 'open' : ''}><summary>تنظیمات VXLAN</summary><div class="form-grid">
       <label>شناسهٔ VNI<input data-value="vxlan-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.vxlan?.vni)}"></label>
       <label>پورت UDP هر دو سر<input data-value="vxlan-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.vxlan?.port ?? 4789)}"></label>
     </div></details>
-    <details><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
+    <details data-method="gre ipip wireguard vxlan"><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
       ${sideFields('ingress','ورودی')}${sideFields('destination','مقصد')}</div></details>
-    <details ${member.method === 'wireguard' ? 'open' : ''}><summary>تنظیمات WireGuard</summary><div class="form-grid">
+    <details data-method="wireguard" ${member.method === 'wireguard' ? 'open' : ''}><summary>تنظیمات WireGuard</summary><div class="form-grid">
       ${wgFields('ingress','ورودی')}${wgFields('destination','مقصد')}
       <label>Keepalive (ثانیه)<input data-value="keepalive" type="number" min="0" max="65535" value="${esc(member.wireguard?.keepalive ?? 25)}"></label>
       </div><small>کلید عمومی هر نود را از <code>sudo gremgr wireguard-key</code> بگیرید.</small></details>
     <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
   parent.append(row);
+  syncMemberMethod(row);
+  decorateFields(row,'member');
+}
+function syncMemberMethod(row) {
+  const method = $('[data-value="method"]', row).value;
+  for (const field of $$('[data-method]',row)) {
+    const visible = field.dataset.method.split(' ').includes(method);
+    field.hidden = !visible;
+    const wrapper = field.closest('.field-with-help');
+    if (wrapper) wrapper.hidden = !visible;
+    for (const input of $$('input,select,textarea',field)) input.disabled = !visible;
+    if (visible && field.tagName === 'DETAILS' && field.dataset.method === method) field.open = true;
+  }
 }
 function listenerForm(listener = {}) {
   const section = document.createElement('fieldset');
@@ -467,7 +498,7 @@ function listenerForm(listener = {}) {
     <label>پورت‌ها<input data-value="ports" dir="ltr" required placeholder="5100,3300 یا all" value="${esc(listener.ports)}"></label>
     <label>نگاشت پورت<input data-value="map" dir="ltr" placeholder="5100:5000,3300:3000" value="${esc(portMap)}"></label>
     <label>استثناها<input data-value="excluded" dir="ltr" value="${esc((listener.exclude_ports || []).join(','))}"></label>
-    <label>سقف هر پورت<input data-value="port-rates" dir="ltr" placeholder="5100:20:10" aria-describedby="v2-port-rates-help" value="${esc(
+    <label>سقف هر پورت<input data-value="port-rates" dir="ltr" placeholder="5100:20:10" value="${esc(
       Object.entries(listener.port_limits || {}).map(([port,limits]) => [port,limits.up,limits.down].join(':')).join(','))}"></label>
     <label>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
       <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label>${rateFields(listener.limits)}</div>
@@ -484,6 +515,7 @@ function listenerForm(listener = {}) {
     <button type="button" class="button secondary" data-v2-edit="remove-listener">حذف ورودی</button></div>`;
   for (const member of listener.members || [{}]) memberForm($('[data-v2-members]', section), member);
   $('#v2-listener-list').append(section);
+  decorateFields(section,'listener');
 }
 function resetGroupPlan() {
   groupEdit++;
@@ -498,12 +530,13 @@ function openGroup(record) {
   groupForm.elements.selection.value = record?.group.selection || 'weighted';
   groupForm.elements.enabled.checked = record?.group.enabled ?? true;
   $('#v2-group-limits').innerHTML = rateFields(record?.group.limits);
+  decorateFields(groupForm,'group');
   $('#v2-listener-list').replaceChildren();
   for (const listener of record?.group.listeners || [{}]) listenerForm(listener);
   resetGroupPlan();
 }
 async function refreshGroups() {
-  const [topology, groups, metrics] = await Promise.all([api('v2/topology'), api('v2/groups'), api('v2/metrics')]);
+  const [topology, groups, metrics] = await Promise.all([api('v2/topology'), api('v2/groups'), api('v2/metrics').catch(() => ({}))]);
   const pressure = metrics?.conntrack;
   $('#v2-host-resources').textContent = pressure?.percent == null ? '' :
     `conntrack این سرور ${fa.format(Math.round(pressure.percent))}٪ · فضای آزاد ${fa.format(Math.round(metrics.disk_free_bytes / 1048576))} MiB`;
@@ -512,6 +545,7 @@ async function refreshGroups() {
     ...state.servers.filter(node => node.v2_node_id && node.key_ready).map(node => ({id:node.v2_node_id,name:node.name}))];
   benchNodeOptions();
   v2Groups = groups;
+  v2LoadedAt = Date.now();
   const status = value => value === true ? 'سالم' : value === false ? 'قطع' : 'نامشخص';
   const evidence = record => record.group.listeners.flatMap(listener => listener.members.filter(member => member.enabled).map(member => {
     const sample = record.health?.[member.id] || {};
@@ -520,10 +554,26 @@ async function refreshGroups() {
     const checked = sample.checked ? ' · ' + new Date(sample.checked * 1000).toLocaleTimeString('fa-IR') : '';
     return `<small><bdi>${esc(member.service_ip)}</bdi> ${esc(summary + checked)}</small>`;
   })).join('');
-  $('#v2-group-list').innerHTML = groups.map(record => `<div class="server-item"><div class="server-info"><strong>${esc(record.group.name)}</strong>
-    <small>${fa.format(record.group.listeners.length)} ورودی</small>${evidence(record)}</div>${record.owner === v2Local ?
-    `<button class="button secondary" type="button" data-group-id="${esc(record.id)}">ویرایش</button>` : ''}</div>`).join('');
-  openGroup();
+  const activity = record => {
+    if (!record.group.enabled) return {rank:3, label:'متوقف'};
+    const recent = Object.values(record.health || {}).filter(sample => sample.checked && Date.now()/1000 - sample.checked <= 300);
+    if (Object.keys(record.driver_issues || {}).length || recent.some(sample => [sample.service,sample.link,sample.management].includes(false)))
+      return {rank:0, label:'نیاز به بررسی'};
+    if (!recent.length) return {rank:1, label:'دادهٔ تازه در دسترس نیست'};
+    return {rank:2, label:'پایش فعال'};
+  };
+  const existing = $('#v2-group-list');
+  const opened = new Set($$('details[open][data-group-detail]',existing).map(item => item.dataset.groupDetail));
+  const cards = groups.map(record => ({record,...activity(record)})).sort((a,b) => a.rank-b.rank);
+  existing.innerHTML = cards.length ? cards.map(({record,rank,label}) => {
+    const methods = [...new Set(record.group.listeners.flatMap(listener => listener.members.map(member => member.method.toUpperCase())))];
+    const rates = record.rates ? `رفت ${speed(record.rates.up)} · برگشت ${speed(record.rates.down)} Mbps` : 'سرعت —';
+    return `<article class="topology-card" data-state="${rank}"><div class="topology-card-header"><div><h2>${esc(record.group.name)}</h2>
+      <p><span class="topology-status">${esc(label)}</span><bdi dir="ltr">${esc(methods.join(' · '))}</bdi></p></div>${record.owner === v2Local ?
+      `<button class="button secondary" type="button" data-group-id="${esc(record.id)}">ویرایش</button>` : ''}</div>
+      <p class="muted small">${fa.format(record.group.listeners.length)} ورودی · ${esc(rates)}</p>
+      <details data-group-detail="${esc(record.id)}" ${opened.has(record.id) ? 'open' : ''}><summary>وضعیت مقصدها</summary>${evidence(record) || '<small>مقصد فعال ندارد</small>'}</details></article>`;
+  }).join('') : '<p class="empty-line">هنوز گروهی ثبت نشده است.</p>';
 }
 const benchForm = $('#v2-bench-form');
 const benchStart = $('#v2-bench-start');
@@ -533,8 +583,10 @@ let benchPreview, benchJob, benchPoll, benchEdit = 0;
 function benchNodeOptions() {
   for (const side of ['first','second']) {
     const select = benchForm.elements[side + '_node'];
+    const nodes = [{name:'انتخاب سرور', id:''},...v2Nodes];
+    if (select.options.length === nodes.length && nodes.every((node,i) => select.options[i].value === node.id && select.options[i].text === node.name)) continue;
     const selected = select.value;
-    select.replaceChildren(new Option('انتخاب سرور', ''), ...v2Nodes.map(node => new Option(node.name, node.id)));
+    select.replaceChildren(...nodes.map(node => new Option(node.name, node.id)));
     if (v2Nodes.some(node => node.id === selected)) select.value = selected;
   }
 }
@@ -597,14 +649,8 @@ async function pollBenchmark(id) {
     if (benchJob === id && error.status !== 401 && error.status !== 404) benchPoll = setTimeout(() => pollBenchmark(id), 2000);
   }
 }
-$('#v2-bench').addEventListener('toggle', async event => {
-  if (!event.target.open) return;
-  try {
-    if (!v2Nodes.length) await refreshGroups();
-    benchJob ??= sessionStorage.getItem('gremgr-benchmark');
-    if (benchJob) pollBenchmark(benchJob);
-  } catch (error) { setError(benchForm,error); }
-});
+decorateFields(benchForm,'benchmark');
+decorateFields($('#settings-form'),'settings');
 benchForm.addEventListener('input', resetBenchmark);
 benchForm.addEventListener('change', event => {
   for (const side of ['first','second']) if (event.target.name === side + '_node')
@@ -648,12 +694,22 @@ benchCancel.addEventListener('click', async () => {
   catch (error) { setError(benchForm,error); }
 });
 $('#v2-groups-refresh').addEventListener('click', () => refreshGroups().catch(error => showToast(failText(error))));
+$('#v2-group-new').addEventListener('click', async () => {
+  try {
+    if (!v2Nodes.length) await (v2Load || refreshGroups());
+    openGroup();
+    groupForm.elements.name.focus();
+  } catch (error) { showToast(failText(error)); }
+});
 $('#v2-group-list').addEventListener('click', event => {
   const button = event.target.closest('[data-group-id]');
   if (button) openGroup(v2Groups.find(record => record.id === button.dataset.groupId));
 });
 $('#v2-add-listener').addEventListener('click', () => { listenerForm(); resetGroupPlan(); });
 groupForm.addEventListener('input', resetGroupPlan);
+groupForm.addEventListener('change', event => {
+  if (event.target.dataset.value === 'method') syncMemberMethod(event.target.closest('[data-v2-member]'));
+});
 groupForm.addEventListener('click', event => {
   const button = event.target.closest('[data-v2-edit]');
   if (!button) return;
@@ -729,8 +785,15 @@ groupForm.addEventListener('submit', async event => {
     if (edit !== groupEdit) return;
     if (result.status !== 'done') throw result;
     groupPlan = {...request, digest:result.result.digest};
-    groupOutput.textContent = request.group.listeners.flatMap(listener => listener.members.map(member =>
-      `${listener.ip} → ${member.service_ip} (${member.method.toUpperCase()})`)).join(' · ');
+    const changes = request.group.listeners.flatMap(listener => listener.members.map(member =>
+      ({node:listener.node_id, peer:member.node_id, source:listener.ip, target:member.service_ip, method:member.method.toUpperCase()})));
+    groupOutput.innerHTML = `<div class="table-scroll"><table class="detail-table topology-preview"><thead><tr><th>سرور</th><th>تغییر</th><th>نتیجه</th></tr></thead><tbody>${
+      result.result.participants.map(node => {
+        const name = v2Nodes.find(row => row.id === node)?.name || node;
+        const related = changes.filter(change => [change.node,change.peer].includes(node));
+        const paths = related.map(change => `<bdi dir="ltr">${esc(change.source)} → ${esc(change.target)} · ${esc(change.method)}</bdi>`).join('<br>');
+        return `<tr><td>${esc(name)}</td><td>${paths || 'هماهنگی گروه'}</td><td>پیش‌نمایش تأیید شد</td></tr>`;
+      }).join('')}</tbody></table></div>`;
   } catch (error) {setError(groupForm,error);}
   finally {setBusy(groupForm,false);$('#v2-apply-group').disabled = !groupPlan;}
 });
@@ -745,6 +808,8 @@ $('#v2-apply-group').addEventListener('click', async () => {
     });
     if (completed.phase === 'aborted') throw new Error('اعمال لغو شد. اتصال همتاها را بررسی کن.');
     await refreshGroups();
+    const applied = v2Groups.find(record => record.id === completed.group_id);
+    if (applied) openGroup(applied);
     groupOutput.textContent = 'گروه ذخیره و اعمال شد.';
   } catch (error) {setError(groupForm,error);}
   finally {setBusy(groupForm,false);$('#v2-apply-group').disabled = !groupPlan;}
@@ -799,7 +864,7 @@ $('#backup-file').addEventListener('change',async e=>{
 });
 window.addEventListener('hashchange',navigate);navigate();refresh();
 let chartResizeFrame;
-window.addEventListener('resize',()=>{cancelAnimationFrame(chartResizeFrame);chartResizeFrame=requestAnimationFrame(()=>{if(state&&page!=='settings')renderChart();});});
+window.addEventListener('resize',()=>{cancelAnimationFrame(chartResizeFrame);chartResizeFrame=requestAnimationFrame(()=>{if(state&&connectionPages.includes(page))renderChart();});});
 setInterval(()=>{if(!document.hidden)refresh(true);},5000);
 let liveBusy=false;
 async function refreshLive(){
@@ -808,7 +873,7 @@ async function refreshLive(){
   try{
     const live=await api('live');state.sampled_at=live.sampled_at;
     for(const value of live.connections){const c=state.connections.find(x=>x.id===value.id);if(!c)continue;c.rate=value.rate;c.port_rates=value.port_rates;const row=$(`.connection[data-id="${c.id}"]`);if(!row)continue;const up=$('.speed-value .up',row),down=$('.speed-value .down',row);if(up)up.textContent=speed(c.rate.up);if(down)down.textContent=speed(c.rate.down);for(const el of $$('[data-live-port]',row))el.textContent=speed(portRate(c,el.dataset.livePort,el.dataset.direction));}
-    if(page!=='settings'){const items=state.connections.filter(x=>x.kind===page);$('#metric-up').textContent=speed(items.reduce((n,x)=>n+x.rate.up,0));$('#metric-down').textContent=speed(items.reduce((n,x)=>n+x.rate.down,0));}
+    if(connectionPages.includes(page)){const items=state.connections.filter(x=>x.kind===page);$('#metric-up').textContent=speed(items.reduce((n,x)=>n+x.rate.up,0));$('#metric-down').textContent=speed(items.reduce((n,x)=>n+x.rate.down,0));}
   }catch(error){if(error.status===401){state=null;showLogin();}}
   finally{liveBusy=false;}
 }

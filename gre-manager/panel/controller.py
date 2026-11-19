@@ -767,7 +767,7 @@ class Controller:
         if route == "v2/groups":
             return self.v2_group_state()
         if route == "v2/metrics":
-            return last_metrics(self.paths)
+            return last_metrics(self.paths) or {}
         if route == "v2/benchmark.capabilities":
             return self.benchmarks.capabilities(payload.get("node_id"))
         if route == "v2/benchmark.plan":
