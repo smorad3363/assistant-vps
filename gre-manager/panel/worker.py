@@ -9,6 +9,9 @@ import threading
 
 from .controller import Controller
 from .model import PanelError
+from .transactions import fingerprint
+from .v2_forwarding import with_ssh_protection
+from .v2_health import Watchdog
 
 MAX_REQUEST = 48 * 1024 * 1024
 
@@ -53,6 +56,29 @@ def main():
     os.chmod(controller.paths.socket, 0o660)
     os.chown(controller.paths.socket, 0, grp.getgrnam("gremgr").gr_gid)
     stop = threading.Event()
+
+    def management(record, member):
+        node = member["node_id"]
+        if not member["managed"] or record["owner"] != controller.v2_agent.node_id:
+            return None
+        if node == controller.v2_agent.node_id:
+            return True
+        operations = controller.v2_coordinator.journal.read()["operations"].values()
+        change = next((op["change"] for op in operations if op["phase"] == "committed" and
+                       op["change"]["group_id"] == record["group"]["id"] and
+                       op["change"]["expected_revision"] + 1 == record["revision"]), None)
+        if not change:
+            return None
+        try:
+            reply = controller.v2_coordinator._response(node, "status", change, fingerprint(change))
+            return reply["phase"] == "committed" and reply["revision"] == record["revision"]
+        except (PanelError, OSError, KeyError):
+            return False
+
+    monitor = Watchdog(controller.v2_agent, lambda: with_ssh_protection(controller.store.config(), controller.paths),
+                       controller.engine.run, management)
+    threading.Thread(target=monitor.serve, args=(stop, lambda error: controller.store.event(
+        "error", "V2 health checks: " + error[:550])), daemon=True).start()
 
     def timer():
         while not stop.is_set():

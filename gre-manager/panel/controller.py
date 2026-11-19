@@ -148,9 +148,12 @@ class Controller:
                 "group": group}
 
     def v2_group_state(self):
+        saved = self.v2_agent.journal.read()
         return [
-            {"id": key, "owner": record["owner"], "revision": record["revision"], "group": record["group"]}
-            for key, record in sorted(self.v2_agent.journal.read()["groups"].items()) if record["active"]
+            {"id": key, "owner": record["owner"], "revision": record["revision"], "group": record["group"],
+             "health": {identity.split(":", 1)[1]: sample for identity, sample in saved.get("health", {}).items()
+                        if identity.startswith(key + ":") and sample.get("revision") == record["revision"]}}
+            for key, record in sorted(saved["groups"].items()) if record["active"]
         ]
 
     def v2_uses_node(self, node_id):

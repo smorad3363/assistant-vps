@@ -60,13 +60,18 @@ if user!='root':
  subprocess.run(['visudo','-cf',str(p)],check=True,stdout=subprocess.DEVNULL)
 unit=pathlib.Path('/etc/systemd/system/gremgr-peer.service')
 unit.write_text('[Unit]\nDescription=GRE Manager peer restore\nWants=network-online.target\nAfter=network-online.target\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/gremgr-peer --restore\nRemainAfterExit=yes\n[Install]\nWantedBy=multi-user.target\n')
+unit=pathlib.Path('/etc/systemd/system/gremgr-peer-monitor.service')
+unit.write_text('[Unit]\nDescription=GRE Manager peer health checks\nWants=gremgr-peer.service\nAfter=gremgr-peer.service\nConditionPathExists=!/opt/gremgr/current/panel/worker.py\n[Service]\nType=simple\nExecStart=/usr/local/sbin/gremgr-peer --watch\nRestart=on-failure\nRestartSec=5\n[Install]\nWantedBy=multi-user.target\n')
 subprocess.run(['systemctl','daemon-reload'],check=True)
 subprocess.run(['systemctl','enable','gremgr-peer.service'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+subprocess.run(['systemctl','enable','gremgr-peer-monitor.service'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 sys.path.insert(0, str(base.parent))
 from panel.store import Paths, topology_node_id
 from panel.v2_access import Access
 paths=Paths()
 Access(paths,topology_node_id(paths)).trust_ssh(payload['v2_owner'],payload['v2_credential_hash'],payload['public_key'].split()[1])
+fcntl.flock(network_lock, fcntl.LOCK_UN)
+subprocess.run(['systemctl','start','gremgr-peer-monitor.service'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 print(json.dumps({'ok':True}))
 ''' % (PEER_MODULES,)
 

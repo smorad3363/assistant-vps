@@ -20,6 +20,8 @@ from panel.model import DEFAULTS
 from panel.store import Paths, atomic_json
 from panel.v2_config import normalize_group
 from panel.v2_forwarding import topology_views, with_ssh_protection
+from panel.v2_forwarding import gre_link
+from panel.v2_health import Watchdog, link_responses, transition
 
 
 def command(*args, **kwargs):
@@ -34,12 +36,12 @@ def serve(address, marker, port):
     class TCP(socketserver.BaseRequestHandler):
         def handle(self):
             while data := self.request.recv(256):
-                self.request.sendall(marker + data)
+                self.request.sendall(b"ready" if data == b"gremgr-health" else marker + data)
 
     class UDP(socketserver.BaseRequestHandler):
         def handle(self):
             data, sock = self.request
-            sock.sendto(marker + data, self.client_address)
+            sock.sendto(b"ready" if data == b"gremgr-health" else marker + data, self.client_address)
 
     tcp = socketserver.ThreadingTCPServer((address, port), TCP)
     udp = socketserver.UDPServer((address, port), UDP)
@@ -162,11 +164,13 @@ def lab(root):
             ],
         }
 
-    def apply(listeners):
-        group = normalize_group({"id": group_id, "name": "Namespace acceptance", "listeners": listeners})
-        state = {"groups": {group_id: {"active": True, "owner": owner, "group": group}}, "operations": {}}
+    def apply(listeners, health=None, selection="weighted"):
+        group = normalize_group({"id": group_id, "name": "Namespace acceptance", "listeners": listeners, "selection": selection})
+        state = {"groups": {group_id: {"active": True, "revision": 1, "owner": owner, "group": group}},
+                 "operations": {}, "health": health or {}}
         for name, (_, node) in nodes.items():
             command(*namespace(name, "render", Path(root) / name, node, int(name == "gm-ir")), input=json.dumps(state))
+        return group["listeners"][0]
 
     def exchanges(name, count, proto="tcp"):
         return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto),
@@ -262,6 +266,47 @@ def lab(root):
                 assert receive_line(session) == "after"
         print("v2 all-port forwarding and rollback kept established and new SSH sessions on both custom ports.", flush=True)
 
+        route = listener("gm-ir", services[:2], "gre", [1, 1])
+        route["members"][1]["priority"] = 1
+        route["probe"] = {"protocol": "tcp", "port": 5100, "request": "gremgr-health", "response": "ready"}
+        compiled = apply([route], selection="failover")
+        for target, member in zip(services, compiled["members"]):
+            link = gre_link(owner, compiled, member, receiving=True)
+            responder = start_process(processes, namespace(target, "link-respond", json.dumps(link)), stdout=subprocess.PIPE)
+            assert receive_line(responder) == "ready"
+        for host in ("gm-ir", *services[:2]):
+            command("ip", "netns", "exec", host, "iptables", "-I", "INPUT", "1", "-p", "icmp", "-j", "DROP")
+
+        evidence = {}
+
+        def probe(position, time_value):
+            member = compiled["members"][position]
+            sample = json.loads(command(*namespace("gm-ir", "health", owner, json.dumps(compiled), position),
+                                        capture_output=True).stdout)
+            identity = group_id + ":" + member["id"]
+            evidence[identity] = dict(transition(evidence.get(identity), sample, time_value), revision=1)
+            return sample
+
+        for index in (0, 1):
+            observation = probe(index, 0)
+            assert observation["service"] is True and observation["link"] is True and observation["icmp"] is False, observation
+        apply([route], evidence, "failover")
+        assert exchanges("gm-ir", 3) == {"0": 3}
+        block = ("INPUT", "-i", gre_link(owner, compiled, compiled["members"][0], True)["tunnel"],
+                 "-p", "tcp", "--dport", "5000", "-j", "DROP")
+        command("ip", "netns", "exec", first_target, "iptables", "-I", *block)
+        for elapsed in (5, 10, 15):
+            observation = probe(0, elapsed)
+            assert observation["link"] is True and observation["service"] is False, observation
+        apply([route], evidence, "failover")
+        assert exchanges("gm-ir", 3) == {"1": 3}
+        command("ip", "netns", "exec", first_target, "iptables", "-D", *block)
+        for elapsed in (20, 25, 30, 50):
+            assert probe(0, elapsed)["service"] is True
+            apply([route], evidence, "failover")
+            assert exchanges("gm-ir", 3) == ({"1": 3} if elapsed < 50 else {"0": 3})
+        print("v2 payload health separated ICMP and service failure, failed over and returned after the stability window.", flush=True)
+
 
 if __name__ == "__main__":
     action, *args = sys.argv[1:]
@@ -275,3 +320,13 @@ if __name__ == "__main__":
         sample(args[0], int(args[1]), args[2] == "udp")
     elif action == "hold":
         hold(*args)
+    elif action == "link-respond":
+        link = json.loads(args[0])
+        print("ready", flush=True)
+        link_responses(lambda: {(link["local_tun"], link["peer_tun"]): link}, threading.Event())
+    elif action == "health":
+        from panel.engine import run
+
+        listener = json.loads(args[1])
+        watchdog = Watchdog(None, None, run)
+        print(json.dumps(watchdog.measure({"owner": args[0]}, listener, listener["members"][int(args[2])])))

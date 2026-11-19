@@ -7,6 +7,8 @@ from .model import DEFAULTS, PanelError, ranges_for, subtract
 from .store import atomic_json, topology_node_id
 from .transactions import Journal
 
+LINK_PROBE_PROTOCOL = 253
+
 
 def gre_link(owner, listener, member, receiving=False):
     source = listener.get("outer_ip") or listener["ip"]
@@ -34,7 +36,8 @@ def segments(listener, settings):
 
 
 def active_members(listener, selection):
-    eligible = [member for member in listener["members"] if member["enabled"] and not member.get("draining")]
+    eligible = [member for member in listener["members"]
+                if member["enabled"] and not member.get("draining") and member.get("available", True)]
     if not eligible:
         return []
     priority = min(member["priority"] for member in eligible)
@@ -46,12 +49,19 @@ def topology_views(config, state, node_id):
     listeners, devices, receivers = [], {}, {}
     settings = dict(DEFAULTS, **config["settings"])
 
-    def add_group(owner, group, staged):
+    def add_group(owner, group, staged, revision=None):
         if not group or not group["enabled"]:
             return
         for listener in group["listeners"]:
             ingress = listener["node_id"] == node_id
             if ingress and not staged:
+                if "probe" in listener:
+                    observed = state.get("health", {})
+                    members = []
+                    for member in listener["members"]:
+                        sample = observed.get(group["id"] + ":" + member["id"], {})
+                        members.append(dict(member, available=sample.get("revision") == revision and sample.get("available", False)))
+                    listener = dict(listener, members=members)
                 listeners.append((group, owner, listener))
             for member in listener["members"]:
                 if member["method"] != "gre" or not (member["enabled"] or member.get("draining")):
@@ -77,7 +87,7 @@ def topology_views(config, state, node_id):
 
     for record in state["groups"].values():
         if record["active"]:
-            add_group(record["owner"], record["group"], False)
+            add_group(record["owner"], record["group"], False, record.get("revision"))
     for record in state["operations"].values():
         if record["phase"] == "prepared" and record.get("change"):
             add_group(record["owner"], record["change"]["group"], True)
@@ -137,6 +147,7 @@ def format_port(low, high):
 def add_receiver_rules(add, peer, interfaces, settings):
     gre = peer["gre"]
     device, remote, service = gre["tunnel"], gre["peer_tun"], peer["service_ip"]
+    add("filter", "GMP_INPUT", "-i", device, "-s", remote, "-d", gre["local_tun"], "-p", LINK_PROBE_PROTOCOL, "-j", "ACCEPT")
     protected = {22, settings["port"], *settings["ssh_ports"], *settings["reserved_ports"]}
     session_ports = subtract([(1, 65535)], protected)
     for proto, ports in peer["v2_ports"].items():
@@ -178,6 +189,8 @@ def add_listener_rules(add, config, interfaces):
             if gre:
                 add("filter", "GMP_INPUT", "-i", interfaces[gre["outer_local"]], "-s", gre["outer_peer"],
                     "-d", gre["outer_local"], "-p", "gre", "-j", "ACCEPT")
+                add("filter", "GMP_INPUT", "-i", gre["tunnel"], "-s", gre["peer_tun"], "-d", gre["local_tun"],
+                    "-p", LINK_PROBE_PROTOCOL, "-j", "ACCEPT")
                 for interface_flag in ("-i", "-o"):
                     add("mangle", "GMP_MSS", interface_flag, gre["tunnel"], "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
                         "-j", "TCPMSS", "--set-mss", gre["mtu"] - 40)

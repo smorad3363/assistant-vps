@@ -21,7 +21,7 @@ from .v2_config import local_claims
 from .v2_forwarding import require_ssh_protection, topology_views, with_ssh_protection
 
 PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
-                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py")
+                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py")
 
 
 def validate_peer(data):
@@ -150,7 +150,9 @@ def uninstall_peer(paths, engine):
         raise PanelError("The peer wrapper is not owned by this installer.")
     engine.clear_owned()
     run("systemctl", "disable", "--now", "gremgr-peer.service")
+    run("systemctl", "disable", "--now", "gremgr-peer-monitor.service", check=False)
     Path("/etc/systemd/system/gremgr-peer.service").unlink(missing_ok=True)
+    Path("/etc/systemd/system/gremgr-peer-monitor.service").unlink(missing_ok=True)
     Path("/etc/sudoers.d/gremgr-peer").unlink(missing_ok=True)
     run("systemctl", "daemon-reload")
     base = Path("/opt/gremgr-peer/panel")
@@ -266,6 +268,15 @@ def main():
     if os.geteuid() != 0:
         raise SystemExit("Run the peer helper as root.")
     paths = Paths()
+    if sys.argv[1:] == ["--watch"]:
+        import threading
+        from .v2_health import Watchdog
+
+        engine = Engine(paths)
+        monitor = Watchdog(v2_participant(paths, engine), lambda: with_ssh_protection(combined(paths, read_peers(paths)), paths),
+                           engine.run)
+        monitor.serve(threading.Event(), lambda error: print("V2 health checks: " + error[:550], file=sys.stderr))
+        return
     with open(paths.etc / "network.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         engine = Engine(paths)

@@ -1,6 +1,7 @@
 """Owned GRE devices and scoped Netfilter rules. Never restores a host firewall."""
 from collections import defaultdict
 import contextlib
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -363,6 +364,11 @@ class Engine:
         self.epoch_file.write_text(uuid.uuid4().hex)
 
     def apply(self, config, previous=None):
+        with (self.paths.etc / "kernel-apply.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return self._apply(config, previous)
+
+    def _apply(self, config, previous):
         previous = installed_topology(self.paths, previous) if previous is not None else None
         config = installed_topology(self.paths, config)
         require_ssh_protection(config, previous)
