@@ -76,3 +76,14 @@ jobs:
         with:
           name: panel-browser-screenshots
           path: gre-manager/test-output/
+  reboot-debian:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install virtual machine dependencies
+        run: |
+          sudo apt-get update -qq -o Acquire::Retries=3
+          sudo apt-get install -y -qq -o Acquire::Retries=3 qemu-system-x86 qemu-utils cloud-image-utils
+      - name: Genuine Debian boot and saved flow acceptance
+        run: bash gre-manager/tests/qemu_reboot_lab.sh

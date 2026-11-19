@@ -6,8 +6,10 @@ import json
 from .model import DEFAULTS, PanelError, ranges_for, subtract
 from .store import atomic_json, topology_node_id
 from .transactions import Journal, fingerprint
+from .v2_resources import boot_id
 
 LINK_PROBE_PROTOCOL = 253
+BOOT_ID = boot_id()
 
 
 def gre_link(owner, listener, member, receiving=False):
@@ -20,19 +22,22 @@ def gre_link(owner, listener, member, receiving=False):
     if receiving:
         source, target = target, source
         addresses.reverse()
+    parameters = member.get("link_settings", {}).get("destination" if receiving else "ingress", {})
     return {
         "id": identity[:10], "tunnel": "g2-" + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
-        "peer_tun": addresses[1], "key": int(identity[20:28], 16) or 1, "mtu": mtu,
+        "peer_tun": addresses[1], "key": int(identity[20:28], 16) or 1, "mtu": parameters.get("mtu", mtu),
+        **({"mss_mode": parameters["mss_mode"], "mss": parameters.get("mss")} if parameters else {}),
     }
 
 
 def segments(listener, settings):
     mappings = {int(port): target for port, target in listener["port_map"].items()}
     effective = ranges_for(listener, settings)
-    mapped = [(port, port, target) for port, target in sorted(mappings.items())
-              if any(lo <= port <= hi for lo, hi in effective)]
-    return mapped + [(lo, hi, listener["target_port"]) for lo, hi in subtract(effective, mappings)]
+    individual = set(mappings) | {int(port) for port in listener.get("port_limits", {})}
+    split = [(port, port, mappings.get(port, listener["target_port"])) for port in sorted(individual)
+             if any(lo <= port <= hi for lo, hi in effective)]
+    return split + [(lo, hi, listener["target_port"]) for lo, hi in subtract(effective, individual)]
 
 
 def active_members(listener, selection):
@@ -58,7 +63,19 @@ def health_signature(owner, listener, member):
 
 def topology_views(config, state, node_id):
     listeners, devices, receivers = [], {}, {}
+    policies = {}
     settings = dict(DEFAULTS, **config["settings"])
+
+    def reconcile_link(link, group_id, staged):
+        name = link["tunnel"]
+        settings = (link["mtu"], link.get("mss_mode", "mtu"), link.get("mss"))
+        if name in policies:
+            old, claimed, owner, prepared = policies[name]
+            if claimed != settings and (owner != group_id or prepared == staged):
+                raise PanelError("Groups sharing a GRE link must agree on the local MTU and MSS.", "link_policy", "link_settings")
+            return old
+        policies[name] = (link, settings, group_id, staged)
+        return link
 
     def add_group(owner, group, staged):
         if not group or not group["enabled"]:
@@ -71,7 +88,8 @@ def topology_views(config, state, node_id):
                     members = []
                     for member in listener["members"]:
                         sample = observed.get(group["id"] + ":" + member["id"], {})
-                        verified = sample.get("path") == health_signature(owner, listener, member) and sample.get("available", False)
+                        verified = (sample.get("boot_id") == BOOT_ID and sample.get("path") == health_signature(owner, listener, member)
+                                    and sample.get("available", False))
                         members.append(dict(member, available=verified or not checks_admission(listener, member)))
                     listener = dict(listener, members=members)
                 listeners.append((group, owner, listener))
@@ -81,7 +99,7 @@ def topology_views(config, state, node_id):
                 receiving = member["node_id"] == node_id
                 if not ingress and not receiving:
                     continue
-                gre = gre_link(owner, listener, member, receiving)
+                gre = reconcile_link(gre_link(owner, listener, member, receiving), group["id"], staged)
                 if ingress:
                     devices[gre["tunnel"]] = gre
                 if receiving:
@@ -160,9 +178,44 @@ def format_port(low, high):
     return str(low) if low == high else f"{low}:{high}"
 
 
+def mss_rules(add, link, local_service=None):
+    mode = link.get("mss_mode", "mtu")
+    if mode == "off":
+        return
+    target = ["--clamp-mss-to-pmtu"] if mode == "pmtu" else ["--set-mss", link["mss"] if mode == "manual" else link["mtu"] - 40]
+    for interface_flag in ("-i", "-o"):
+        add("mangle", "GMP_MSS", interface_flag, link["tunnel"], "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
+            "-j", "TCPMSS", *target)
+    if local_service:
+        add("mangle", "GMP_MSS_LOCAL", "-o", link["tunnel"], "-s", local_service, "-d", link["peer_tun"],
+            "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", *target)
+
+
+def traffic_caps(config, group, listener, members, direction, port):
+    """Keep a shared bucket at every layer and explicitly apportion group budgets by ingress."""
+    nodes = {row["node_id"] for row in group["listeners"]}
+    id_group = group["id"]
+    id_listener = listener["id"]
+    caps = [
+        ("host", config["settings"].get("v2_limits", {}).get(direction, 0)),
+        ("group:" + id_group, group.get("limits", {}).get(direction, 0) / len(nodes)),
+        ("listener:" + id_group + ":" + id_listener, listener.get("limits", {}).get(direction, 0)),
+    ]
+    capped = [(member["id"], member["limits"][direction]) for member in members if member.get("limits", {}).get(direction)]
+    if capped:
+        member_id, speed = min(capped, key=lambda pair: pair[1])
+        caps.append(("member:" + id_group + ":" + member_id, speed))
+    if port:
+        caps.append(("port:" + id_group + ":" + id_listener + ":" + port, listener.get("port_limits", {}).get(port, {}).get(direction, 0)))
+    for scope, speed in reversed(caps):
+        if speed:
+            yield hashlib.sha256(f"v2 limit {scope} {direction} {speed}".encode()).hexdigest()[:18], speed
+
+
 def add_receiver_rules(add, peer, interfaces, settings):
     gre = peer["gre"]
     device, remote, service = gre["tunnel"], gre["peer_tun"], peer["service_ip"]
+    mss_rules(add, gre, service if service in interfaces else None)
     add("filter", "GMP_INPUT", "-i", device, "-s", remote, "-d", gre["local_tun"], "-p", LINK_PROBE_PROTOCOL, "-j", "ACCEPT")
     protected = {22, settings["port"], *settings["ssh_ports"], *settings["reserved_ports"]}
     session_ports = subtract([(1, 65535)], protected)
@@ -192,24 +245,27 @@ def add_receiver_rules(add, peer, interfaces, settings):
                     "-j", "SNAT", "--to-source", gre["local_tun"])
 
 
-def add_listener_rules(add, config, interfaces):
+def add_listener_rules(add, config, interfaces, limit):
+    links_seen = set()
     for group, owner, listener in config.get("v2_listeners", []):
         wan = interfaces[listener["ip"]]
         active = active_members(listener, group["selection"])
         targets = {}
+        path_members = {}
         for member in listener["members"]:
             if not member["enabled"] and not member.get("draining"):
                 continue
             gre = gre_link(owner, listener, member) if member["method"] == "gre" else None
             targets[member["id"]] = (gre["peer_tun"] if gre else member["service_ip"], gre)
-            if gre:
+            destination, link = targets[member["id"]]
+            path_members.setdefault((destination, link["tunnel"] if link else ""), []).append(member)
+            if gre and gre["tunnel"] not in links_seen:
+                links_seen.add(gre["tunnel"])
                 add("filter", "GMP_INPUT", "-i", interfaces[gre["outer_local"]], "-s", gre["outer_peer"],
                     "-d", gre["outer_local"], "-p", "gre", "-j", "ACCEPT")
                 add("filter", "GMP_INPUT", "-i", gre["tunnel"], "-s", gre["peer_tun"], "-d", gre["local_tun"],
                     "-p", LINK_PROBE_PROTOCOL, "-j", "ACCEPT")
-                for interface_flag in ("-i", "-o"):
-                    add("mangle", "GMP_MSS", interface_flag, gre["tunnel"], "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-                        "-j", "TCPMSS", "--set-mss", gre["mtu"] - 40)
+                mss_rules(add, gre)
             probe = listener.get("probe")
             if probe:
                 origin = gre["local_tun"] if gre else listener["ip"]
@@ -244,5 +300,12 @@ def add_listener_rules(add, config, interfaces):
                         (["-i", wan, "-d", destination, *send], "ORIGINAL", "up"),
                         (["-o", wan, "-s", destination, *receive], "REPLY", "down"),
                     ):
-                        add("filter", "GMP_FWD", *flow, *tracked, "--ctdir", marker, "-m", "comment",
+                        rule = [*flow, *tracked, "--ctdir", marker]
+                        if direction == "up" and config.get("v2_conntrack_busy"):
+                            add("filter", "GMP_FWD", *rule, "-m", "conntrack", "--ctstate", "NEW", "!", "--ctstatus",
+                                "CONFIRMED", "-j", "DROP")
+                        exact_port = str(low) if low == high else None
+                        for bucket, speed in traffic_caps(config, group, listener, path_members[(destination, gre)], direction, exact_port):
+                            limit(rule, bucket, direction, speed, minimum=1)
+                        add("filter", "GMP_FWD", *rule, "-m", "comment",
                             "--comment", f"gmpanel:{group['id']}:all:{direction}", "-j", "ACCEPT")

@@ -138,6 +138,12 @@ def rate(value):
     return round(n, 3)
 
 
+def bandwidth_limits(value):
+    if not isinstance(value, dict) or set(value) - {"up", "down"}:
+        raise PanelError("Set upload and download limits in Mbps.", field="limits")
+    return {direction: rate(speed) for direction, speed in value.items() if speed is not None and speed != ""}
+
+
 def connection(data, settings, previous=None, resolver=resolve):
     if not isinstance(data, dict):
         raise PanelError("Invalid connection.")
@@ -245,6 +251,18 @@ def settings_update(old, data):
     for key in ("ssh_ports", "reserved_ports"):
         if key in data:
             result[key] = port_list(data[key])
+    if "v2_limits" in data:
+        result["v2_limits"] = bandwidth_limits(data["v2_limits"])
+    if "v2_conntrack_guard" in data:
+        policy = data["v2_conntrack_guard"]
+        if policy is None:
+            result.pop("v2_conntrack_guard", None)
+        elif isinstance(policy, dict):
+            high = integer(policy.get("high"), 1, 100, "high")
+            low = integer(policy.get("low"), 0, high - 1, "low")
+            result["v2_conntrack_guard"] = {"high": high, "low": low}
+        else:
+            raise PanelError("Set high and low conntrack fill percentages.", field="v2_conntrack_guard")
     if "watchdog" in data:
         result["watchdog"] = bool(data["watchdog"])
     if "hostname" in data:

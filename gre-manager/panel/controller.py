@@ -28,6 +28,7 @@ from .topology import legacy_topology
 from .transactions import Coordinator, fingerprint, identity, overlaps
 from .v2_access import AUTH_ROUTES, Access
 from .v2_config import managed_nodes, normalize_group, participant_order
+from .v2_resources import last_metrics
 
 
 class Controller:
@@ -167,7 +168,7 @@ class Controller:
                     if isinstance(sample, dict) and sample.get("revision") == revision:
                         health[identity] = sample
             result.append({"id": key, "owner": record["owner"], "revision": revision,
-                           "group": record["group"], "health": health})
+                           "group": record["group"], "health": health, "rates": self.rates.get((key, "all"))})
         return result
 
     def v2_uses_node(self, node_id):
@@ -743,7 +744,7 @@ class Controller:
                 return self.v2_access.exchange(payload)
             owner = self.v2_access.trusted_owner(payload, "https")
             return self.participant_request(owner, payload.get("action"), payload.get("change"))
-        reads = ("state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers")
+        reads = ("state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers", "v2/metrics")
         session = self.store.session(token, None if route in reads else csrf or "")
         if route == "auth.check":
             return {}
@@ -754,6 +755,8 @@ class Controller:
                 return self.topology()
         if route == "v2/groups":
             return self.v2_group_state()
+        if route == "v2/metrics":
+            return last_metrics(self.paths)
         if route == "v2/peers":
             return self.v2_access.peers()
         if route == "v2/jobs":

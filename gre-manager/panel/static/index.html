@@ -70,12 +70,16 @@
         <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-settings"/></svg><h2>تنظیمات عمومی</h2></div><form id="settings-form"><div class="form-grid">
           <label>پورت ورود پنل<input name="port" type="number" min="1024" max="65535" dir="ltr" required></label>
           <label>نام کاربری پنل<input name="username" dir="ltr" autocomplete="username" required></label>
-          <label>پورت‌های SSH<input name="ssh_ports" dir="ltr" placeholder="22,6111"></label>
+          <label>پورت‌های SSH<input name="ssh_ports" dir="ltr" placeholder="22,2222"></label>
           <label>پورت‌های محفوظ دیگر<input name="reserved_ports" dir="ltr" placeholder="2096,8443"></label>
           <label>حد بالای MTU خودکار<input name="mtu" type="number" min="576" max="1476" dir="ltr"></label>
           <label>نگهداری جزئیات آمار · روز<input name="retention_days" type="number" min="1" max="365" dir="ltr"></label>
           <label>تعداد بکاپ‌های نگهداری‌شده<input name="backup_keep" type="number" min="1" max="30" dir="ltr"></label>
           <label>دامنه ورود پنل · اختیاری<input name="hostname" dir="ltr" placeholder="panel.example.com"></label>
+          <label>سقف ارسال گروه‌ها روی این سرور (Mbps)<input name="v2_limit_up" type="number" min="0" step="0.001"></label>
+          <label>سقف دریافت گروه‌ها روی این سرور (Mbps)<input name="v2_limit_down" type="number" min="0" step="0.001"></label>
+          <label>توقف اتصال تازه در اشغال conntrack (٪)<input name="v2_conntrack_high" type="number" min="1" max="100"></label>
+          <label>ازسرگیری اتصال تازه در اشغال conntrack (٪)<input name="v2_conntrack_low" type="number" min="0" max="99"></label>
         </div><label class="switch-line"><input name="watchdog" type="checkbox" role="switch"><span><strong>بررسی و بازیابی خودکار GRE</strong><small>پس از سه بررسی ناموفق؛ با حفظ سرویس‌های دیگر</small></span></label><p class="form-error" role="alert"></p><button type="submit" class="button primary">ذخیره تنظیمات</button></form></section>
         <div class="settings-stack">
           <section class="panel"><div class="section-heading"><div class="panel-title"><svg class="icon"><use href="#i-server"/></svg><h2>سرورهای خارج</h2></div><button class="button compact secondary" data-action="add-server"><svg class="icon"><use href="#i-plus"/></svg>افزودن</button></div><p class="muted small">برای ساخت خودکار GRE. انتقال مستقیم به SSH نیاز ندارد.</p><div id="server-list" class="server-list"></div></section>
@@ -102,11 +106,14 @@
         <section class="panel wide" aria-labelledby="v2-groups-title">
           <div class="section-heading"><h2 id="v2-groups-title">گروه‌های تونل</h2><button type="button" class="button secondary" id="v2-groups-refresh">نمایش گروه‌ها</button></div>
           <div id="v2-group-list" class="server-list" aria-live="polite"></div>
+          <div id="v2-host-resources" class="muted small" aria-live="polite"></div>
           <form id="v2-group-form" hidden>
             <div class="form-grid"><label>نام گروه<input name="name" maxlength="80" required></label>
               <label>انتخاب مقصد<select name="selection"><option value="weighted">تقسیم بار</option><option value="failover">اصلی و پشتیبان</option><option value="single">تک‌مقصد</option></select></label></div>
             <label class="switch-line"><input name="enabled" type="checkbox" checked>گروه فعال</label>
+            <div class="form-grid" id="v2-group-limits"></div>
             <div id="v2-listener-list"></div>
+            <small id="v2-port-rates-help">سقف پورت را با ترتیب پورت، ارسال و دریافت به Mbps وارد کنید.</small>
             <div class="button-row"><button type="button" id="v2-add-listener" class="button secondary">افزودن ورودی</button>
               <button type="submit" class="button secondary">پیش‌نمایش</button>
               <button type="button" id="v2-apply-group" class="button primary" disabled>اعمال</button></div>

@@ -15,13 +15,13 @@ from .engine import Engine, pair_values, run
 from . import __version__
 from .model import DEFAULTS, PanelError, address, integer
 from .store import Paths, atomic_json, topology_node_id
-from .transactions import Participant
+from .transactions import Journal, Participant
 from .v2_access import Access
 from .v2_config import local_claims
 from .v2_forwarding import require_ssh_protection, topology_views, with_ssh_protection
 
 PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
-                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py")
+                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py", "v2_resources.py")
 
 
 def validate_peer(data):
@@ -70,9 +70,8 @@ def v2_participant(paths, engine):
             return []
         protected = with_ssh_protection(config, paths)
         result = local_claims(change, node_id, protected, engine.interfaces())
-        candidate = {"groups": {change["group_id"]: {
-            "active": True, "owner": change["owner"], "group": change["group"],
-        }}, "operations": {}}
+        candidate = Journal(paths.var / "v2-participant.json").read()
+        candidate["groups"][change["group_id"]] = {"active": True, "owner": change["owner"], "group": change["group"]}
         current = dict(protected, connections=combined(paths, read_peers(paths))["connections"])
         view = topology_views(current, candidate, node_id)
         if isinstance(engine, Engine):

@@ -211,6 +211,12 @@ function renderEvents() {
 }
 function renderSettings() {
   const form=$('#settings-form');
+  if (!form.dataset.dirty) {
+    form.elements.v2_limit_up.value = state.settings.v2_limits?.up ?? '';
+    form.elements.v2_limit_down.value = state.settings.v2_limits?.down ?? '';
+    form.elements.v2_conntrack_high.value = state.settings.v2_conntrack_guard?.high ?? '';
+    form.elements.v2_conntrack_low.value = state.settings.v2_conntrack_guard?.low ?? '';
+  }
   const cert=state.certificate||{},labels={ready:'گواهی معتبر IP · تمدید خودکار فعال',pending:'صدور گواهی خودکار در انتظار اجرا',renewing:'در حال بررسی و تمدید گواهی',error:'صدور یا تمدید گواهی نیاز به بررسی دارد',manual:'گواهی دستی · تمدید خودکار غیرفعال'};
   $('#certificate-status').textContent=(labels[cert.status]||labels.manual)+(cert.expires_at?' · اعتبار تا '+new Date(cert.expires_at*1000).toLocaleDateString('fa-IR'):'')+(cert.error?' · '+cert.error:'');
   if(!form.dataset.dirty && !form.contains(document.activeElement))for(const [key,value]of Object.entries(state.settings)){const el=form.elements[key];if(!el)continue;if(el.type==='checkbox')el.checked=value;else el.value=Array.isArray(value)?value.join(','):value;}
@@ -338,7 +344,16 @@ $('#connection-form').addEventListener('submit',async e=>{
 });
 $('#server-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const id=await runJob('server.connect',Object.fromEntries(new FormData(form)),form,$('#server-dialog'));if(id){form.elements.password.value='';form.elements.private_key.value='';}});
 $('#settings-form').addEventListener('input',e=>e.currentTarget.dataset.dirty='true');
-$('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,p=Object.fromEntries(new FormData(form));p.watchdog=form.elements.watchdog.checked;const id=await runJob('settings.save',p,form);if(id)delete form.dataset.dirty;});
+$('#settings-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const form = event.currentTarget, payload = Object.fromEntries(new FormData(form));
+  payload.watchdog = form.elements.watchdog.checked;
+  payload.v2_limits = {up:payload.v2_limit_up, down:payload.v2_limit_down};
+  payload.v2_conntrack_guard = payload.v2_conntrack_high === '' && payload.v2_conntrack_low === '' ? null :
+    {high:payload.v2_conntrack_high, low:payload.v2_conntrack_low};
+  const id = await runJob('settings.save', payload, form);
+  if (id) delete form.dataset.dirty;
+});
 
 async function refreshV2Peers() {
   const list = $('#v2-peer-list');
@@ -390,11 +405,26 @@ function nodeOptions(selected, unmanaged = false) {
   return (unmanaged ? '<option value="">مقصد مستقیم بدون مدیریت</option>' : '') +
     v2Nodes.map(node => `<option value="${esc(node.id)}" ${node.id === selected ? 'selected' : ''}>${esc(node.name)}</option>`).join('');
 }
+function rateFields(limits = {}) {
+  return ['up','down'].map((direction,index) => `<label>سقف ${index ? 'دریافت' : 'ارسال'} (Mbps)
+    <input data-value="rate-${direction}" type="number" dir="ltr" min="0" max="100000" step="0.001" placeholder="ارث‌بری" value="${esc(limits[direction])}"></label>`).join('');
+}
+function readRateFields(row) {
+  return Object.fromEntries(['up','down'].map(direction => [direction,$(`[data-value="rate-${direction}"]`,row).value]).filter(([,value]) => value !== ''));
+}
 function memberForm(parent, member = {}) {
   const row = document.createElement('div');
   row.className = 'form-grid';
   row.dataset.v2Member = member.id || topologyId();
   row.dataset.unmanaged = member.managed === false ? member.node_id : topologyId();
+  const sideFields = (side, title) => {
+    const options = member.link_settings?.[side] || {};
+    const modes = {mtu:'از MTU',pmtu:'از PMTU',manual:'دستی',off:'خاموش'};
+    return `<label>MTU ${title}<input data-value="${side}-mtu" type="number" min="576" max="1476" value="${esc(options.mtu)}"></label>
+      <label>MSS ${title}<select data-value="${side}-mode">${Object.entries(modes).map(([mode,label]) =>
+        `<option value="${mode}" ${options.mss_mode === mode ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      <label>عدد MSS ${title}<input data-value="${side}-mss" type="number" min="64" max="1436" value="${esc(options.mss)}"></label>`;
+  };
   row.innerHTML = `<label>سرور مقصد<select data-value="node">${nodeOptions(member.node_id, true)}</select></label>
     <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
@@ -402,8 +432,11 @@ function memberForm(parent, member = {}) {
     <label>MTU در GRE<input data-value="mtu" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
     <label>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
     <label>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
+    ${rateFields(member.limits)}
     <label>وضعیت<select data-value="state"><option value="on">فعال</option><option value="drain" ${member.draining ? 'selected' : ''}>در حال تخلیه</option>
       <option value="off" ${member.enabled === false ? 'selected' : ''}>متوقف</option></select></label>
+    <details><summary>MTU و MSS دو سر GRE</summary><div class="form-grid">
+      ${sideFields('ingress','ورودی')}${sideFields('destination','مقصد')}</div></details>
     <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
   parent.append(row);
 }
@@ -419,8 +452,10 @@ function listenerForm(listener = {}) {
     <label>پورت‌ها<input data-value="ports" dir="ltr" required placeholder="5100,3300 یا all" value="${esc(listener.ports)}"></label>
     <label>نگاشت پورت<input data-value="map" dir="ltr" placeholder="5100:5000,3300:3000" value="${esc(portMap)}"></label>
     <label>استثناها<input data-value="excluded" dir="ltr" value="${esc((listener.exclude_ports || []).join(','))}"></label>
+    <label>سقف هر پورت<input data-value="port-rates" dir="ltr" placeholder="5100:20:10" aria-describedby="v2-port-rates-help" value="${esc(
+      Object.entries(listener.port_limits || {}).map(([port,limits]) => [port,limits.up,limits.down].join(':')).join(','))}"></label>
     <label>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
-      <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label></div>
+      <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label>${rateFields(listener.limits)}</div>
     <details ${listener.probe ? 'open' : ''}><summary>سنجش سلامت سرویس</summary><div class="form-grid">
       <label><input data-value="watch-link" type="checkbox" ${(listener.watch_link ?? !listener.id) ? 'checked' : ''}> پذیرش بر اساس سلامت لینک GRE</label>
       <label>روش سنجش<select data-value="probe-protocol"><option value="">تنظیم نشده</option>
@@ -447,12 +482,16 @@ function openGroup(record) {
   groupForm.elements.name.value = record?.group.name || '';
   groupForm.elements.selection.value = record?.group.selection || 'weighted';
   groupForm.elements.enabled.checked = record?.group.enabled ?? true;
+  $('#v2-group-limits').innerHTML = rateFields(record?.group.limits);
   $('#v2-listener-list').replaceChildren();
   for (const listener of record?.group.listeners || [{}]) listenerForm(listener);
   resetGroupPlan();
 }
 async function refreshGroups() {
-  const [topology, groups] = await Promise.all([api('v2/topology'), api('v2/groups')]);
+  const [topology, groups, metrics] = await Promise.all([api('v2/topology'), api('v2/groups'), api('v2/metrics')]);
+  const pressure = metrics?.conntrack;
+  $('#v2-host-resources').textContent = pressure?.percent == null ? '' :
+    `conntrack این سرور ${fa.format(Math.round(pressure.percent))}٪ · فضای آزاد ${fa.format(Math.round(metrics.disk_free_bytes / 1048576))} MiB`;
   v2Local = topology.local_node_id;
   v2Nodes = [{id:v2Local,name:'این پنل'}, ...topology.paired_nodes.map(node => ({id:node.id,name:node.hostname})),
     ...state.servers.filter(node => node.v2_node_id && node.key_ready).map(node => ({id:node.v2_node_id,name:node.name}))];
@@ -487,10 +526,26 @@ groupForm.addEventListener('click', event => {
 });
 function groupRequest() {
   const value = (row, field) => $(`[data-value="${field}"]`, row).value.trim();
+  function portLimits(raw) {
+    const result = {};
+    for (const row of raw.split(',').filter(Boolean)) {
+      const [port,up,down,...extra] = row.split(':').map(token => token.trim());
+      if (!/^\d+$/.test(port) || result[port] || !up || !down || extra.length || !Number.isFinite(+up) || !Number.isFinite(+down))
+        throw new Error('سقف پورت را به شکل پورت:ارسال:دریافت وارد کنید.');
+      result[port] = {up,down};
+    }
+    return result;
+  }
+  const linkSettings = member => Object.fromEntries(['ingress','destination'].flatMap(side => {
+    const mtu = value(member,side+'-mtu'), mss = value(member,side+'-mss'), mss_mode = value(member,side+'-mode');
+    return mtu || mss_mode !== 'mtu' ? [[side,{mss_mode,...(mtu && {mtu}),...(mss_mode === 'manual' && {mss})}]] : [];
+  }));
   const listeners = $$('[data-v2-listener]', groupForm).map(row => ({
     id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
     ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
     protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')],
+    limits:readRateFields(row),
+    port_limits:portLimits(value(row,'port-rates')),
     watch_link:$('[data-value="watch-link"]', row).checked,
     ...(value(row,'probe-protocol') && {probe:{protocol:value(row,'probe-protocol'), port:Number(value(row,'probe-port')),
       request:$('[data-value="probe-request"]', row).value, response:$('[data-value="probe-response"]', row).value}}),
@@ -498,13 +553,15 @@ function groupRequest() {
       id:member.dataset.v2Member, node_id:value(member,'node') || member.dataset.unmanaged, managed:!!value(member,'node'),
       method:value(member,'method'), service_ip:value(member,'service'), outer_ip:value(member,'outer'),
       mtu:Number(value(member,'mtu')),
+      ...(value(member,'method') === 'gre' && {link_settings:linkSettings(member)}),
       weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
+      limits:readRateFields(member),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',
     })),
   }));
   return {id:topologyId(), group_id:groupDraft.id, expected_revision:groupDraft.revision,
     group:{id:groupDraft.id, name:groupForm.elements.name.value, selection:groupForm.elements.selection.value,
-      enabled:groupForm.elements.enabled.checked, listeners}};
+      enabled:groupForm.elements.enabled.checked, limits:readRateFields($('#v2-group-limits')), listeners}};
 }
 async function topologyJob(id, phase, showProgress = () => {}) {
   for (let attempt = 0; attempt < 160; attempt++) {
