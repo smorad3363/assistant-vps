@@ -225,5 +225,7 @@ Engine(paths).apply(dict(old,connections=[]),old)
 PY
 ip netns exec gm-client python3 "$lab/client.py" 22 IRAN
 ip netns exec gm-ir iptables-save | grep -F BASELINE-SSH
+python3 "$PYTHONPATH/tests/v2_network_lab.py" lab "$lab/v2"
+ip netns exec gm-client python3 "$lab/client.py" 22 IRAN
 kill "$ir_echo" "$fo_echo" 2>/dev/null || true
 echo 'PASS: GRE/direct TCP+UDP, mappings, protected SSH/panel, counters, rate rules, scoped cleanup.'

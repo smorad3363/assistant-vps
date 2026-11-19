@@ -18,9 +18,10 @@ from .store import Paths, atomic_json, topology_node_id
 from .transactions import Participant
 from .v2_access import Access
 from .v2_config import local_claims
+from .v2_forwarding import topology_views
 
 PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
-                "transactions.py", "v2_access.py", "v2_config.py")
+                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py")
 
 
 def validate_peer(data):
@@ -70,9 +71,18 @@ def v2_participant(paths, engine):
         settings = dict(DEFAULTS, **config["settings"])
         with contextlib.suppress(PanelError):
             settings["ssh_ports"] = sorted(set(settings["ssh_ports"] + discovered_ssh_ports()))
-        return local_claims(change, node_id, dict(config, settings=settings), engine.interfaces())
+        result = local_claims(change, node_id, dict(config, settings=settings), engine.interfaces())
+        candidate = {"groups": {change["group_id"]: {
+            "active": True, "owner": change["owner"], "group": change["group"],
+        }}, "operations": {}}
+        engine.preflight(topology_views(combined(paths, read_peers(paths)), candidate, node_id))
+        return result
 
-    return Participant(paths, node_id, claims)
+    def materialize(state, previous):
+        config = combined(paths, read_peers(paths))
+        engine.apply(topology_views(config, state, node_id), topology_views(config, previous, node_id))
+
+    return Participant(paths, node_id, claims, materialize=materialize)
 
 
 def recover(paths, transaction, engine):
