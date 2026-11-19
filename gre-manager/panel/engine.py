@@ -527,8 +527,6 @@ class Engine:
                 if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
                     raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
         if driver.method == "l2tpv3":
-            if row and not driver.owns(g, row) and (row.get("ifalias") or not driver.recorded(self.paths, g)):
-                raise PanelError("Another program owns this tunnel interface.", "device_conflict")
             driver.configure(g, self.paths, self.run)
         else:
             self.ensure_ip_link(g, driver, interface, row)
@@ -651,7 +649,10 @@ class Engine:
                     self.remove_gre(g)
             raise
         wanted = {g["tunnel"] for g in self.gre_devices(config)}
-        for name, g in old_gre.items():
+        retired = dict(old_gre)
+        for snapshot in (previous, config):
+            retired.update((link["tunnel"], link) for link in snapshot.get("v2_unavailable_devices", []))
+        for name, g in retired.items():
             if name not in wanted:
                 self.remove_gre(g)
         if busy:
