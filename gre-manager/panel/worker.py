@@ -40,6 +40,7 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 def main():
     if os.geteuid() != 0:
         raise SystemExit("The network worker requires root.")
+    notify_endpoint = os.environ.pop("NOTIFY_SOCKET", None)
     controller = Controller()
     controller.store.interrupt_jobs()
     with open(controller.paths.etc / "network.lock", "a") as lock:
@@ -105,8 +106,8 @@ def main():
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
-    if endpoint := os.environ.get("NOTIFY_SOCKET"):
-        destination = "\0" + endpoint[1:] if endpoint.startswith("@") else endpoint
+    if notify_endpoint:
+        destination = "\0" + notify_endpoint[1:] if notify_endpoint.startswith("@") else notify_endpoint
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notification:
             notification.sendto(b"READY=1", destination)
     try:

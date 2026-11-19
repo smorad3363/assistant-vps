@@ -126,8 +126,9 @@ rollback_install() {
     done
     systemctl daemon-reload
     if ((${#enabled[@]})); then systemctl enable "${enabled[@]}" >/dev/null; fi
+    systemctl reset-failed "${services[@]}" 2>/dev/null
   fi
-  if ((${#restart[@]})); then systemctl restart "${restart[@]}"; fi
+  if ((${#restart[@]})); then systemctl start "${restart[@]}"; fi
   exit "$code"
 }
 
@@ -135,7 +136,7 @@ trap 'rollback_install $?' ERR
 trap 'rollback_install 129' HUP
 trap 'rollback_install 130' INT
 trap 'rollback_install 143' TERM
-if ((${#restart[@]})); then systemctl stop "${restart[@]}"; fi
+if [[ -n "$old_release" ]]; then systemctl stop "${services[@]}"; fi
 for target in "${targets[@]}"; do
   [[ ! -e "$target" && ! -L "$target" ]] || cp -a "$target" "$backup/$(basename "$target")"
 done
@@ -161,8 +162,7 @@ fi
 install -d -m 750 -o root -g gremgr /run/gremgr
 systemctl daemon-reload
 systemctl enable gremgr-worker.service gremgr-web.service >/dev/null
-systemctl restart gremgr-worker.service
-systemctl restart gremgr-web.service
+systemctl start "${services[@]}"
 readiness_url=$(python3 - <<'PY'
 import json
 from pathlib import Path
