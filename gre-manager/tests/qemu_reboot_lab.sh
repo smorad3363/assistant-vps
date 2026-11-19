@@ -167,10 +167,13 @@ from panel.v2_config import normalize_group
 src, dst, method = sys.argv[1:]
 def identity(): return uuid.uuid4().hex
 group_id = identity()
+member = {"id": identity(), "node_id": dst, "method": method, "service_ip": "198.51.100.51",
+          "outer_ip": "198.51.100.51", "mtu": 1280}
+if method == "eoip":
+    member["eoip"] = {"tunnel_id": 22411}
 group = normalize_group({"id": group_id, "name": method.upper() + " reboot", "limits": {"up": 10, "down": 20}, "listeners": [{
     "id": identity(), "node_id": src, "ip": "10.0.2.15", "outer_ip": "198.51.100.50", "protocols": ["tcp"],
-    "ports": "all", "port_map": {"5100": 25244}, "members": [{"id": identity(), "node_id": dst, "method": method,
-    "service_ip": "198.51.100.51", "outer_ip": "198.51.100.51", "mtu": 1280}],
+    "ports": "all", "port_map": {"5100": 25244}, "members": [member],
 }]})
 print(json.dumps({"id": identity(), "owner": src, "group_id": group_id, "group": group, "expected_revision": 0,
                   "participants": [dst, src], "joining": [dst]}))

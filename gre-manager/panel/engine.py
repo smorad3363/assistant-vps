@@ -427,7 +427,7 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs, keyed_pairs, vxlan, wg_links = {}, {}, [], []
+        unkeyed_pairs, keyed_pairs, vxlan, wg_links, eoip = {}, {}, [], [], []
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
@@ -437,6 +437,8 @@ class Engine:
                 vxlan.append(link)
             if link.get("method") == "wireguard":
                 wg_links.append(link)
+            if link.get("method") == "eoip":
+                eoip.append(link)
             if link.get("method") == "gretap":
                 key = link["outer_local"], link["outer_peer"], link["key"]
                 if keyed_pairs.setdefault(key, link)["tunnel"] != link["tunnel"]:
@@ -458,6 +460,8 @@ class Engine:
                     raise PanelError("An existing GRETAP interface uses that endpoint pair and key.", "device_conflict", "key")
         self.check_vxlan(vxlan, interfaces)
         self.check_wireguard(wg_links, interfaces)
+        if eoip:
+            driver_for(eoip[0]).check(eoip, interfaces, self.run)
         if {x["listen_port"] for x in vxlan} & {x["listen_port"] for x in wg_links}:
             raise PanelError("VXLAN and WireGuard require different UDP ports on this node.", "device_conflict", "port")
         for c in forwarding:
@@ -505,6 +509,9 @@ class Engine:
         interface = interfaces[g["outer_local"]]
         self.run("modprobe", driver.module, check=False)
         row = self.inspect_link(g, driver)
+        if driver.method == "eoip" and row:
+            driver.configure(g, self.paths, interface, row, self.run)
+            return
         stage = self.staging_path(g) if getattr(driver, "staged_marker", False) else None
         if row:
             if not self.owns_link(g, row):
@@ -520,6 +527,9 @@ class Engine:
             for route in json.loads(self.run("ip", "-j", "-4", "route", "show").stdout):
                 if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
                     raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
+            if driver.method == "eoip":
+                driver.configure(g, self.paths, interface, row, self.run)
+                return
             create = driver.create(g, interface)
             if stage:
                 suffix = secrets.token_hex(5)
@@ -659,6 +669,9 @@ class Engine:
     def remove_gre(self, g):
         # Verify ownership even on deletion. Never deletes an arbitrary name.
         driver = driver_for(g)
+        if driver.method == "eoip":
+            driver.remove(g, self.paths, self.run)
+            return
         row = self.inspect_link(g, driver)
         if row and self.owns_link(g, row):
             self.run(*driver.delete(g))

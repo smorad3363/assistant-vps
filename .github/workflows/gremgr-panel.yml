@@ -85,7 +85,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: [gre, gretap]
+        transport: [gre, gretap, eoip]
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual machine dependencies
@@ -94,3 +94,19 @@ jobs:
         env:
           GREMGR_REBOOT_METHOD: ${{ matrix.transport }}
         run: bash gre-manager/tests/qemu_reboot_lab.sh
+  routeros-eoip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the RouterOS VM fixture dependencies
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 python3-pexpect unzip iptables iproute2 iputils-ping
+      - name: Verify EoIP interoperation with real RouterOS CHR
+        run: |
+          lab=$(mktemp -d)
+          trap 'sudo rm -rf -- "$lab"' EXIT
+          cd "$lab"
+          curl --fail --retry 3 --location --silent --show-error https://download.mikrotik.com/routeros/7.25.1/chr-7.25.1.img.zip --output chr.zip
+          printf '%s  %s\n' c78e8e24ca78d7f13496140e600702df07fe5c57d1a5d6d025654c8476ed2ed2 chr.zip | sha256sum --check
+          unzip -q chr.zip
+          sudo env GITHUB_ACTIONS=true PYTHONPATH="$GITHUB_WORKSPACE/gre-manager" /usr/bin/python3 "$GITHUB_WORKSPACE/gre-manager/tests/chr_eoip_lab.py" "$lab/chr-7.25.1.img" "$lab"

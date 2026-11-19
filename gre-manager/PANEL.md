@@ -207,6 +207,11 @@ GRETAP members use a separate Ethernet interface to carry IPv4 between the
 two configured outer addresses. The panel generates matching keys on both
 ends unless a key is supplied. The link stays separate from the WAN bridge.
 
+EoIP uses a dedicated Linux TAP interface and a shared 16-bit tunnel ID.
+Specify the outer IPv4 address on both ends and allow protocol 47 between
+those addresses. Use an inner MTU with at least 42 bytes of underlay headroom.
+The EoIP task stops with its member and the kernel releases its TAP interface.
+
 Under Settings → Path test, select two paired nodes and their outer IPv4
 addresses. The preview shows the effective time and volume budget. The test
 prepares a separate GRE or IPIP link and measures two TCP streams over that

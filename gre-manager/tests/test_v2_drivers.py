@@ -3,6 +3,8 @@ import copy
 import base64
 import json
 import random
+import ipaddress
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -13,11 +15,26 @@ from panel.model import DEFAULTS, PanelError
 from panel.store import Paths
 from panel.v2_config import normalize_group
 from panel.v2_drivers import driver_for, local_wireguard_key
+from panel.v2_eoip import decode_frame, encode_frame
 from panel.v2_forwarding import gre_link, topology_views
 from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_eoip_encoding_and_input_validation(self):
+        rng = random.Random(6400)
+        local, remote = [ipaddress.IPv4Address(a).packed for a in ("192.0.2.10", "203.0.113.20")]
+        for _ in range(250):
+            size, identity = rng.randint(14, 1300), rng.randint(1, 65535)
+            payload = rng.randbytes(size)
+            data = encode_frame(identity, payload)
+            self.assertEqual(data[:8], b"\x20\x01\x64\x00" + size.to_bytes(2, "big") + identity.to_bytes(2, "little"))
+            ip_header = struct.pack("!BBHHHBBH4s4s", 0x45, 0, len(data)+20, 0, 0, 64, 47, 0, remote, local)
+            self.assertEqual(decode_frame(ip_header+data, local, remote, identity, 1300), payload)
+            self.assertIsNone(decode_frame(ip_header+data, remote, local, identity, 1300))
+            self.assertIsNone(decode_frame(ip_header+data[:-1], local, remote, identity, 1300))
+            self.assertIsNone(decode_frame(ip_header+data, local, remote, identity ^ 1, 1300))
+
     def test_vxlan_falls_back_to_kernel_text_when_detailed_json_is_malformed(self):
         driver = driver_for({"method": "vxlan"})
         def tool(*args, **kwargs):

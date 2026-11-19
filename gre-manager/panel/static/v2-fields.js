@@ -42,6 +42,7 @@ const v2FieldSchema = {
     'vxlan-vni': ['شناسهٔ VNI','شناسهٔ ۲۴ بیتی شبکهٔ VXLAN که در دو سمت باید یکسان باشد.'],
     'vxlan-port': ['پورت UDP VXLAN','هر دو سمت روی این پورت حمل می‌کنند. پیش‌فرض ۴۷۸۹ است.'],
     'gretap-key': ['کلید GRETAP','کلید مشترک دو سر. در صورت خالی‌بودن، پنل یک کلید پایدار می‌سازد.'],
+    'eoip-id': ['شناسهٔ تونل EoIP','شناسهٔ ۱۶ بیتی مشترک دو سر این لینک Ethernet.'],
     'ingress-mtu': ['MTU ورودی',mtuHint], 'destination-mtu': ['MTU مقصد',mtuHint],
     'ingress-mode': ['روش MSS ورودی',mssHint], 'destination-mode': ['روش MSS مقصد',mssHint],
     'ingress-mss': ['عدد MSS ورودی',mssHint], 'destination-mss': ['عدد MSS مقصد',mssHint],

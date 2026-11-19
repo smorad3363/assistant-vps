@@ -9,6 +9,7 @@ import os
 import tempfile
 
 from .model import PanelError
+from .v2_eoip import EoIP
 
 
 def gre_key(value):
@@ -205,7 +206,7 @@ class Vxlan:
 
 
 DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan(),
-           "gretap": GreTap("gretap", "ip_gre", "gre", True)}
+           "gretap": GreTap("gretap", "ip_gre", "gre", True), "eoip": EoIP()}
 
 
 def driver_for(link):
