@@ -34,7 +34,8 @@ def gre_link(owner, listener, member, receiving=False):
         settings = member["wireguard"]
         here, there = ("destination", "ingress") if receiving else ("ingress", "destination")
         extra = {"public_key": settings[here]["public_key"], "peer_public_key": settings[there]["public_key"],
-                 "listen_port": settings[here]["port"], "peer_port": settings[there]["port"], "keepalive": settings["keepalive"]}
+                 "listen_port": settings[here]["port"], "peer_port": settings[there]["port"],
+                 "keepalive": 0 if receiving else settings["keepalive"]}
     return {
         "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "wireguard": "w2-"}[method] + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
@@ -71,7 +72,9 @@ def checks_admission(listener, member):
 def health_signature(owner, listener, member):
     path = [listener.get(key) for key in ("id", "node_id", "ip", "outer_ip", "ports", "exclude_ports", "port_map",
                                           "target_port", "protocols", "probe", "watch_link")]
-    peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled", "wireguard")]
+    peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled")]
+    if member["method"] == "wireguard":
+        peer.append(member["wireguard"])
     return fingerprint([owner, path, peer])
 
 

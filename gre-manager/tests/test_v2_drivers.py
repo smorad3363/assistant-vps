@@ -48,6 +48,8 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(left["peer_public_key"], right["public_key"])
         self.assertEqual(right["peer_port"], left["listen_port"])
         self.assertEqual(left["peer_tun"], right["local_tun"])
+        self.assertGreater(left["keepalive"], 0)
+        self.assertEqual(right["keepalive"], 0)
         state = {"groups": {group["id"]: {"active": True, "owner": key(3), "group": group}}, "operations": {}}
         rendered = topology_views({"settings": DEFAULTS, "connections": []}, state, key(3))
         pre = build_rules(rendered, {"192.0.2.10": "eth0", "192.0.2.11": "eth0"})["nat"]["GMP_PRE"]

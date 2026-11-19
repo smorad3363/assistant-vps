@@ -387,16 +387,21 @@ def lab(root):
         assert rejected.returncode and "already listens on this UDP port" in rejected.stderr, rejected.stderr
         compiled_wg = apply([wg])
         link = gre_link(owner, compiled_wg, compiled_wg["members"][0])
+        remote_link = gre_link(owner, compiled_wg, compiled_wg["members"][0], receiving=True)
+        responder = start_process(processes, namespace(first_target, "link-respond", json.dumps(remote_link)), stdout=subprocess.PIPE)
+        assert receive_line(responder) == "ready"
         deadline = time.monotonic() + 14
         while True:
+            response = command(*namespace("gm-ir", "link-probe", json.dumps(link)), capture_output=True).stdout.strip()
             handshakes = [command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], "latest-handshakes",
                                   capture_output=True).stdout.split() for host in ("gm-ir", first_target)]
-            if all(len(row) == 2 and int(row[-1]) > 0 for row in handshakes):
+            if response == "true" and all(len(row) == 2 and int(row[-1]) > 0 for row in handshakes):
                 break
             if time.monotonic() >= deadline:
                 for host in ("gm-ir", first_target):
                     command("ip", "netns", "exec", host, "iptables", "-nvL", "GMP_INPUT")
-                    command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], "endpoints")
+                    for field in ("endpoints", "latest-handshakes", "transfer"):
+                        command("ip", "netns", "exec", host, "wg", "show", link["tunnel"], field)
                 raise AssertionError("WireGuard did not negotiate a handshake at both endpoints.")
             time.sleep(.2)
         for proto in ("tcp", "udp"):
@@ -426,6 +431,10 @@ if __name__ == "__main__":
         link = json.loads(args[0])
         print("ready", flush=True)
         link_responses(lambda: {(link["local_tun"], link["peer_tun"]): link}, threading.Event())
+    elif action == "link-probe":
+        from panel.v2_health import link_probe
+
+        print(json.dumps(link_probe(json.loads(args[0]))))
     elif action == "health":
         from panel.engine import run
 
