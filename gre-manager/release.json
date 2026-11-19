@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "1.2.0",
-  "revision": "497e9e007c388519179e2e7dcbc789b49372c8f0",
+  "revision": "d9db00fc4733310a5326bfff865fd3ae2dd52b9e",
   "files": {
     "gremgr-certificate.service": "ecaad1b0a845d02eda7dc0072d5fb9bbbdea4b874047e6c4401f5c441cec37b5",
     "gremgr-certificate.timer": "717a6d83996fdf54d8485b597bdfe339d6fff823feec19b1337ab400b70d6dc9",
@@ -18,12 +18,12 @@
     "panel/agent.py": "561cb25c8116dbca7b9487a25f12ac47b781e8539210b16ee21d5d859c238537",
     "panel/certificates.py": "09c2f988eb700d308ca6254e5a4fed9fe940cad56cde2f2d3d99286b474423d4",
     "panel/cli.py": "a1f356de06965e342603d27207bc901d91025e48ae40077a5beedc0fd33c8d6f",
-    "panel/controller.py": "35a13de02bc73cf035701683a1566ce362c69ede145f0fd2eb4f7b219ced16f6",
+    "panel/controller.py": "d3913d7dd92e9f41075da2dcb524013035b43314fe336a098d7b5371433be031",
     "panel/demo.py": "4c7bdb2173565695654712bd9dd8d2db7649bb00d6a571c0a3da2440485fd0d3",
     "panel/engine.py": "f6794f5cdf08419df173ec0939bae10a858597b48eb0e85a33cb2c016eb1c8c4",
     "panel/model.py": "bbd5dd004fbd340125fd406c66c8c60f9c6735a98cc4d1f3e0491d8fe31d6cdb",
     "panel/remote.py": "01566bed37f26ac657075d8975b506d3186d52af1f78c66b47be4c4b528f5834",
-    "panel/static/app.js": "9c76478f4a7b107f42127d6f10087aacb4f0babdd6bd9f2fc4ea7a4b79f1bbdf",
+    "panel/static/app.js": "963ef060cf7e380880c383256fbbe47381c235d50e5614282fc97679be497456",
     "panel/static/favicon.svg": "c9c1421e8344aafc6d61c94b694ab51ed17505b1b3f779ef26a6d8b77efda5b1",
     "panel/static/index.html": "f47cdb2790be4a53c5abb8cc7b9e1c9e8fd40d8092b677cff5bc9b7fe5e7ea52",
     "panel/static/style.css": "a7725dd83ce2d7aa2c8c52c4244f00df281d3b61f5a9fcc13af4bc630c73c2c1",
