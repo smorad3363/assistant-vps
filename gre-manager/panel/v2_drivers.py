@@ -3,6 +3,8 @@ from dataclasses import dataclass
 import base64
 import fcntl
 import ipaddress
+import json
+import re
 import os
 import tempfile
 
@@ -116,7 +118,66 @@ class WireGuard:
             "allowed-ips", link["peer_tun"] + "/32", "persistent-keepalive", link["keepalive"])
 
 
-DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard()}
+class Vxlan:
+    method = module = "vxlan"
+    overhead = 50
+
+    def create(self, link, interface):
+        return ["ip", "link", "add", "dev", link["tunnel"], "type", self.method, "id", link["vni"],
+                "local", link["outer_local"], "remote", link["outer_peer"], "dstport", link["listen_port"],
+                "dev", interface, "nolearning"]
+
+    def inspect(self, run, name=None):
+        selector = ("dev", name) if name else ("type", self.method)
+        result = run("ip", "-j", "-d", "link", "show", *selector, check=not name)
+        if result.returncode:
+            return []
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            # Some distribution builds print a plaintext VXLAN flag in detailed JSON.
+            plain = run("ip", "-o", "-d", "link", "show", *selector).stdout
+            basic = json.loads(run("ip", "-j", "link", "show", *selector).stdout)
+            details = {}
+            for line in plain.splitlines():
+                index = re.match(r"\s*(\d+):", line)
+                data = re.search(r"(?:\\\s+|\s{2,})vxlan\s+id\s+(\d+)\b(.*)", line)
+                if not index or not data:
+                    continue
+                attrs = {"id": int(data[1]), "learning": "nolearning" not in data[2].split()}
+                for option, key in (("local", "local"), ("remote", "remote"), ("dev", "link"), ("dstport", "port")):
+                    match = re.search(r"(?:^|\s)" + option + r"\s+(\S+)", data[2])
+                    if match:
+                        attrs[key] = int(match[1]) if option == "dstport" else match[1]
+                details[int(index[1])] = attrs
+            for row in basic:
+                if row["ifindex"] in details:
+                    row["linkinfo"] = {"info_kind": self.method, "info_data": details[row["ifindex"]]}
+                elif not name:
+                    raise PanelError("The installed iproute2 could not describe an existing VXLAN interface.", "device_conflict")
+            return basic
+
+    def marker(self, link):
+        return "gremgr:v2:" + link["id"]
+
+    def owns(self, link, row):
+        info = row.get("linkinfo", {})
+        data = info.get("info_data", {})
+        return (info.get("info_kind") == self.method and row.get("ifalias") == self.marker(link)
+                and (data.get("id"), data.get("local"), data.get("remote"), data.get("port")) ==
+                (link["vni"], link["outer_local"], link["outer_peer"], link["listen_port"]))
+
+    def refresh(self, link, info, interface):
+        return None
+
+    def delete(self, link):
+        return ["ip", "link", "del", "dev", link["tunnel"]]
+
+    def firewall(self, link):
+        return ["-p", "udp", "--dport", link["listen_port"]]
+
+
+DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan()}
 
 
 def driver_for(link):

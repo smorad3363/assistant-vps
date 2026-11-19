@@ -114,6 +114,60 @@ def match_port(low, high):
     return str(low) if low == high else f"{low}:{high}"
 
 
+def udp_carrier_matches(rule, link, interface=None):
+    if "-p" in rule:
+        position = rule.index("-p")
+        if (rule[position + 1] in ("udp", "17", "all", "0")) == (rule[position - 1] == "!"):
+            return False
+    if interface and "-i" in rule:
+        position = rule.index("-i")
+        selector = rule[position + 1]
+        matches = interface.startswith(selector[:-1]) if selector.endswith("+") else interface == selector
+        if matches == (rule[position - 1] == "!"):
+            return False
+    for flag, name in (("-s", "outer_peer"), ("-d", "outer_local")):
+        if flag in rule:
+            position = rule.index(flag)
+            network = ipaddress.IPv4Network(rule[position + 1], strict=False)
+            if (ipaddress.IPv4Address(link[name]) in network) == (rule[position - 1] == "!"):
+                return False
+    for flag in ("--dport", "--dports"):
+        if flag not in rule:
+            continue
+        try:
+            position = rule.index(flag)
+            ranges = [tuple(int(port) for port in value.split(":")) for value in rule[position + 1].split(",")]
+            matches = any(ports[0] <= link["listen_port"] <= ports[-1] for ports in ranges)
+            if matches == (rule[position - 1] == "!"):
+                return False
+        except ValueError:
+            pass
+    return True
+
+
+def external_carrier_forward(rules, link, interface):
+    chains = defaultdict(list)
+    for line in rules.splitlines():
+        if line.startswith("-A "):
+            fields = shlex.split(line)
+            chains[fields[1]].append(fields[2:])
+    visited, pending = {"GMP_PRE"}, ["PREROUTING"]
+    while pending:
+        chain = pending.pop()
+        if chain in visited:
+            continue
+        visited.add(chain)
+        for rule in chains[chain]:
+            jump = next((rule[rule.index(flag) + 1] for flag in ("-j", "-g") if flag in rule), None)
+            if not jump or not udp_carrier_matches(rule, link, interface):
+                continue
+            if jump in ("DNAT", "REDIRECT", "NETMAP"):
+                return True
+            if jump in chains:
+                pending.append(jump)
+    return False
+
+
 def monitored(c, settings):
     explicit = c.get("monitor_ports", []) + [int(x) for x in c.get("port_limits", {})] + [int(x) for x in c.get("port_map", {})]
     ranges = ranges_for(c, settings)
@@ -282,6 +336,44 @@ class Engine:
             for chain in reversed(present):
                 self.run("iptables", "-w", "5", "-t", table, "-X", chain)
 
+    def check_vxlan(self, links, interfaces):
+        if not links:
+            return
+        identifiers, ports, devices = {}, set(), {}
+        for link in links:
+            interface = interfaces.get(link["outer_local"])
+            if not interface:
+                raise PanelError("The configured VXLAN source address is unavailable.", "local_ip", "outer_ip")
+            if interface not in devices:
+                devices[interface] = json.loads(self.run("ip", "-j", "link", "show", "dev", interface).stdout)[0]
+            if link["mtu"] + driver_for(link).overhead > devices[interface]["mtu"]:
+                raise PanelError("Lower the VXLAN MTU for this underlay interface.", "link_policy", "mtu")
+            identity = link["listen_port"], link["vni"]
+            if identifiers.setdefault(identity, link)["tunnel"] != link["tunnel"]:
+                raise PanelError("Two VXLAN links on this node cannot share both VNI and UDP port.", "device_conflict", "vni")
+            ports.add(link["listen_port"])
+        kernel_ports = set()
+        for row in driver_for(links[0]).inspect(self.run):
+            data = row.get("linkinfo", {}).get("info_data", {})
+            port = data.get("port")
+            if port not in ports:
+                continue
+            expected = identifiers.get((port, data.get("id")))
+            if expected and (row.get("ifname") != expected["tunnel"] or not driver_for(expected).owns(expected, row)):
+                raise PanelError("An existing VXLAN interface uses the requested VNI and UDP port.", "device_conflict", "vni")
+            if expected and (data.get("link") != interfaces[expected["outer_local"]] or data.get("learning") is not False):
+                raise PanelError("The VXLAN underlay or learning setting was changed outside the panel.", "device_conflict", "outer_ip")
+            if not row.get("ifalias", "").startswith("gremgr:v2:"):
+                raise PanelError("An existing VXLAN interface already uses this UDP port.", "device_conflict", "port")
+            kernel_ports.add(port)
+        unused = ports - kernel_ports
+        if unused:
+            for row in self.run("ss", "-H", "-una").stdout.splitlines():
+                fields = row.split()
+                port = fields[3].rsplit(":", 1)[-1] if len(fields) > 3 else ""
+                if port.isdecimal() and int(port) in unused:
+                    raise PanelError("An existing UDP socket already uses the VXLAN port.", "device_conflict", "port")
+
     def check_wireguard(self, links, interfaces):
         if not links:
             return
@@ -326,13 +418,14 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs = {}
-        wg_links = []
+        unkeyed_pairs, vxlan, wg_links = {}, [], []
         for link in self.gre_devices(config):
             if link.get("method") == "ipip":
                 pair = link["outer_local"], link["outer_peer"]
                 if unkeyed_pairs.setdefault(pair, link)["tunnel"] != link["tunnel"]:
                     raise PanelError("IPIP cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
+            if link.get("method") == "vxlan":
+                vxlan.append(link)
             if link.get("method") == "wireguard":
                 wg_links.append(link)
         if unkeyed_pairs:
@@ -343,7 +436,10 @@ class Engine:
                     link = unkeyed_pairs.get((data.get("local"), data.get("remote")))
                     if link and (row.get("ifname") != link["tunnel"] or not driver_for(link).owns(link, row)):
                         raise PanelError("An existing IPIP interface uses the requested outer addresses.", "device_conflict")
+        self.check_vxlan(vxlan, interfaces)
         self.check_wireguard(wg_links, interfaces)
+        if {x["listen_port"] for x in vxlan} & {x["listen_port"] for x in wg_links}:
+            raise PanelError("VXLAN and WireGuard require different UDP ports on this node.", "device_conflict", "port")
         for c in forwarding:
             if not c.get("enabled", True):
                 continue
@@ -353,6 +449,9 @@ class Engine:
             if c["kind"] == "direct" and c["resolved_ip"] in interfaces:
                 raise PanelError("A direct destination cannot be the input server itself.", "loop")
         existing = self.run("iptables-save", "-t", "nat").stdout
+        for link in [*vxlan, *wg_links]:
+            if external_carrier_forward(existing, link, interfaces[link["outer_local"]]):
+                raise PanelError("An external port forward already handles this tunnel endpoint.", "external_conflict", "port")
         for line in existing.splitlines():
             if not line.startswith("-A PREROUTING ") or "-j DNAT" not in line or "gmpanel:" in line:
                 continue
@@ -360,19 +459,6 @@ class Engine:
                 continue
             parts = shlex.split(line)
             destination = parts[parts.index("-d") + 1] if "-d" in parts else None
-            protocol = parts[parts.index("-p") + 1] if "-p" in parts else None
-            if wg_links and protocol in (None, "udp", "17"):
-                origin = parts[parts.index("-s") + 1] if "-s" in parts and parts[parts.index("-s") - 1] != "!" else None
-                raw = parts[parts.index("--dport") + 1] if "--dport" in parts else parts[parts.index("--dports") + 1] if "--dports" in parts else "1:65535"
-                try:
-                    intervals = [tuple(int(n) for n in item.split(":")) for item in raw.split(",")]
-                except ValueError:
-                    intervals = [(1, 65535)]
-                for link in wg_links:
-                    addresses = ((link["outer_local"], destination), (link["outer_peer"], origin))
-                    if (all(not network or ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(network, strict=False)
-                            for ip, network in addresses) and any(x[0] <= link["listen_port"] <= x[-1] for x in intervals)):
-                        raise PanelError("An external forward already handles traffic on the WireGuard endpoint.", "external_conflict", "port")
             for c in forwarding:
                 if not c.get("enabled", True) or c["kind"] == "peer":
                     continue
@@ -398,9 +484,8 @@ class Engine:
         driver = driver_for(g)
         interface = interfaces[g["outer_local"]]
         self.run("modprobe", driver.module, check=False)
-        current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
-        if current.returncode == 0:
-            row = json.loads(current.stdout)[0]
+        row = self.inspect_link(g, driver)
+        if row:
             if not driver.owns(g, row):
                 raise PanelError("Another program owns this tunnel interface.", "device_conflict")
             refresh = driver.refresh(g, row.get("linkinfo", {}), interface)
@@ -424,6 +509,14 @@ class Engine:
         self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
         self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
         self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
+
+    def inspect_link(self, link, driver):
+        if driver.method == "vxlan":
+            rows = driver.inspect(self.run, link["tunnel"])
+        else:
+            result = self.run("ip", "-j", "-d", "link", "show", link["tunnel"], check=False)
+            rows = json.loads(result.stdout) if result.returncode == 0 else []
+        return rows[0] if rows else None
 
     def docker_udp(self):
         result = self.run("iptables", "-w", "10", "-t", "nat", "-S", "DOCKER", check=False)
@@ -516,12 +609,9 @@ class Engine:
 
     def remove_gre(self, g):
         # Verify ownership even on deletion. Never deletes an arbitrary name.
-        current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
-        if current.returncode:
-            return
-        row = json.loads(current.stdout)[0]
         driver = driver_for(g)
-        if driver.owns(g, row):
+        row = self.inspect_link(g, driver)
+        if row and driver.owns(g, row):
             self.run(*driver.delete(g))
 
     def retire_legacy(self, config):

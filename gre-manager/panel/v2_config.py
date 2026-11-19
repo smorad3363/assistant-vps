@@ -128,6 +128,12 @@ def normalize_group(raw):
                 normalized_members[-1]["link_settings"] = link_settings(member["link_settings"])
             if method == "ipip":
                 normalized_members[-1]["ttl"] = integer(member.get("ttl", 64), 0, 255, "ttl")
+            if method == "vxlan":
+                parameters = member.get("vxlan")
+                if not isinstance(parameters, dict) or set(parameters) - {"vni", "port"}:
+                    raise PanelError("Set the VNI and optional UDP port for this VXLAN link.", field="vxlan")
+                normalized_members[-1]["vxlan"] = {"vni": integer(parameters.get("vni"), 1, 16777215, "vni"),
+                                                   "port": integer(parameters.get("port", 4789), 1, 65535, "port")}
             if method == "wireguard":
                 normalized_members[-1]["wireguard"] = wireguard_settings(member.get("wireguard"))
         first = normalized_members[0]

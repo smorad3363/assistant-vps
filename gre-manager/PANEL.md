@@ -203,6 +203,14 @@ python3 -m panel.demo --seed
 # http://127.0.0.1:8877 ; admin / Demo-Panel-2026!
 ```
 
+For a VXLAN member, select the outer IPv4 address at each end, set the VNI and
+choose a shared UDP destination port (4789 by default). Separate VNIs can share
+a GRE Manager UDP socket. Each device carries IPv4 packets over its own
+Ethernet segment with a fixed remote endpoint and MAC learning disabled. Use
+an MTU that is at least 50 bytes below the underlying interface MTU. If the
+host already runs a separate VXLAN or another UDP service on the port, use a
+different UDP port for the panel's links.
+
 The direct-forwarding feature was informed by the behavior requested from
 [IPTABLE-Tunnel-multi-port](https://github.com/azavaxhuman/IPTABLE-Tunnel-multi-port).
 Its installer, shell menu and destructive global reset operations are not bundled.

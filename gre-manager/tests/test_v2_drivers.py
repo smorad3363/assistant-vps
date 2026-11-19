@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from panel.engine import Engine, build_rules
+from panel.engine import Engine, build_rules, external_carrier_forward, udp_carrier_matches
 from panel.model import DEFAULTS, PanelError
 from panel.store import Paths
 from panel.v2_config import normalize_group
@@ -18,6 +18,22 @@ from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_vxlan_falls_back_to_kernel_text_when_detailed_json_is_malformed(self):
+        driver = driver_for({"method": "vxlan"})
+        def tool(*args, **kwargs):
+            if "-j" in args and "-d" in args:
+                output = '[{"ifindex":15,"ifname":"v2-123456789012","linkinfo":{"info_data":{"port":4789 localbypass}}}]'
+            elif "-j" in args:
+                output = '[{"ifindex":15,"ifname":"v2-123456789012","ifalias":"gremgr:v2:1234567890"}]'
+            else:
+                output = ("15: v2-123456789012: <BROADCAST> mtu 1280 \\    link/ether 76:22:18:d7:2f:aa"
+                          " \\    vxlan id 4 remote 203.0.113.20 local 192.0.2.11 dev eth1 srcport 0 0 dstport 4789 nolearning")
+            return subprocess.CompletedProcess(args, 0, output, "")
+        row, = driver.inspect(tool)
+        self.assertEqual(row["linkinfo"]["info_data"], {"id": 4, "learning": False, "remote": "203.0.113.20",
+                                                        "local": "192.0.2.11", "link": "eth1", "port": 4789})
+        self.assertTrue(driver.owns({"vni": 4, "id": "1234567890", "outer_local": "192.0.2.11",
+                                     "outer_peer": "203.0.113.20", "listen_port": 4789}, row))
     def test_wireguard_materializes_local_key_and_returns_only_public_key(self):
         private_key = base64.b64encode(bytes([9]) * 32).decode()
         public_key = base64.b64encode(bytes([43]) * 32).decode()
@@ -147,3 +163,34 @@ class DriverTests(unittest.TestCase):
                 engine.preflight(view)
         compiled = build_rules(view, {"192.0.2.10": "eth0", "192.0.2.11": "eth1"})["filter"]["GMP_INPUT"]
         self.assertTrue(any(["-p", "4"] == rule[-4:-2] for rule in compiled))
+
+    def test_vxlan_preserves_vnis_ownership_and_scoped_udp(self):
+        rng = random.Random(4789)
+        for vni in [1, 16777215, *rng.sample(range(2, 16777215), 32)]:
+            group = data([{"id": key(4), "node_id": key(5), "method": "vxlan", "service_ip": "203.0.113.20",
+                           "vxlan": {"vni": vni}}])
+            self.assertEqual(group, normalize_group(group))
+            listener = group["listeners"][0]
+            member = listener["members"][0]
+            left = gre_link(key(3), listener, member)
+            right = gre_link(key(3), listener, member, receiving=True)
+            self.assertEqual((left["tunnel"], left["local_tun"], left["outer_local"]),
+                             (right["tunnel"], right["peer_tun"], right["outer_peer"]))
+            driver = driver_for(left)
+            self.assertIn("nolearning", driver.create(left, "eth1"))
+            row = {"ifalias": driver.marker(left), "linkinfo": {"info_kind": "vxlan", "info_data": {
+                "id": vni, "local": left["outer_local"], "remote": left["outer_peer"], "port": 4789}}}
+            self.assertTrue(driver.owns(left, row))
+            self.assertFalse(driver.owns(dict(left, vni=vni - 1), row))
+        self.assertTrue(udp_carrier_matches("-p udp -d 192.0.2.0/24 --dport 4000:5000".split(), left))
+        self.assertFalse(udp_carrier_matches("-p tcp -d 192.0.2.0/24 --dport 4789".split(), left))
+        self.assertFalse(udp_carrier_matches("-p udp ! -s 203.0.113.20 --dport 4789".split(), left))
+        self.assertTrue(udp_carrier_matches("! -p tcp -d 192.0.2.11 --dport 4789".split(), left))
+        rules = "-A PREROUTING -i eth1 -j CUSTOM\n-A CUSTOM -p udp --dport 4789 -j REDIRECT"
+        self.assertTrue(external_carrier_forward(rules, left, "eth1"))
+        self.assertFalse(external_carrier_forward(rules, left, "eth0"))
+        self.assertFalse(external_carrier_forward(rules.replace("4789", "4790"), left, "eth1"))
+        compiled = topology_views({"settings": DEFAULTS, "connections": []},
+                                  {"groups": {group["id"]: {"active": True, "owner": key(3), "group": group}}, "operations": {}}, key(3))
+        rule = ["-i", "eth1", "-s", "203.0.113.20", "-d", "192.0.2.11", "-p", "udp", "--dport", "4789", "-j", "ACCEPT"]
+        self.assertIn(rule, build_rules(compiled, {"192.0.2.10": "eth0", "192.0.2.11": "eth1"})["nat"]["GMP_PRE"])
