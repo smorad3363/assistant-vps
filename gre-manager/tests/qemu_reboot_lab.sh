@@ -26,6 +26,7 @@ trap cleanup EXIT
 
 images=https://cloud.debian.org/images/cloud/bookworm/latest
 image=debian-12-genericcloud-amd64.qcow2
+if [[ $method == l2tpv2 ]]; then image=debian-12-generic-amd64.qcow2; fi
 curl --fail --retry 3 --location --silent --show-error "$images/SHA512SUMS" --output "$lab/SHA512SUMS"
 curl --fail --retry 3 --location --silent --show-error "$images/$image" --output "$lab/$image"
 (
@@ -129,6 +130,7 @@ systemctl is-active gremgr-worker.service
 GUEST
   if [[ $method == l2tpv2 ]]; then
     guest "$port" 'sudo apt-get update -qq && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xl2tpd ppp'
+    guest "$port" 'uname -r && sudo modprobe ppp_generic && sudo modprobe l2tp_ppp && sudo test -c /dev/ppp'
     guest "$port" 'sudo install -d -m 700 /etc/gremgr/ppp-credentials && sudo install -m 600 /dev/stdin /etc/gremgr/ppp-credentials/lab' <"$lab/ppp-secret"
   fi
 }
