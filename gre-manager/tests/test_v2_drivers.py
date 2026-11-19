@@ -81,6 +81,83 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(left["family"], 6)
         self.assertNotEqual(left["local_tun"], test_link(key(2), dict(request, side=0, direction=1))["local_tun"])
 
+    def test_l2tp_has_reversed_ids_and_leaves_an_adjacent_session(self):
+        group = data([{"id": key(4), "node_id": key(5), "method": "l2tpv3", "service_ip": "203.0.113.20",
+                       "l2tpv3": {"ingress": {"tunnel_id": 100, "session_id": 101, "port": 37001},
+                                  "destination": {"tunnel_id": 200, "session_id": 201, "port": 37002}}}])
+        parent = group["listeners"][0]
+        member = parent["members"][0]
+        left, right = [gre_link(key(3), parent, member, receiving=target) for target in (False,True)]
+        self.assertEqual((left["tunnel_id"], left["session_id"], left["listen_port"]),
+                         (right["peer_tunnel_id"], right["peer_session_id"], right["peer_port"]))
+        driver = driver_for(left)
+        self.assertIn("0x00000065", driver.firewall(left)[-1])
+        known = [driver.session(left), dict(driver.session(left), session_id=999, interface="adjacent")]
+        calls = []
+        interface = {"ifname": left["tunnel"], "link_type": "ether", "ifalias": "external-owner"}
+
+        def tool(*args, **kwargs):
+            calls.append(args)
+            rows = [driver.expected(left)] if args[-1] == "tunnel" else known if args[-1] == "session" else [interface]
+            if "del" in args:
+                known.pop(0)
+            return subprocess.CompletedProcess(args, 0, json.dumps(rows), "")
+
+        with tempfile.TemporaryDirectory() as home:
+            from panel.store import atomic_json
+            paths = Paths(home)
+            driver.remove(left, paths, tool)
+            self.assertEqual(calls, [])
+            atomic_json(driver.journal(paths, left), driver.receipt(left))
+            driver.remove(left, paths, tool)
+            self.assertFalse(any("del" in call for call in calls))
+            interface["ifalias"] = ""
+            driver.remove(left, paths, tool)
+            self.assertFalse(any("del" in call for call in calls))
+            # Only a pending creation receipt can claim an unmarked kernel session.
+            atomic_json(driver.journal(paths, left), driver.receipt(left, "pending"))
+            driver.remove(left, paths, tool)
+            deletes = [call for call in calls if "del" in call]
+            self.assertEqual(deletes, [("ip", "l2tp", "del", "session", "tunnel_id", 100, "session_id", 101)])
+            self.assertTrue(driver.journal(paths, left).is_file())
+
+    def test_a_saved_geneve_route_loss_leaves_other_methods_ready(self):
+        group = data([{"id": key(4), "node_id": key(5), "method": "geneve", "service_ip": "203.0.113.20", "geneve": {"vni": 800}},
+                      {"id": key(6), "node_id": key(7), "method": "gre", "service_ip": "203.0.113.21"}])
+        state = {"groups": {group["id"]: {"active": True, "owner": key(3), "group": group}}, "operations": {}}
+        settings = {"settings": DEFAULTS, "connections": []}
+        with tempfile.TemporaryDirectory() as root:
+            paths = Paths(root)
+            with patch("panel.engine.run", side_effect=PanelError("route missing")):
+                restored = topology_views(settings, state, key(3), paths=paths)
+            self.assertEqual(restored["v2_driver_unavailable"], {group["id"] + ":" + key(4): "geneve_route"})
+            self.assertEqual([driver_for(link).method for link in restored["v2_devices"]], ["gre"])
+            self.assertTrue(group["listeners"][0]["members"][0]["enabled"])
+            with patch("panel.engine.run", return_value=subprocess.CompletedProcess([], 0, '[{"prefsrc":"192.0.2.11","dev":"eth1"}]', "")):
+                recovered = topology_views(settings, state, key(3), paths=paths)
+            self.assertEqual([driver_for(link).method for link in recovered["v2_devices"]], ["geneve", "gre"])
+
+    def test_geneve_validates_the_route_source_and_owns_its_vni(self):
+        group = data([{"id": key(4), "node_id": key(5), "method": "geneve", "service_ip": "203.0.113.20",
+                       "geneve": {"vni": 15000}}])
+        listener = group["listeners"][0]
+        link = gre_link(key(3), listener, listener["members"][0])
+        driver = driver_for(link)
+        self.assertEqual(link["listen_port"], 6081)
+        self.assertNotIn("local", driver.create(link, "eth1"))
+        attrs = {"id": 15000, "port": 6081, "remote": link["outer_peer"]}
+        row = {"ifalias": driver.marker(link), "linkinfo": {"info_kind": "geneve", "info_data": attrs}}
+        self.assertTrue(driver.owns(link, row))
+        self.assertFalse(driver.owns(dict(link, outer_peer="203.0.113.21"), row))
+
+        def tool(*args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, '[{"prefsrc":"192.0.2.10","dev":"eth1"}]', "")
+
+        with tempfile.TemporaryDirectory() as root:
+            engine = Engine(Paths(root), tool)
+            with self.assertRaisesRegex(PanelError, "route to the GENEVE endpoint"):
+                engine.check_udp_overlays([link], {link["outer_local"]: "eth1"})
+
     def test_vxlan_falls_back_to_kernel_text_when_detailed_json_is_malformed(self):
         driver = driver_for({"method": "vxlan"})
         def tool(*args, **kwargs):

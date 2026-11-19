@@ -14,6 +14,18 @@ def enabled(value):
     return value
 
 
+def l2tpv3_settings(value):
+    if not isinstance(value, dict) or set(value) != {"ingress", "destination"}:
+        raise PanelError("Provide tunnel and session IDs and a UDP port for both L2TPv3 endpoints.", field="l2tpv3")
+    result = {}
+    for side, settings in value.items():
+        if not isinstance(settings, dict) or set(settings) != {"tunnel_id", "session_id", "port"}:
+            raise PanelError("Provide tunnel and session IDs and a UDP port for each L2TPv3 endpoint.", field="l2tpv3")
+        result[side] = {field: integer(settings[field], 1, high, field)
+                        for field, high in (("tunnel_id", 4294967295), ("session_id", 4294967295), ("port", 65535))}
+    return result
+
+
 def listener_profile(listener, settings, service_ip):
     keys = ("protocols", "ports", "target_port", "port_map", "exclude_ports", "port_limits")
     profile = {key: listener[key] for key in keys if key in listener}
@@ -134,14 +146,17 @@ def normalize_group(raw):
                     raise PanelError("SIT uses IPv6 path MTU discovery. Configure only its link MTU.", field="mtu")
             if method == "ipip":
                 normalized_members[-1]["ttl"] = integer(member.get("ttl", 64), 0, 255, "ttl")
-            if method == "vxlan":
-                parameters = member.get("vxlan")
+            if method in ("vxlan", "geneve"):
+                parameters = member.get(method)
                 if not isinstance(parameters, dict) or set(parameters) - {"vni", "port"}:
-                    raise PanelError("Set the VNI and optional UDP port for this VXLAN link.", field="vxlan")
-                normalized_members[-1]["vxlan"] = {"vni": integer(parameters.get("vni"), 1, 16777215, "vni"),
-                                                   "port": integer(parameters.get("port", 4789), 1, 65535, "port")}
+                    raise PanelError(f"Set the VNI and optional UDP port for this {method.upper()} link.", field=method)
+                default_port = 4789 if method == "vxlan" else 6081
+                normalized_members[-1][method] = {"vni": integer(parameters.get("vni"), 1, 16777215, "vni"),
+                                                   "port": integer(parameters.get("port", default_port), 1, 65535, "port")}
             if method == "wireguard":
                 normalized_members[-1]["wireguard"] = wireguard_settings(member.get("wireguard"))
+            if method == "l2tpv3":
+                normalized_members[-1]["l2tpv3"] = l2tpv3_settings(member.get("l2tpv3"))
             if method == "gretap":
                 settings = member.get("gretap", {})
                 if not isinstance(settings, dict) or set(settings) - {"key"}:

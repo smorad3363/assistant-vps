@@ -27,9 +27,11 @@ def gre_link(owner, listener, member, receiving=False):
     settings_key = member.get("gretap", {}).get("key") if method == "gretap" else None
     if settings_key:
         identity_input += "|" + str(settings_key)
-    if method == "vxlan":
-        settings = member["vxlan"]
+    if method in ("vxlan", "geneve"):
+        settings = member[method]
         identity_input += f"|{settings['vni']}|{settings['port']}"
+    if method == "l2tpv3":
+        identity_input += "|" + fingerprint(member["l2tpv3"])
     identity = hashlib.sha256(identity_input.encode()).hexdigest()
     start = int(ipaddress.IPv4Address("10.224.0.0")) + 4 * (int(identity[12:20], 16) % 262144)
     addresses = [str(ipaddress.IPv4Address(start + offset)) for offset in (1, 2)]
@@ -38,7 +40,7 @@ def gre_link(owner, listener, member, receiving=False):
         addresses.reverse()
     parameters = member.get("link_settings", {}).get("destination" if receiving else "ingress", {})
     extra = {}
-    if method == "vxlan":
+    if method in ("vxlan", "geneve"):
         extra = {"vni": settings["vni"], "listen_port": settings["port"]}
     if method == "wireguard":
         settings = member["wireguard"]
@@ -52,9 +54,14 @@ def gre_link(owner, listener, member, receiving=False):
         peer = ipaddress.IPv6Interface(member["sit"][there])
         addresses = [str(local.ip), str(peer.ip)]
         extra = {"family": 6, "prefix_length": local.network.prefixlen}
+    if method == "l2tpv3":
+        here, there = ("destination", "ingress") if receiving else ("ingress", "destination")
+        local, peer = member["l2tpv3"][here], member["l2tpv3"][there]
+        extra = {"tunnel_id": local["tunnel_id"], "session_id": local["session_id"], "listen_port": local["port"],
+                 "peer_tunnel_id": peer["tunnel_id"], "peer_session_id": peer["session_id"], "peer_port": peer["port"]}
     return {
         "id": identity[:10], "tunnel": {"gre": "g2-", "ipip": "i2-", "wireguard": "w2-", "vxlan": "v2-",
-                                       "gretap": "t2-", "sit": "s2-"}[method] + identity[:12],
+                                       "gretap": "t2-", "geneve": "n2-", "l2tpv3": "l2-", "sit": "s2-"}[method] + identity[:12],
         "outer_local": source, "outer_peer": target, "local_tun": addresses[0],
         "peer_tun": addresses[1], "key": settings_key or int(identity[20:28], 16) or 1, "mtu": parameters.get("mtu", mtu),
         **({"mss_mode": parameters["mss_mode"], "mss": parameters.get("mss")} if parameters else {}),
@@ -90,7 +97,7 @@ def health_signature(owner, listener, member):
     path = [listener.get(key) for key in ("id", "node_id", "ip", "outer_ip", "ports", "exclude_ports", "port_map",
                                           "target_port", "protocols", "probe", "watch_link")]
     peer = [member.get(key) for key in ("id", "node_id", "service_ip", "method", "outer_ip", "mtu", "enabled")]
-    if member["method"] in ("wireguard", "vxlan", "gretap", "sit"):
+    if member["method"] in ("wireguard", "vxlan", "gretap", "geneve", "l2tpv3", "sit"):
         peer.append(member[member["method"]])
     return fingerprint([owner, path, peer])
 
@@ -102,13 +109,14 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
     unavailable = {}
     local_key = None
     key_read = False
+    routes = {}
     ipv6 = None
     settings = dict(DEFAULTS, **config["settings"])
 
     def usable_member(owner, listener, group, member):
         nonlocal key_read, local_key, ipv6
         method = member["method"]
-        if (not paths or group["id"] == require_keys_for or method not in ("wireguard", "sit")
+        if (not paths or group["id"] == require_keys_for or method not in ("wireguard", "geneve", "sit")
                 or not (member["enabled"] or member.get("draining"))):
             return member
         side = "ingress" if listener["node_id"] == node_id else "destination" if member["node_id"] == node_id else None
@@ -124,16 +132,30 @@ def topology_views(config, state, node_id, *, paths=None, require_keys_for=None)
             link = gre_link(owner, listener, member, receiving=side == "destination")
             unavailable_devices[link["tunnel"]] = link
             return dict(member, enabled=False, draining=False)
-        if not key_read:
-            from .engine import run
-            try:
-                local_key = local_wireguard_key(paths, run)
-            except (PanelError, OSError):
-                pass
-            key_read = True
-        if local_key == member["wireguard"][side]["public_key"]:
-            return member
-        unavailable[group["id"] + ":" + member["id"]] = "wireguard_key"
+        from .engine import run
+        if method == "wireguard":
+            if not key_read:
+                try:
+                    local_key = local_wireguard_key(paths, run)
+                except (PanelError, OSError):
+                    pass
+                key_read = True
+            if local_key == member["wireguard"][side]["public_key"]:
+                return member
+            problem = "wireguard_key"
+        else:
+            link = gre_link(owner, listener, member, receiving=side == "destination")
+            key = link["outer_peer"], link["listen_port"]
+            if key not in routes:
+                try:
+                    routes[key] = driver_for(link).preferred_source(link, run)[0]
+                except (PanelError, OSError, ValueError):
+                    routes[key] = None
+            if routes[key] == link["outer_local"]:
+                return member
+            unavailable_devices[link["tunnel"]] = link
+            problem = "geneve_route"
+        unavailable[group["id"] + ":" + member["id"]] = problem
         return dict(member, enabled=False, draining=False)
 
     def reconcile_link(link, group_id, staged):

@@ -34,6 +34,12 @@ jobs:
           python3 -m unittest discover -s gre-manager -p 'test_docker_wireguard.py' -v
       - name: Install network test dependencies
         run: bash gre-manager/tests/install_ci_deps.sh iptables iproute2 iputils-ping kmod openssh-server sshpass conntrack strongswan xl2tpd ppp wireguard-tools
+      - name: Install the matching Ethernet pseudowire kernel module
+        run: |
+          if ! sudo modprobe -nq l2tp_eth; then
+            bash gre-manager/tests/install_ci_deps.sh "linux-modules-extra-$(uname -r)"
+          fi
+          sudo modprobe l2tp_eth
       - name: Real kernel TCP and UDP in isolated namespaces
         run: |
           sudo mkdir -p /run/netns
@@ -85,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: [gre, gretap, sit]
+        transport: [gre, gretap, geneve, l2tpv3, sit]
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual machine dependencies

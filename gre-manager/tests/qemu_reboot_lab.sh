@@ -181,6 +181,12 @@ def identity(): return uuid.uuid4().hex
 group_id = identity()
 member = {"id": identity(), "node_id": dst, "method": method, "service_ip": "198.51.100.51",
           "outer_ip": "198.51.100.51", "mtu": 1280}
+if method == "l2tpv3":
+    member["l2tpv3"] = {"ingress": {"tunnel_id": 21701, "session_id": 21711, "port": 37001},
+                       "destination": {"tunnel_id": 21702, "session_id": 21712, "port": 37002}}
+
+if method == "geneve":
+    member["geneve"] = {"vni": 814321}
 forwarding = {"protocols": ["tcp"], "ports": "all", "port_map": {"5100": 25244}}
 group_policy = {"limits": {"up": 10, "down": 20}}
 if method == "sit":
