@@ -85,7 +85,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: [gre, gretap, l2tpv3]
+        transport: [gre, gretap, geneve, l2tpv3]
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual machine dependencies

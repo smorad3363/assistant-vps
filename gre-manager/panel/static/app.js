@@ -455,10 +455,11 @@ function memberForm(parent, member = {}) {
       <option value="wireguard" ${member.method === 'wireguard' ? 'selected' : ''}>WireGuard</option>
       <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option>
       <option value="gretap" ${member.method === 'gretap' ? 'selected' : ''}>GRETAP</option>
+      <option value="geneve" ${member.method === 'geneve' ? 'selected' : ''}>GENEVE</option>
       <option value="l2tpv3" ${member.method === 'l2tpv3' ? 'selected' : ''}>L2TPv3</option></select></label>
     <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
-    <label data-method="gre ipip wireguard vxlan gretap l2tpv3">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
-    <label data-method="gre ipip wireguard vxlan gretap l2tpv3">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
+    <label data-method="gre ipip wireguard vxlan gretap geneve l2tpv3">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
+    <label data-method="gre ipip wireguard vxlan gretap geneve l2tpv3">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
     <label data-method="ipip">TTL در IPIP<input data-value="ttl" dir="ltr" type="number" min="0" max="255" value="${esc(member.ttl ?? 64)}" required></label>
     <label>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
     <label>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
@@ -469,7 +470,7 @@ function memberForm(parent, member = {}) {
       <label>شناسهٔ VNI<input data-value="vxlan-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.vxlan?.vni)}"></label>
       <label>پورت UDP هر دو سر<input data-value="vxlan-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.vxlan?.port ?? 4789)}"></label>
     </div></details>
-    <details data-method="gre ipip wireguard vxlan gretap l2tpv3"><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
+    <details data-method="gre ipip wireguard vxlan gretap geneve l2tpv3"><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
       ${sideFields('ingress','ورودی')}${sideFields('destination','مقصد')}</div></details>
     <details data-method="wireguard" ${member.method === 'wireguard' ? 'open' : ''}><summary>تنظیمات WireGuard</summary><div class="form-grid">
       ${wgFields('ingress','ورودی')}${wgFields('destination','مقصد')}
@@ -479,6 +480,11 @@ function memberForm(parent, member = {}) {
       data-value="gretap-key" type="number" min="1" max="4294967295" dir="ltr" value="${esc(member.gretap?.key)}"></label></details>
     <details data-method="l2tpv3" ${member.method === 'l2tpv3' ? 'open' : ''}><summary>تنظیمات L2TPv3 دو سر</summary><div class="form-grid">
       ${l2tpFields('ingress','ورودی')}${l2tpFields('destination','مقصد')}</div></details>
+
+    <details data-method="geneve"><summary>تنظیمات GENEVE</summary><div class="form-grid">
+      <label>شناسهٔ VNI<input data-value="geneve-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.geneve?.vni)}"></label>
+      <label>پورت UDP هر دو سر<input data-value="geneve-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.geneve?.port ?? 6081)}"></label>
+    </div></details>
     <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
   parent.append(row);
   syncMemberMethod(row);
@@ -558,7 +564,8 @@ async function refreshGroups() {
   const status = value => value === true ? 'سالم' : value === false ? 'قطع' : 'نامشخص';
   const evidence = record => record.group.listeners.flatMap(listener => listener.members.filter(member => member.enabled).map(member => {
     const sample = record.health?.[member.id] || {};
-    const summary = record.driver_issues?.[member.id] === 'wireguard_key' ? 'نیاز به کلید WireGuard روی این سرور' :
+    const hints = {wireguard_key:'نیاز به کلید WireGuard روی این سرور',geneve_route:'مسیر بیرونی GENEVE آماده نیست'};
+    const summary = hints[record.driver_issues?.[member.id]] ||
       `مدیریت ${status(sample.management)} · لینک ${status(sample.link)} · سرویس ${status(sample.service)} · ICMP ${status(sample.icmp)}`;
     const checked = sample.checked ? ' · ' + new Date(sample.checked * 1000).toLocaleTimeString('fa-IR') : '';
     return `<small><bdi>${esc(member.service_ip)}</bdi> ${esc(summary + checked)}</small>`;
@@ -768,6 +775,8 @@ function groupRequest() {
       ...(value(member,'method') === 'wireguard' && {wireguard:wireguard(member)}),
       ...(value(member,'method') === 'gretap' && {gretap:value(member,'gretap-key') ? {key:Number(value(member,'gretap-key'))} : {}}),
       ...(value(member,'method') === 'l2tpv3' && {l2tpv3:l2tpv3(member)}),
+
+      ...(value(member,'method') === 'geneve' && {geneve:{vni:Number(value(member,'geneve-vni')), port:Number(value(member,'geneve-port'))}}),
       weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
       limits:readRateFields(member),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',

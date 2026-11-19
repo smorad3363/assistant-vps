@@ -235,6 +235,10 @@ an MTU that is at least 50 bytes below the underlying interface MTU. If the
 host already runs a separate VXLAN or another UDP service on the port, use a
 different UDP port for the panel's links.
 
+GENEVE members also carry Ethernet between two IPv4 endpoints. Both sides use
+the same VNI and UDP destination port (6081 by default). On each node, select
+the source address that the kernel route to its peer would use.
+
 The direct-forwarding feature was informed by the behavior requested from
 [IPTABLE-Tunnel-multi-port](https://github.com/azavaxhuman/IPTABLE-Tunnel-multi-port).
 Its installer, shell menu and destructive global reset operations are not bundled.

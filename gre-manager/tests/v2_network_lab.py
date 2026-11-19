@@ -61,12 +61,14 @@ def exchange(sock, payload):
     return answer[:1].decode()
 
 
-def sample(address, number, udp=False, port=5100):
+def sample(address, number, udp=False, port=5100, source_start=None):
     result = Counter()
     kind = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
     for case in range(number):
         with socket.socket(socket.AF_INET, kind) as sock:
             sock.settimeout(3)
+            if source_start is not None:
+                sock.bind(("", source_start + case))
             sock.connect((address, port))
             result[exchange(sock, str(case).encode())] += 1
     print(json.dumps(result), flush=True)
@@ -81,7 +83,7 @@ def hold(address):
 
 def aggregate_udp(address):
     with ExitStack() as stack:
-        sockets = [stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) for _ in range(24)]
+        sockets = [stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) for _ in range(96)]
         for sock in sockets:
             sock.connect((address, 5100))
             sock.setblocking(False)
@@ -253,6 +255,7 @@ def lab(root):
         services.append(name)
     owner = nodes["gm-ir"][1]
     group_id = uuid.uuid4().hex
+    next_udp_source = 20000
 
     def listener(source, targets, method, weights):
         address, node = nodes[source]
@@ -275,7 +278,13 @@ def lab(root):
         return group["listeners"][0]
 
     def exchanges(name, count, proto="tcp", port=5100):
-        return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto, port),
+        nonlocal next_udp_source
+        source = []
+        if proto == "udp":
+            # Old UDP tuples intentionally keep their previous destination across revisions.
+            source = [next_udp_source]
+            next_udp_source += count
+        return json.loads(command(*namespace("gm-client", "sample", nodes[name][0], count, proto, port, *source),
                                   capture_output=True).stdout)
 
     with ExitStack() as mounts, ExitStack() as processes:
@@ -520,6 +529,29 @@ def lab(root):
         command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-vx", stdout=subprocess.DEVNULL)
         print("v2 independent unicast VXLAN VNIs verified their kernel settings, TCP/UDP round trips, and selective removal.", flush=True)
 
+        geneve = listener("gm-ir", [first_target], "geneve", [1])
+        geneve.update(ports="5300", port_map={"5300": 6000})
+        geneve["members"][0]["geneve"] = {"vni": 98345, "port": 36081}
+        second_peer = listener("gm-ir", [services[1]], "geneve", [1])
+        second_peer.update(ports="5340", port_map={"5340": 5000})
+        second_peer["members"][0]["geneve"] = dict(geneve["members"][0]["geneve"])
+        apply([first, geneve, second_peer])
+        geneve_link = gre_link(owner, geneve, geneve["members"][0])
+        for host in ("gm-ir", first_target):
+            settings = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", geneve_link["tunnel"],
+                                          capture_output=True).stdout)[0]["linkinfo"]
+            assert settings["info_kind"] == "geneve", settings
+            assert settings["info_data"]["id"] == 98345 and settings["info_data"]["port"] == 36081, settings
+        for proto in ("tcp", "udp"):
+            assert exchanges("gm-ir", 6, proto, port=5300) == {"M": 6}
+            assert exchanges("gm-ir", 6, proto, port=5340) == {"1": 6}
+            assert exchanges("gm-ir", 6, proto, port=5100) == {"0": 6}
+        apply([first])
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", geneve_link["tunnel"]], capture_output=True).returncode != 0
+        assert exchanges("gm-ir", 6) == {"0": 6}
+        print("v2 GENEVE verified both kernel VNIs and UDP port, then recovered the same VXLAN data path after removal.", flush=True)
+
         l2tp = listener("gm-ir", [first_target], "l2tpv3", [1])
         l2tp["members"][0]["l2tpv3"] = {"ingress": {"tunnel_id": 21701, "session_id": 21711, "port": 37001},
                                       "destination": {"tunnel_id": 21702, "session_id": 21712, "port": 37002}}
@@ -601,7 +633,8 @@ if __name__ == "__main__":
     elif action == "serve":
         serve(args[0], args[1].encode(), int(args[2]))
     elif action == "sample":
-        sample(args[0], int(args[1]), args[2] == "udp", int(args[3]) if len(args) > 3 else 5100)
+        sample(args[0], int(args[1]), args[2] == "udp", int(args[3]) if len(args) > 3 else 5100,
+               int(args[4]) if len(args) > 4 else None)
     elif action == "hold":
         hold(*args)
     elif action == "aggregate":

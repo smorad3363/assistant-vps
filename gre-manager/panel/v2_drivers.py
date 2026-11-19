@@ -169,7 +169,7 @@ class Vxlan:
             details = {}
             for line in plain.splitlines():
                 index = re.match(r"\s*(\d+):", line)
-                data = re.search(r"(?:\\\s+|\s{2,})vxlan\s+id\s+(\d+)\b(.*)", line)
+                data = re.search(r"(?:\\\s+|\s{2,})" + self.method + r"\s+id\s+(\d+)\b(.*)", line)
                 if not index or not data:
                     continue
                 attrs = {"id": int(data[1]), "learning": "nolearning" not in data[2].split()}
@@ -182,7 +182,7 @@ class Vxlan:
                 if row["ifindex"] in details:
                     row["linkinfo"] = {"info_kind": self.method, "info_data": details[row["ifindex"]]}
                 elif not name:
-                    raise PanelError("The installed iproute2 could not describe an existing VXLAN interface.", "device_conflict")
+                    raise PanelError(f"The installed iproute2 could not describe an existing {self.method.upper()} interface.", "device_conflict")
             return basic
 
     def marker(self, link):
@@ -205,8 +205,28 @@ class Vxlan:
         return ["-p", "udp", "--dport", link["listen_port"]]
 
 
+class Geneve(Vxlan):
+    method = module = "geneve"
+
+    def create(self, link, interface):
+        return ["ip", "link", "add", "dev", link["tunnel"], "type", self.method, "id", link["vni"],
+                "remote", link["outer_peer"], "dstport", link["listen_port"]]
+
+    def owns(self, link, row):
+        info = row.get("linkinfo", {})
+        data = info.get("info_data", {})
+        return (info.get("info_kind") == self.method and row.get("ifalias") == self.marker(link)
+                and (data.get("id"), data.get("remote"), data.get("port")) == (link["vni"], link["outer_peer"], link["listen_port"]))
+
+    def preferred_source(self, link, run):
+        rows = json.loads(run("ip", "-j", "-4", "route", "get", link["outer_peer"], "ipproto", "udp",
+                              "dport", link["listen_port"]).stdout)
+        route = rows[0] if rows else {}
+        return route.get("prefsrc"), route.get("dev")
+
+
 DRIVERS = {"gre": IPTunnel("gre", "ip_gre", "gre", True), "ipip": IPTunnel("ipip", "ipip", "4"), "wireguard": WireGuard(), "vxlan": Vxlan(),
-           "gretap": GreTap("gretap", "ip_gre", "gre", True), "l2tpv3": L2TPv3()}
+           "gretap": GreTap("gretap", "ip_gre", "gre", True), "geneve": Geneve(), "l2tpv3": L2TPv3()}
 
 
 def driver_for(link):

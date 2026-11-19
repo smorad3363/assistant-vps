@@ -48,6 +48,9 @@ const v2FieldSchema = {
     'destination-l2tp-session_id': ['شناسهٔ نشست مقصد','شناسهٔ ۳۲ بیتی نشست Ethernet روی سرور مقصد.'],
     'ingress-l2tp-port': ['پورت UDP ورودی','پورت محلی حمل L2TPv3 در ورودی.'],
     'destination-l2tp-port': ['پورت UDP مقصد','پورت محلی حمل L2TPv3 در مقصد.'],
+
+    'geneve-vni': ['شناسهٔ GENEVE','شناسهٔ ۲۴ بیتی که برای این لینک باید در دو سر یکسان باشد.'],
+    'geneve-port': ['پورت UDP GENEVE','پورت مشترک UDP در هر دو سر. پیش‌فرض ۶۰۸۱ است.'],
     'ingress-mtu': ['MTU ورودی',mtuHint], 'destination-mtu': ['MTU مقصد',mtuHint],
     'ingress-mode': ['روش MSS ورودی',mssHint], 'destination-mode': ['روش MSS مقصد',mssHint],
     'ingress-mss': ['عدد MSS ورودی',mssHint], 'destination-mss': ['عدد MSS مقصد',mssHint],
