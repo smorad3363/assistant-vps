@@ -14,6 +14,7 @@ import uuid
 
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
+from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology, require_ssh_protection
 
 CHAINS = {"nat": ["GMP_PRE", "GMP_POST", "GMP_LOCAL"], "filter": ["GMP_FWD", "GMP_INPUT", "GMP_COUNT"], "mangle": ["GMP_MSS"]}
 HOOKS = [("nat", "PREROUTING", "GMP_PRE"), ("nat", "POSTROUTING", "GMP_POST"), ("nat", "INPUT", "GMP_LOCAL"),
@@ -52,8 +53,48 @@ def local_addresses():
 
 
 def discovered_ssh_ports():
-    result = run("sshd", "-T", check=False)
-    return sorted({int(x.split()[1]) for x in result.stdout.splitlines() if re.fullmatch(r"port [0-9]+", x)}) or [22]
+    def probe(*args):
+        with contextlib.suppress(PanelError):
+            result = run(*args, check=False, timeout=5)
+            if result.returncode == 0 and (args[0] != "ss" or not result.stderr):
+                return result.stdout
+        return None
+
+    def port(value):
+        number = value.rsplit(":", 1)[-1]
+        if re.fullmatch(r"[0-9]{1,5}", number) and 1 <= int(number) <= 65535:
+            ports.add(int(number))
+
+    ports = set()
+    config = probe("sshd", "-T") or ""
+    for line in config.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] in ("port", "listenaddress"):
+            port(fields[1])
+    connection = os.environ.get("SSH_CONNECTION", "").split()
+    if len(connection) == 4:
+        port(connection[3])
+
+    listening = probe("ss", "-H", "-ltnp")
+    sockets = probe("systemctl", "list-sockets", "--no-legend", "--no-pager", "--plain")
+    systemd_listener = False
+    for line in (listening or "").splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        owners = " ".join(fields[5:])
+        if re.search(r'\("(?:sshd(?:-session)?|dropbear)",', owners):
+            port(fields[3])
+        systemd_listener |= '("systemd",' in owners
+    for line in (sockets or "").splitlines():
+        fields = line.split()
+        if len(fields) > 1 and any(re.fullmatch(r"(?:ssh|sshd|dropbear)(?:@\S*)?\.(?:socket|service)", f)
+                                   for f in fields[1:]):
+            port(fields[0])
+    if listening is None or (systemd_listener and sockets is None):
+        raise PanelError("Could not verify the host's SSH listeners. Check sshd, ss and systemd before applying.",
+                         "ssh_discovery", "ssh_ports")
+    return sorted(ports)
 
 
 def gre_for(c):
@@ -92,6 +133,7 @@ def build_rules(config, interfaces, docker_udp=False):
     protected = sorted(set(config["settings"]["ssh_ports"] + config["settings"]["reserved_ports"] + [22, config["settings"]["port"]]))
     panel_enabled = config.get("web_enabled", any(x["kind"] != "peer" for x in config["connections"]))
     protected_ips = set(interfaces) if panel_enabled else {x["listen_ip"] for x in config["connections"] if x["kind"] != "peer"}
+    protected_ips.update(listener["ip"] for _, _, listener in config.get("v2_listeners", []))
     for ip in sorted(protected_ips):
         for proto in ("tcp", "udp"):
             for p in protected:
@@ -122,6 +164,9 @@ def build_rules(config, interfaces, docker_udp=False):
             wan = interfaces[g["outer_local"]]
             add("filter", "GMP_INPUT", "-i", wan, "-s", g["outer_peer"], "-d", g["outer_local"], "-p", "gre", "-j", "ACCEPT")
             add("filter", "GMP_INPUT", "-i", t, "-s", peer, "-d", g["local_tun"], "-p", "icmp", "-j", "ACCEPT")
+            if "v2_ports" in c:
+                add_receiver_rules(add, c, interfaces, config["settings"])
+                continue
             for proto in ("tcp", "udp"):
                 incoming = ["-i", t, "-s", peer, "-d", g["local_tun"], "-p", proto]
                 if docker_udp and proto == "udp" and c["service_ip"] in interfaces:
@@ -197,6 +242,7 @@ def build_rules(config, interfaces, docker_udp=False):
             for switch in ("-i", "-o"):
                 add("mangle", "GMP_MSS", switch, device, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
                     "-j", "TCPMSS", "--set-mss", c["mtu"] - 40)
+    add_listener_rules(add, config, interfaces)
     return tables
 
 
@@ -228,7 +274,15 @@ class Engine:
 
     def preflight(self, config):
         interfaces = self.interfaces()
-        for c in config["connections"]:
+        forwarding = list(config["connections"])
+        for _, _, listener in config.get("v2_listeners", []):
+            if any(member["method"] == "direct" and member["service_ip"] in interfaces for member in listener["members"]):
+                raise PanelError("A direct destination cannot be the input server itself.", "loop")
+            forwarding.append(dict(listener, listen_ip=listener["ip"], kind="v2"))
+        for g in config.get("v2_devices", []):
+            if g["outer_local"] not in interfaces:
+                raise PanelError("The selected GRE outer address is unavailable on this node.", "local_ip")
+        for c in forwarding:
             if not c.get("enabled", True):
                 continue
             local = c["gre"]["outer_local"] if c["kind"] == "peer" else c["listen_ip"]
@@ -244,7 +298,7 @@ class Engine:
                 continue
             parts = shlex.split(line)
             destination = parts[parts.index("-d") + 1] if "-d" in parts else None
-            for c in config["connections"]:
+            for c in forwarding:
                 if not c.get("enabled", True) or c["kind"] == "peer":
                     continue
                 if destination and ipaddress.IPv4Address(c["listen_ip"]) not in ipaddress.IPv4Network(destination, strict=False):
@@ -309,14 +363,17 @@ class Engine:
         self.epoch_file.write_text(uuid.uuid4().hex)
 
     def apply(self, config, previous=None):
+        previous = installed_topology(self.paths, previous) if previous is not None else None
+        config = installed_topology(self.paths, config)
+        require_ssh_protection(config, previous)
         interfaces = self.preflight(config)
-        previous = previous or dict(config, connections=[])
+        previous = previous or dict(config, connections=[], v2_listeners=[], v2_devices=[])
         old_gre = {g["tunnel"]: g for g in self.gre_devices(previous)}
         try:
             for g in self.gre_devices(config):
                 self.ensure_gre(g, interfaces)
             self.sync_reply_routes(config, interfaces)
-            if any(x.get("enabled", True) for x in config["connections"]):
+            if config.get("v2_listeners") or any(x.get("enabled", True) for x in config["connections"]):
                 self.run("sysctl", "-qw", "net.ipv4.ip_forward=1")
             self.restore_owned(build_rules(config, interfaces, self.docker_udp()))
         except Exception:
@@ -352,6 +409,7 @@ class Engine:
 
     @staticmethod
     def gre_devices(config):
+        yield from config.get("v2_devices", [])
         for c in config["connections"]:
             if c.get("enabled", True) and c["kind"] in ("gre", "peer"):
                 yield c["gre"] if c["kind"] == "peer" else gre_for(c)
@@ -404,7 +462,7 @@ class Engine:
         result = defaultdict(lambda: [0, 0])
         for line in raw.stdout.splitlines():
             counts = re.match(r"\[(\d+):(\d+)\] -A GMP_(?:FWD|COUNT) ", line)
-            label = re.search(r"gmpanel:([a-f0-9]{10}):(all|[0-9]+):(up|down)", line)
+            label = re.search(r"gmpanel:([a-f0-9]{32}|[a-f0-9]{10}):(all|[0-9]+):(up|down)", line)
             if counts and label:
                 result[(label[1], label[2])][0 if label[3] == "up" else 1] += int(counts[2])
         epoch = self.epoch_file.read_text().strip() if self.epoch_file.exists() else "initial"

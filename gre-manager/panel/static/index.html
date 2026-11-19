@@ -99,6 +99,20 @@
           </div>
           <div id="v2-peer-list" class="server-list" aria-live="polite"></div>
         </section>
+        <section class="panel wide" aria-labelledby="v2-groups-title">
+          <div class="section-heading"><h2 id="v2-groups-title">گروه‌های تونل</h2><button type="button" class="button secondary" id="v2-groups-refresh">نمایش گروه‌ها</button></div>
+          <div id="v2-group-list" class="server-list" aria-live="polite"></div>
+          <form id="v2-group-form" hidden>
+            <div class="form-grid"><label>نام گروه<input name="name" maxlength="80" required></label>
+              <label>انتخاب مقصد<select name="selection"><option value="weighted">تقسیم بار</option><option value="failover">اصلی و پشتیبان</option><option value="single">تک‌مقصد</option></select></label></div>
+            <label class="switch-line"><input name="enabled" type="checkbox" checked>گروه فعال</label>
+            <div id="v2-listener-list"></div>
+            <div class="button-row"><button type="button" id="v2-add-listener" class="button secondary">افزودن ورودی</button>
+              <button type="submit" class="button secondary">پیش‌نمایش</button>
+              <button type="button" id="v2-apply-group" class="button primary" disabled>اعمال</button></div>
+            <p class="form-error" role="alert"></p><div id="v2-group-result" class="muted small" aria-live="polite"></div>
+          </form>
+        </section>
         <section class="panel wide"><div class="section-heading"><div><h2>بکاپ و بازیابی</h2><p class="muted small">تنظیمات و آمار؛ کلیدهای خصوصی SSH و رمز ورود داخل بکاپ قرار نمی‌گیرند.</p></div><div class="button-row"><button class="button secondary" data-action="restore"><svg class="icon"><use href="#i-up"/></svg>بازیابی</button><button class="button primary" data-action="backup"><svg class="icon"><use href="#i-plus"/></svg>ساخت بکاپ</button></div></div><div id="backup-list" class="backup-list"></div><input id="backup-file" type="file" accept=".zip,application/zip" hidden></section>
       </div>
     </section>

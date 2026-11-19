@@ -82,16 +82,19 @@ def overlaps(left, right):
 
 
 class Participant:
-    def __init__(self, paths, node_id, claims, clock=time.time):
+    def __init__(self, paths, node_id, claims, clock=time.time, materialize=None):
         self.journal = Journal(paths.var / "v2-participant.json")
         self.node_id = node_id
         self.claims = claims
         self.clock = clock
+        self.materialize = materialize
 
-    def receipt(self, change, digest, operation):
+    def receipt(self, change, digest, operation, *, preview=False):
         phase = operation["phase"] if operation else "unknown"
         if phase == "prepared" and self.clock() >= operation["expires_at"]:
             phase = "expired"
+        elif phase == "prepared" and not preview and self.materialize and not operation.get("network_ready"):
+            phase = "unknown"
         return {
             "id": change["id"], "digest": digest, "node_id": self.node_id, "phase": phase,
             "revision": change["expected_revision"] + (phase == "committed"),
@@ -113,7 +116,10 @@ class Participant:
                 raise PanelError("Unknown transaction operation.")
             if action == "abort":
                 if not operation or operation["phase"] == "prepared":
+                    previous = copy.deepcopy(state) if self.materialize and operation else None
                     operation = operations[change["id"]] = {"digest": digest, "phase": "aborted"}
+                    if previous is not None:
+                        self.materialize(state, previous)
                 return self.receipt(change, digest, operation)
             if operation and operation["phase"] != "prepared":
                 return self.receipt(change, digest, operation)
@@ -130,17 +136,24 @@ class Participant:
             if action == "commit":
                 if not operation:
                     raise PanelError("This operation was never prepared.", "unknown_operation")
+                if self.materialize and not operation.get("network_ready"):
+                    self.prepare_network(state, operation, change)
                 # Expiry stops a prepare from authorizing a new decision. The
                 # reservation stays fenced until the original owner commits or aborts.
+                previous = copy.deepcopy(state) if self.materialize else None
                 groups[group_id] = {
                     "owner": owner, "revision": change["expected_revision"] + 1,
                     "group": change["group"], "claims": operation["claims"],
                     "active": change["group"] is not None and self.node_id not in change.get("departing", []),
                 }
                 operation["phase"] = "committed"
+                if self.materialize:
+                    self.materialize(state, previous)
                 return self.receipt(change, digest, operation)
             if operation:
-                return self.receipt(change, digest, operation)
+                if action == "prepare" and self.materialize and not operation.get("network_ready"):
+                    self.prepare_network(state, operation, change)
+                return self.receipt(change, digest, operation, preview=action == "plan")
 
             claims = self.claims(change)
             for reserved_id, reservation in groups.items():
@@ -155,7 +168,19 @@ class Participant:
                          "claims": claims, "expires_at": self.clock() + 120}
             if action == "prepare":
                 operations[change["id"]] = operation
-            return self.receipt(change, digest, operation)
+                if self.materialize:
+                    self.prepare_network(state, operation, change)
+            return self.receipt(change, digest, operation, preview=action == "plan")
+
+    def prepare_network(self, state, operation, change):
+        operation["change"] = change
+        operation["network_ready"] = False
+        previous = copy.deepcopy(state)
+        previous["operations"].pop(change["id"])
+        # Keep the intent on disk even if the process dies during kernel setup.
+        atomic_json(self.journal.path, state)
+        self.materialize(state, previous)
+        operation["network_ready"] = True
 
 
 class Coordinator:
@@ -272,6 +297,9 @@ class Coordinator:
                 results[node] = {"phase": "unconfirmed", "error": getattr(error, "code", "transport")}
             with self.journal.edit() as state:
                 state["operations"][change["id"]]["participants"] = results
-        if all(results[node]["phase"] == terminal for node in change["participants"]):
+            if decision == "commit" and results[node]["phase"] != terminal:
+                # Later ingress participants depend on this verified commit.
+                break
+        if all(results.get(node, {}).get("phase") == terminal for node in change["participants"]):
             with self.journal.edit() as state:
                 state["operations"][change["id"]]["phase"] = terminal

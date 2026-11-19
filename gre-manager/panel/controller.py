@@ -27,7 +27,7 @@ from .store import Store, atomic_json, check_password
 from .topology import legacy_topology
 from .transactions import Coordinator, fingerprint, identity, overlaps
 from .v2_access import AUTH_ROUTES, Access
-from .v2_config import managed_nodes, normalize_group
+from .v2_config import managed_nodes, normalize_group, participant_order
 
 
 class Controller:
@@ -141,7 +141,7 @@ class Controller:
             raise PanelError("This group belongs to another owner.", "owner")
         before = managed_nodes(stored.get("group"))
         after = managed_nodes(group)
-        participants = sorted(before | after | {owner})
+        participants = participant_order(group, before | after | {owner})
         return {"id": operation_id, "group_id": group_id, "owner": owner,
                 "expected_revision": payload.get("expected_revision"), "participants": participants,
                 "joining": sorted(after - before - {owner}), "departing": sorted(before - after - {owner}),

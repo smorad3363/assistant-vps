@@ -3,6 +3,7 @@ from collections import defaultdict
 
 from .model import DEFAULTS, PanelError, address, connection, integer, ranges_for
 from .transactions import identity, overlaps
+from .v2_forwarding import segments
 
 
 def enabled(value):
@@ -41,6 +42,8 @@ def normalize_group(raw):
         if not isinstance(listener, dict):
             raise PanelError("Invalid listener.")
         listener_id, ingress = identity(listener.get("id")), identity(listener.get("node_id"))
+        listen_ip = address(listener.get("ip", ""))
+        outer_ip = address(listener.get("outer_ip") or listen_ip)
         if listener_id in used:
             raise PanelError("Duplicate listener or member ID.", "identity")
         used.add(listener_id)
@@ -64,17 +67,26 @@ def normalize_group(raw):
                 raise PanelError("An unmanaged destination needs direct forwarding.")
             if managed:
                 edges[ingress].add(egress)
+            service_ip = address(member.get("service_ip", ""))
+            target_outer = address(member.get("outer_ip") or service_ip) if method == "gre" else None
+            is_enabled = enabled(member.get("enabled", True))
+            draining = enabled(member.get("draining", False))
+            if target_outer == outer_ip or method == "direct" and service_ip == listen_ip:
+                raise PanelError("A member must use a different destination endpoint.", "loop")
+            if draining and not is_enabled:
+                raise PanelError("A stopped member cannot be draining.", "state")
             normalized_members.append({
                 "id": member_id, "method": method, "managed": managed, "node_id": egress,
-                "service_ip": address(member.get("service_ip", "")),
+                "service_ip": service_ip, "outer_ip": target_outer,
+                "mtu": integer(member.get("mtu", 1280), 576, 1476, "mtu") if method == "gre" else None,
                 "weight": integer(member.get("weight", 1), 1, 1000, "weight"),
                 "priority": integer(member.get("priority", 0), 0, 1000, "priority"),
-                "enabled": enabled(member.get("enabled", True)),
+                "enabled": is_enabled, "draining": draining,
             })
         first = normalized_members[0]
-        profile = listener_profile(dict(listener, ip=address(listener.get("ip", ""))), neutral, first["service_ip"])
+        profile = listener_profile(dict(listener, ip=listen_ip), neutral, first["service_ip"])
         result["listeners"].append({
-            "id": listener_id, "node_id": ingress, "ip": profile["listen_ip"],
+            "id": listener_id, "node_id": ingress, "ip": profile["listen_ip"], "outer_ip": outer_ip,
             "ports": profile["ports"], "protocols": profile["protocols"],
             "exclude_ports": profile["exclude_ports"], "port_map": profile["port_map"],
             "target_port": profile["target_port"], "members": normalized_members,
@@ -109,21 +121,38 @@ def local_claims(change, node_id, config, addresses):
         raise PanelError("The group does not match the planned representation.", "group")
     if not (managed_nodes(group) | {change["owner"]}).issubset(change["participants"]):
         raise PanelError("A managed node is missing from the operation.", "participant")
+    if not group["enabled"]:
+        return []
     settings = dict(DEFAULTS, **config.get("settings", {}))
+    protected = {22, settings["port"], *settings["ssh_ports"], *settings["reserved_ports"]}
     claims = []
     for listener in group["listeners"]:
+        for member in listener["members"]:
+            if member["enabled"] and member["managed"] and member["node_id"] == node_id:
+                if member["method"] == "gre" and member["outer_ip"] not in addresses:
+                    raise PanelError("The GRE destination address is unavailable on this node.", "local_ip")
+                if member["method"] == "gre" and protected.intersection([listener["target_port"], *listener["port_map"].values()]):
+                    raise PanelError("The translated destination uses a protected port.", "reserved", "port_map")
+                if member["method"] == "direct" and member["service_ip"] in addresses and "tcp" in listener["protocols"]:
+                    if config.get("ssh_discovery_error"):
+                        raise PanelError(config["ssh_discovery_error"], "ssh_discovery", "ssh_ports")
+                    targets = ((target, target) if target else (lo, hi)
+                               for lo, hi, target in segments(listener, dict(DEFAULTS, port=22)))
+                    if any(lo <= port <= hi for lo, hi in targets for port in protected):
+                        raise PanelError("Exclude the managed direct destination's protected ports or change the mapping.",
+                                         "reserved", "port_map")
         if listener["node_id"] != node_id:
             continue
         if listener["ip"] not in addresses:
             raise PanelError("The listener address is unavailable on this node.", "listen_ip")
+        if any(member["enabled"] and member["method"] == "gre" for member in listener["members"]) and listener["outer_ip"] not in addresses:
+            raise PanelError("The GRE source address is unavailable on this node.", "local_ip")
         profile = listener_profile(listener, settings, listener["members"][0]["service_ip"])
         incoming = [(listener["ip"], proto, lo, hi) for proto in listener["protocols"]
                     for lo, hi in ranges_for(profile, settings)]
         if overlaps(claims, incoming):
             raise PanelError("Two listeners in this group overlap.", "overlap")
         claims.extend(incoming)
-    if not group["enabled"]:
-        return []
     for legacy in config.get("connections", []):
         if legacy.get("enabled", True):
             existing = [(legacy["listen_ip"], proto, lo, hi) for proto in legacy["protocols"]
@@ -131,3 +160,17 @@ def local_claims(change, node_id, config, addresses):
             if overlaps(claims, existing):
                 raise PanelError("Listener overlaps legacy route " + legacy["id"] + ".", "overlap")
     return claims
+
+
+def participant_order(group, nodes):
+    edges = defaultdict(set)
+    if group:
+        for listener in group["listeners"]:
+            edges[listener["node_id"]].update(member["node_id"] for member in listener["members"] if member["managed"])
+    pending = set(nodes)
+    order = []
+    while pending:
+        ready = sorted(node for node in pending if not edges[node] & pending)
+        order.extend(ready)
+        pending.difference_update(ready)
+    return order

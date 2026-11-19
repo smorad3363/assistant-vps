@@ -381,6 +381,153 @@ $('#v2-pair-form').addEventListener('submit', async event => {
   } catch (error) { setError(form, error); }
   finally { setBusy(form, false); }
 });
+
+const topologyId = () => crypto.randomUUID().replaceAll('-', '');
+const groupForm = $('#v2-group-form');
+const groupOutput = $('#v2-group-result');
+let v2Nodes = [], v2Groups = [], v2Local, groupDraft, groupPlan, groupEdit = 0;
+function nodeOptions(selected, unmanaged = false) {
+  return (unmanaged ? '<option value="">مقصد مستقیم بدون مدیریت</option>' : '') +
+    v2Nodes.map(node => `<option value="${esc(node.id)}" ${node.id === selected ? 'selected' : ''}>${esc(node.name)}</option>`).join('');
+}
+function memberForm(parent, member = {}) {
+  const row = document.createElement('div');
+  row.className = 'form-grid';
+  row.dataset.v2Member = member.id || topologyId();
+  row.dataset.unmanaged = member.managed === false ? member.node_id : topologyId();
+  row.innerHTML = `<label>سرور مقصد<select data-value="node">${nodeOptions(member.node_id, true)}</select></label>
+    <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option></select></label>
+    <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
+    <label>IP بیرونی GRE<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
+    <label>MTU در GRE<input data-value="mtu" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
+    <label>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
+    <label>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
+    <label>وضعیت<select data-value="state"><option value="on">فعال</option><option value="drain" ${member.draining ? 'selected' : ''}>در حال تخلیه</option>
+      <option value="off" ${member.enabled === false ? 'selected' : ''}>متوقف</option></select></label>
+    <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
+  parent.append(row);
+}
+function listenerForm(listener = {}) {
+  const section = document.createElement('fieldset');
+  section.dataset.v2Listener = listener.id || topologyId();
+  const portMap = Object.entries(listener.port_map || {}).map(([from,to]) => from + ':' + to).join(',') ||
+    (listener.target_port ? listener.ports + ':' + listener.target_port : '');
+  section.innerHTML = `<legend>ورودی</legend><div class="form-grid">
+    <label>سرور ورودی<select data-value="node">${nodeOptions(listener.node_id || v2Local)}</select></label>
+    <label>IP شنونده<input data-value="ip" dir="ltr" required value="${esc(listener.ip)}"></label>
+    <label>IP بیرونی GRE<input data-value="outer" dir="ltr" value="${esc(listener.outer_ip)}"></label>
+    <label>پورت‌ها<input data-value="ports" dir="ltr" required placeholder="5100,3300 یا all" value="${esc(listener.ports)}"></label>
+    <label>نگاشت پورت<input data-value="map" dir="ltr" placeholder="5100:5000,3300:3000" value="${esc(portMap)}"></label>
+    <label>استثناها<input data-value="excluded" dir="ltr" value="${esc((listener.exclude_ports || []).join(','))}"></label>
+    <label>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
+      <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label></div>
+    <div data-v2-members></div><div class="button-row"><button type="button" class="button secondary" data-v2-edit="add">افزودن مقصد</button>
+    <button type="button" class="button secondary" data-v2-edit="remove-listener">حذف ورودی</button></div>`;
+  for (const member of listener.members || [{}]) memberForm($('[data-v2-members]', section), member);
+  $('#v2-listener-list').append(section);
+}
+function resetGroupPlan() {
+  groupEdit++;
+  groupPlan = undefined;
+  $('#v2-apply-group').disabled = true;
+  groupOutput.textContent = '';
+}
+function openGroup(record) {
+  groupForm.hidden = false;
+  groupDraft = {id: record?.id || topologyId(), revision: record?.revision || 0};
+  groupForm.elements.name.value = record?.group.name || '';
+  groupForm.elements.selection.value = record?.group.selection || 'weighted';
+  groupForm.elements.enabled.checked = record?.group.enabled ?? true;
+  $('#v2-listener-list').replaceChildren();
+  for (const listener of record?.group.listeners || [{}]) listenerForm(listener);
+  resetGroupPlan();
+}
+async function refreshGroups() {
+  const [topology, groups] = await Promise.all([api('v2/topology'), api('v2/groups')]);
+  v2Local = topology.local_node_id;
+  v2Nodes = [{id:v2Local,name:'این پنل'}, ...topology.paired_nodes.map(node => ({id:node.id,name:node.hostname})),
+    ...state.servers.filter(node => node.v2_node_id && node.key_ready).map(node => ({id:node.v2_node_id,name:node.name}))];
+  v2Groups = groups;
+  $('#v2-group-list').innerHTML = groups.map(record => `<div class="server-item"><div class="server-info"><strong>${esc(record.group.name)}</strong>
+    <small>${fa.format(record.group.listeners.length)} ورودی</small></div>${record.owner === v2Local ?
+    `<button class="button secondary" type="button" data-group-id="${esc(record.id)}">ویرایش</button>` : ''}</div>`).join('');
+  openGroup();
+}
+$('#v2-groups-refresh').addEventListener('click', () => refreshGroups().catch(error => showToast(failText(error))));
+$('#v2-group-list').addEventListener('click', event => {
+  const button = event.target.closest('[data-group-id]');
+  if (button) openGroup(v2Groups.find(record => record.id === button.dataset.groupId));
+});
+$('#v2-add-listener').addEventListener('click', () => { listenerForm(); resetGroupPlan(); });
+groupForm.addEventListener('input', resetGroupPlan);
+groupForm.addEventListener('click', event => {
+  const button = event.target.closest('[data-v2-edit]');
+  if (!button) return;
+  const listener = button.closest('[data-v2-listener]');
+  if (button.dataset.v2Edit === 'add') memberForm($('[data-v2-members]', listener));
+  else if (button.dataset.v2Edit === 'remove') button.closest('[data-v2-member]').remove();
+  else listener.remove();
+  resetGroupPlan();
+});
+function groupRequest() {
+  const value = (row, field) => $(`[data-value="${field}"]`, row).value.trim();
+  const listeners = $$('[data-v2-listener]', groupForm).map(row => ({
+    id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
+    ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
+    protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')],
+    members:$$('[data-v2-member]', row).map(member => ({
+      id:member.dataset.v2Member, node_id:value(member,'node') || member.dataset.unmanaged, managed:!!value(member,'node'),
+      method:value(member,'method'), service_ip:value(member,'service'), outer_ip:value(member,'outer'),
+      mtu:Number(value(member,'mtu')),
+      weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
+      enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',
+    })),
+  }));
+  return {id:topologyId(), group_id:groupDraft.id, expected_revision:groupDraft.revision,
+    group:{id:groupDraft.id, name:groupForm.elements.name.value, selection:groupForm.elements.selection.value,
+      enabled:groupForm.elements.enabled.checked, listeners}};
+}
+async function topologyJob(id, phase, showProgress = () => {}) {
+  for (let attempt = 0; attempt < 160; attempt++) {
+    const result = await api('v2/jobs', undefined, {query:{id}});
+    showProgress(result);
+    if (phase(result)) return result;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw new Error('عملیات در سرور ادامه دارد.');
+}
+groupForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  setBusy(groupForm, true);
+  resetGroupPlan();
+  const edit = groupEdit;
+  try {
+    const request = groupRequest();
+    const {job} = await api('v2/plan', request);
+    const result = await topologyJob(job, item => !['queued','running'].includes(item.status));
+    if (edit !== groupEdit) return;
+    if (result.status !== 'done') throw result;
+    groupPlan = {...request, digest:result.result.digest};
+    groupOutput.textContent = request.group.listeners.flatMap(listener => listener.members.map(member =>
+      `${listener.ip} → ${member.service_ip} (${member.method.toUpperCase()})`)).join(' · ');
+  } catch (error) {setError(groupForm,error);}
+  finally {setBusy(groupForm,false);$('#v2-apply-group').disabled = !groupPlan;}
+});
+$('#v2-apply-group').addEventListener('click', async () => {
+  if (!groupPlan) return;
+  setBusy(groupForm,true);
+  try {
+    const job = await api('v2/apply',groupPlan);
+    const completed = await topologyJob(job.id,item=>['committed','aborted'].includes(item.phase),item=>{
+      const count = Object.values(item.participants).filter(node=>node.phase==='committed').length;
+      groupOutput.textContent = `${fa.format(count)} از ${fa.format(item.total)} میزبان اعمال شد`;
+    });
+    if (completed.phase === 'aborted') throw new Error('اعمال لغو شد. اتصال همتاها را بررسی کن.');
+    await refreshGroups();
+    groupOutput.textContent = 'گروه ذخیره و اعمال شد.';
+  } catch (error) {setError(groupForm,error);}
+  finally {setBusy(groupForm,false);$('#v2-apply-group').disabled = !groupPlan;}
+});
 $('#password-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;setBusy(form,true);try{await api('password',Object.fromEntries(new FormData(form)));form.reset();$('#password-dialog').close();showLogin();showToast('رمز تغییر کرد؛ دوباره وارد شو.');}catch(error){setError(form,error);}finally{setBusy(form,false);}});
 $('#tls-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const certificate=await form.elements.certificate.files[0].text(),key=await form.elements.key.files[0].text();await runJob('tls.save',{certificate,key},form,$('#tls-dialog'));form.reset();});
 $('#job-dismiss').addEventListener('click',()=>$('#job-status').hidden=true);
