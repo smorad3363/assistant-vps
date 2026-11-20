@@ -207,6 +207,13 @@ GRETAP members use a separate Ethernet interface to carry IPv4 between the
 two configured outer addresses. The panel generates matching keys on both
 ends unless a key is supplied. The link stays separate from the WAN bridge.
 
+L2TPv2 / PPP requires `xl2tpd`, `pppd` and kernel PPP support on both Linux
+hosts. Choose the LAC side and a separate UDP port on each host. Store the
+same 32-byte hex secret in a root-owned mode-0600 file on each host under
+`/etc/gremgr/ppp-credentials/`. Enter only those local file names in the
+panel. The two daemons use a private PPP configuration and assign addresses
+for the link. This mode carries unencrypted L2TPv2 traffic on its underlay.
+
 Static L2TPv3 uses an Ethernet pseudowire over UDP and a dedicated tunnel ID,
 session ID and port on each host. The panel reverses local and peer settings
 between the two ends and limits the carrier rule to the configured session.

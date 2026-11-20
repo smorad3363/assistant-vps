@@ -440,7 +440,7 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected tunnel outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs, keyed_pairs, vxlan, wg_links, geneve, l2tp = {}, {}, [], [], [], []
+        unkeyed_pairs, keyed_pairs, vxlan, wg_links, geneve, l2tp, ppp_links = {}, {}, [], [], [], [], []
         for link in self.gre_devices(config):
             if (method := link.get("method")) in ("ipip", "sit"):
                 pair = link["outer_local"], link["outer_peer"]
@@ -452,6 +452,8 @@ class Engine:
                 geneve.append(link)
             if link.get("method") == "wireguard":
                 wg_links.append(link)
+            if link.get("method") == "l2tpv2":
+                ppp_links.append(link)
             if link.get("method") == "l2tpv3":
                 l2tp.append(link)
             if link.get("method") == "gretap":
@@ -478,9 +480,11 @@ class Engine:
         self.check_udp_overlays(vxlan, interfaces)
         self.check_udp_overlays(geneve, interfaces)
         self.check_wireguard(wg_links, interfaces)
+        if ppp_links:
+            driver_for(ppp_links[0]).check(ppp_links, interfaces, self.paths, self.run)
         if l2tp:
             driver_for(l2tp[0]).check(l2tp, interfaces, self.paths, self.run)
-        carriers = [*vxlan, *wg_links, *geneve, *l2tp]
+        carriers = [*vxlan, *wg_links, *geneve, *l2tp, *ppp_links]
         transports = {}
         for link in carriers:
             if transports.setdefault(link["listen_port"], link["method"]) != link["method"]:
@@ -528,6 +532,9 @@ class Engine:
     def ensure_gre(self, g, interfaces):
         driver = driver_for(g)
         interface = interfaces[g["outer_local"]]
+        if driver.method == "l2tpv2":
+            driver.configure(g, self.paths, self.run)
+            return
         v6 = g.get("family") == 6
         subnet = ipaddress.ip_interface(g["local_tun"] + "/" + str(g.get("prefix_length", 30)))
         self.run("modprobe", driver.module, check=False)
@@ -682,6 +689,8 @@ class Engine:
             if c["kind"] != "peer" or not c.get("enabled", True):
                 continue
             g = c["gre"]
+            if g.get("method") == "l2tpv2":
+                continue
             source = c["service_ip"] if c["service_ip"] in interfaces else g["local_tun"]
             # Changes only the host route created for our own GRE address.
             # Public service-address routes and the default route are untouched.
@@ -703,7 +712,7 @@ class Engine:
     def remove_gre(self, g):
         # Verify ownership even on deletion. Never deletes an arbitrary name.
         driver = driver_for(g)
-        if driver.method == "l2tpv3":
+        if driver.method in ("l2tpv2", "l2tpv3"):
             driver.remove(g, self.paths, self.run)
             return
         row = self.inspect_link(g, driver)
