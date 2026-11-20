@@ -423,8 +423,8 @@ function nodeOptions(selected, unmanaged = false) {
   return (unmanaged ? '<option value="">مقصد مستقیم بدون مدیریت</option>' : '') +
     v2Nodes.map(node => `<option value="${esc(node.id)}" ${node.id === selected ? 'selected' : ''}>${esc(node.name)}</option>`).join('');
 }
-function rateFields(limits = {}) {
-  return ['up','down'].map((direction,index) => `<label>سقف ${index ? 'دریافت' : 'ارسال'} (Mbps)
+function rateFields(limits = {}, visibility = '') {
+  return ['up','down'].map((direction,index) => `<label ${visibility}>سقف ${index ? 'دریافت' : 'ارسال'} (Mbps)
     <input data-value="rate-${direction}" type="number" dir="ltr" min="0" max="100000" step="0.001" placeholder="ارث‌بری" value="${esc(limits[direction])}"></label>`).join('');
 }
 function readRateFields(row) {
@@ -456,14 +456,15 @@ function memberForm(parent, member = {}) {
       <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option>
       <option value="gretap" ${member.method === 'gretap' ? 'selected' : ''}>GRETAP</option>
       <option value="geneve" ${member.method === 'geneve' ? 'selected' : ''}>GENEVE</option>
-      <option value="l2tpv3" ${member.method === 'l2tpv3' ? 'selected' : ''}>L2TPv3</option></select></label>
-    <label>IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
-    <label data-method="gre ipip wireguard vxlan gretap geneve l2tpv3">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
-    <label data-method="gre ipip wireguard vxlan gretap geneve l2tpv3">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
+      <option value="l2tpv3" ${member.method === 'l2tpv3' ? 'selected' : ''}>L2TPv3</option>
+      <option value="sit" ${member.method === 'sit' ? 'selected' : ''}>SIT / 6in4</option></select></label>
+    <label data-method="direct gre ipip wireguard vxlan gretap geneve l2tpv3">IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
+    <label data-method="gre ipip wireguard vxlan gretap geneve l2tpv3 sit">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
+    <label data-method="gre ipip wireguard vxlan gretap geneve l2tpv3 sit">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
     <label data-method="ipip">TTL در IPIP<input data-value="ttl" dir="ltr" type="number" min="0" max="255" value="${esc(member.ttl ?? 64)}" required></label>
-    <label>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
-    <label>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
-    ${rateFields(member.limits)}
+    <label data-sit-excluded>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
+    <label data-sit-excluded>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
+    ${rateFields(member.limits,'data-sit-excluded')}
     <label>وضعیت<select data-value="state"><option value="on">فعال</option><option value="drain" ${member.draining ? 'selected' : ''}>در حال تخلیه</option>
       <option value="off" ${member.enabled === false ? 'selected' : ''}>متوقف</option></select></label>
     <details data-method="vxlan" ${member.method === 'vxlan' ? 'open' : ''}><summary>تنظیمات VXLAN</summary><div class="form-grid">
@@ -485,6 +486,10 @@ function memberForm(parent, member = {}) {
       <label>شناسهٔ VNI<input data-value="geneve-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.geneve?.vni)}"></label>
       <label>پورت UDP هر دو سر<input data-value="geneve-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.geneve?.port ?? 6081)}"></label>
     </div></details>
+    <details data-method="sit"><summary>آدرس‌های داخلی SIT</summary><div class="form-grid">
+      <label>IPv6 ورودی با پیشوند<input data-value="ingress-sit-ip" dir="ltr" required placeholder="fd00:1234::1/64" value="${esc(member.sit?.ingress)}"></label>
+      <label>IPv6 مقصد با پیشوند<input data-value="destination-sit-ip" dir="ltr" required placeholder="fd00:1234::2/64" value="${esc(member.sit?.destination)}"></label>
+    </div></details>
     <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
   parent.append(row);
   syncMemberMethod(row);
@@ -492,13 +497,33 @@ function memberForm(parent, member = {}) {
 }
 function syncMemberMethod(row) {
   const method = $('[data-value="method"]', row).value;
-  for (const field of $$('[data-method]',row)) {
-    const visible = field.dataset.method.split(' ').includes(method);
+  const ipv6 = method === 'sit';
+  $('[data-value="mtu"]',row).min = ipv6 ? 1280 : 576;
+  $('[data-value="outer"]',row).required = ipv6;
+  const state = $('[data-value="state"]',row);
+  const drain = $('option[value="drain"]',state);
+  if (ipv6 && state.value === 'drain') state.value = 'on';
+  drain.hidden = drain.disabled = ipv6;
+  for (const field of $$('[data-method],[data-sit-excluded]',row)) {
+    const visible = field.dataset.method ? field.dataset.method.split(' ').includes(method) : !ipv6;
     field.hidden = !visible;
     const wrapper = field.closest('.field-with-help');
     if (wrapper) wrapper.hidden = !visible;
     for (const input of $$('input,select,textarea',field)) input.disabled = !visible;
     if (visible && field.tagName === 'DETAILS' && field.dataset.method === method) field.open = true;
+  }
+}
+function sitOnly(row) {
+  const members = $$('[data-value="method"]',row);
+  return members.length > 0 && members.every(field => field.value === 'sit');
+}
+function syncListenerMethod(row) {
+  const ipv6 = sitOnly(row);
+  for (const field of $$('[data-forwarding]',row)) {
+    field.hidden = ipv6;
+    const wrapper = field.closest('.field-with-help');
+    if (wrapper) wrapper.hidden = ipv6;
+    for (const control of $$('input,select,textarea',field)) control.disabled = ipv6;
   }
 }
 function listenerForm(listener = {}) {
@@ -510,14 +535,14 @@ function listenerForm(listener = {}) {
     <label>سرور ورودی<select data-value="node">${nodeOptions(listener.node_id || v2Local)}</select></label>
     <label>IP شنونده<input data-value="ip" dir="ltr" required value="${esc(listener.ip)}"></label>
     <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(listener.outer_ip)}"></label>
-    <label>پورت‌ها<input data-value="ports" dir="ltr" required placeholder="5100,3300 یا all" value="${esc(listener.ports)}"></label>
-    <label>نگاشت پورت<input data-value="map" dir="ltr" placeholder="5100:5000,3300:3000" value="${esc(portMap)}"></label>
-    <label>استثناها<input data-value="excluded" dir="ltr" value="${esc((listener.exclude_ports || []).join(','))}"></label>
-    <label>سقف هر پورت<input data-value="port-rates" dir="ltr" placeholder="5100:20:10" value="${esc(
+    <label data-forwarding>پورت‌ها<input data-value="ports" dir="ltr" required placeholder="5100,3300 یا all" value="${esc(listener.ports)}"></label>
+    <label data-forwarding>نگاشت پورت<input data-value="map" dir="ltr" placeholder="5100:5000,3300:3000" value="${esc(portMap)}"></label>
+    <label data-forwarding>استثناها<input data-value="excluded" dir="ltr" value="${esc((listener.exclude_ports || []).join(','))}"></label>
+    <label data-forwarding>سقف هر پورت<input data-value="port-rates" dir="ltr" placeholder="5100:20:10" value="${esc(
       Object.entries(listener.port_limits || {}).map(([port,limits]) => [port,limits.up,limits.down].join(':')).join(','))}"></label>
-    <label>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
-      <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label>${rateFields(listener.limits)}</div>
-    <details ${listener.probe ? 'open' : ''}><summary>سنجش سلامت سرویس</summary><div class="form-grid">
+    <label data-forwarding>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
+      <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label>${rateFields(listener.limits,'data-forwarding')}</div>
+    <details data-forwarding ${listener.probe ? 'open' : ''}><summary>سنجش سلامت سرویس</summary><div class="form-grid">
       <label><input data-value="watch-link" type="checkbox" ${(listener.watch_link ?? !listener.id) ? 'checked' : ''}> پذیرش بر اساس سلامت لینک تونل</label>
       <label>روش سنجش<select data-value="probe-protocol"><option value="">تنظیم نشده</option>
         <option value="tcp" ${listener.probe?.protocol === 'tcp' ? 'selected' : ''}>TCP</option>
@@ -531,6 +556,7 @@ function listenerForm(listener = {}) {
   for (const member of listener.members || [{}]) memberForm($('[data-v2-members]', section), member);
   $('#v2-listener-list').append(section);
   decorateFields(section,'listener');
+  syncListenerMethod(section);
 }
 function resetGroupPlan() {
   groupEdit++;
@@ -564,11 +590,11 @@ async function refreshGroups() {
   const status = value => value === true ? 'سالم' : value === false ? 'قطع' : 'نامشخص';
   const evidence = record => record.group.listeners.flatMap(listener => listener.members.filter(member => member.enabled).map(member => {
     const sample = record.health?.[member.id] || {};
-    const hints = {wireguard_key:'نیاز به کلید WireGuard روی این سرور',geneve_route:'مسیر بیرونی GENEVE آماده نیست'};
-    const summary = hints[record.driver_issues?.[member.id]] ||
+    const issues = {wireguard_key:'نیاز به کلید WireGuard روی این سرور',geneve_route:'مسیر بیرونی GENEVE آماده نیست',ipv6_disabled:'IPv6 روی این سرور یا رابط‌های تازه غیرفعال است'};
+    const summary = issues[record.driver_issues?.[member.id]] ||
       `مدیریت ${status(sample.management)} · لینک ${status(sample.link)} · سرویس ${status(sample.service)} · ICMP ${status(sample.icmp)}`;
     const checked = sample.checked ? ' · ' + new Date(sample.checked * 1000).toLocaleTimeString('fa-IR') : '';
-    return `<small><bdi>${esc(member.service_ip)}</bdi> ${esc(summary + checked)}</small>`;
+    return `<small><bdi>${esc(member.sit?.destination || member.service_ip)}</bdi> ${esc(summary + checked)}</small>`;
   })).join('');
   const activity = record => {
     if (!record.group.enabled) return {rank:3, label:'متوقف'};
@@ -681,7 +707,7 @@ benchForm.addEventListener('submit', async event => {
   try {
     const fields = benchForm.elements;
     const duration_s = benchmarkSeconds(fields.duration_s.value);
-    const methods = ['gre','ipip'].filter(method => fields[method].checked).map(method => ({method,
+    const methods = ['gre','ipip','sit'].filter(method => fields[method].checked).map(method => ({method,
       duration_s:fields[method + '_time'].value.trim() ? benchmarkSeconds(fields[method + '_time'].value) : duration_s}));
     const requested = {nodes:[fields.first_node.value,fields.second_node.value], first:fields.first.value, second:fields.second.value,
       methods, duration_s, parallel:fields.parallel.checked};
@@ -724,7 +750,10 @@ $('#v2-group-list').addEventListener('click', event => {
 $('#v2-add-listener').addEventListener('click', () => { listenerForm(); resetGroupPlan(); });
 groupForm.addEventListener('input', resetGroupPlan);
 groupForm.addEventListener('change', event => {
-  if (event.target.dataset.value === 'method') syncMemberMethod(event.target.closest('[data-v2-member]'));
+  if (event.target.dataset.value === 'method') {
+    syncMemberMethod(event.target.closest('[data-v2-member]'));
+    syncListenerMethod(event.target.closest('[data-v2-listener]'));
+  }
 });
 groupForm.addEventListener('click', event => {
   const button = event.target.closest('[data-v2-edit]');
@@ -733,6 +762,7 @@ groupForm.addEventListener('click', event => {
   if (button.dataset.v2Edit === 'add') memberForm($('[data-v2-members]', listener));
   else if (button.dataset.v2Edit === 'remove') button.closest('[data-v2-member]').remove();
   else listener.remove();
+  syncListenerMethod(listener);
   resetGroupPlan();
 });
 function groupRequest() {
@@ -758,13 +788,13 @@ function groupRequest() {
     ['tunnel_id','session_id','port'].map(key => [key,Number(value(member,side+'-l2tp-'+key))]))]));
   const listeners = $$('[data-v2-listener]', groupForm).map(row => ({
     id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
-    ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
-    protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')],
-    limits:readRateFields(row),
-    port_limits:portLimits(value(row,'port-rates')),
-    watch_link:$('[data-value="watch-link"]', row).checked,
-    ...(value(row,'probe-protocol') && {probe:{protocol:value(row,'probe-protocol'), port:Number(value(row,'probe-port')),
-      request:$('[data-value="probe-request"]', row).value, response:$('[data-value="probe-response"]', row).value}}),
+    ...(sitOnly(row) ? {ports:'all',protocols:[]} : {
+      ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
+      protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')], limits:readRateFields(row),
+      port_limits:portLimits(value(row,'port-rates')), watch_link:$('[data-value="watch-link"]', row).checked,
+      ...(value(row,'probe-protocol') && {probe:{protocol:value(row,'probe-protocol'), port:Number(value(row,'probe-port')),
+        request:$('[data-value="probe-request"]', row).value, response:$('[data-value="probe-response"]', row).value}}),
+    }),
     members:$$('[data-v2-member]', row).map(member => ({
       id:member.dataset.v2Member, node_id:value(member,'node') || member.dataset.unmanaged, managed:!!value(member,'node'),
       method:value(member,'method'), service_ip:value(member,'service'), outer_ip:value(member,'outer'),
@@ -775,10 +805,11 @@ function groupRequest() {
       ...(value(member,'method') === 'wireguard' && {wireguard:wireguard(member)}),
       ...(value(member,'method') === 'gretap' && {gretap:value(member,'gretap-key') ? {key:Number(value(member,'gretap-key'))} : {}}),
       ...(value(member,'method') === 'l2tpv3' && {l2tpv3:l2tpv3(member)}),
-
       ...(value(member,'method') === 'geneve' && {geneve:{vni:Number(value(member,'geneve-vni')), port:Number(value(member,'geneve-port'))}}),
-      weight:Number(value(member,'weight')), priority:Number(value(member,'priority')),
-      limits:readRateFields(member),
+      ...(value(member,'method') === 'sit' && {sit:{ingress:value(member,'ingress-sit-ip'), destination:value(member,'destination-sit-ip')}}),
+      ...(value(member,'method') !== 'sit' && {
+        weight:Number(value(member,'weight')), priority:Number(value(member,'priority')), limits:readRateFields(member),
+      }),
       enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',
     })),
   }));

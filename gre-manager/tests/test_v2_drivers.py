@@ -11,13 +11,76 @@ from unittest.mock import patch
 from panel.engine import Engine, build_rules, external_carrier_forward, udp_carrier_matches
 from panel.model import DEFAULTS, PanelError
 from panel.store import Paths
-from panel.v2_config import normalize_group
+from panel.v2_bench_agent import test_link
+from panel.v2_config import normalize_group, sit_settings
 from panel.v2_drivers import driver_for, local_wireguard_key
 from panel.v2_forwarding import gre_link, topology_views
 from test_v2_forwarding import data, key
 
 
 class DriverTests(unittest.TestCase):
+    def test_sit_keeps_ipv6_and_its_exact_outer_filter_separate_from_ipv4_forwarding(self):
+        member = {"id": key(4), "node_id": key(5), "method": "sit", "outer_ip": "203.0.113.20",
+                  "sit": {"ingress": "fd00:1234::1/64", "destination": "fd00:1234::2/64"}}
+        group = data([dict(member, method="gre", service_ip=member["outer_ip"])])
+        listener = group["listeners"][0]
+        listener.update(ports="all", protocols=[], target_port=None, port_map={}, members=[member])
+        group = normalize_group(group)
+        self.assertEqual(group, normalize_group(group))
+        state = {"groups": {group["id"]: {"active": True, "owner": key(3), "group": group}}, "operations": {}}
+        config = {"settings": DEFAULTS, "connections": []}
+        first, second = [topology_views(config, state, node) for node in (key(3), key(5))]
+        left, right = [view["v2_devices"][0] for view in (first, second)]
+        self.assertEqual((left["local_tun"], left["prefix_length"], left["peer_tun"]), ("fd00:1234::1", 64, right["local_tun"]))
+        for view, link in ((first, left), (second, right)):
+            self.assertEqual((view["connections"], view["v2_listeners"]), ([], []))
+            rules = build_rules(view, {link["outer_local"]: "eth0"})
+            carrier = ["-i", "eth0", "-s", link["outer_peer"], "-d", link["outer_local"], "-p", "41", "-j", "ACCEPT"]
+            self.assertEqual(rules["nat"]["GMP_PRE"], [carrier])
+            self.assertEqual(rules["filter"]["GMP_INPUT"], [carrier])
+            foreign = f"-A PREROUTING -d {link['outer_local']} -p ipv6 -j DNAT --to-destination 198.51.100.1"
+            self.assertTrue(external_carrier_forward(foreign, link, "eth0"))
+            self.assertFalse(external_carrier_forward(foreign.replace("-p ipv6", "-p udp --dport 41"), link, "eth0"))
+        with tempfile.TemporaryDirectory() as root, patch("panel.v2_forwarding.ipv6_enabled", return_value=False):
+            restored = topology_views(config, state, key(3), paths=Paths(root))
+            self.assertEqual(restored["v2_devices"], [])
+            self.assertEqual(restored["v2_driver_unavailable"], {group["id"] + ":" + key(4): "ipv6_disabled"})
+            self.assertEqual(restored["v2_unavailable_devices"], [left])
+            self.assertEqual(topology_views(config, state, key(3), paths=Paths(root), require_keys_for=group["id"])["v2_devices"], [left])
+        pending = {"groups": {}, "operations": {"op": {"phase": "prepared", "owner": key(3), "change": {"group": group}}}}
+        self.assertEqual(topology_views(config, pending, key(3))["v2_devices"], [])
+        self.assertEqual(topology_views(config, pending, key(3), require_keys_for=group["id"])["v2_devices"], [left])
+        for settings in ({"draining": True}, {"weight": 2}, {"limits": {"up": 10}}):
+            rejected = copy.deepcopy(group)
+            rejected["listeners"][0]["members"][0].update(settings)
+            with self.assertRaises(PanelError):
+                normalize_group(rejected)
+        mixed = copy.deepcopy(group)
+        other = copy.deepcopy(data([dict(member, id=key(9), method="gre", service_ip=member["outer_ip"])])["listeners"][0])
+        mixed["listeners"].append(dict(other, id=key(8)))
+        self.assertEqual(len(normalize_group(mixed)["listeners"]), 2)
+        with self.assertRaises(PanelError):
+            normalize_group(dict(mixed, limits={"up": 100}))
+
+    def test_sit_address_canonicalization_and_invalid_subnets(self):
+        randomizer = random.Random(6141)
+        for _ in range(250):
+            subnet = "fd25:" + format(randomizer.randrange(65536), "x")
+            endpoints = {"ingress": subnet + "::1/64", "destination": subnet + "::2/64"}
+            self.assertEqual(sit_settings({side: ip.upper() for side, ip in endpoints.items()}), endpoints)
+            with self.assertRaises(PanelError):
+                sit_settings(dict(endpoints, destination=endpoints["ingress"]))
+        for endpoint in ("ff02::1/64", "fd00::2%eth0/64", "fd00::2/48", "fd00::2/64", "fe80::2/64", "fd25::1/64", 42):
+            with self.subTest(endpoint=endpoint), self.assertRaises(PanelError):
+                sit_settings({"ingress": "fd25::1/64", "destination": endpoint})
+
+    def test_sit_benchmark_derives_a_temporary_ipv6_subnet_per_direction(self):
+        request = {"job_id": key(1), "method": "sit", "direction": 0, "first": "192.0.2.1", "second": "192.0.2.2"}
+        left, right = [test_link(key(2), dict(request, side=side)) for side in (0, 1)]
+        self.assertEqual(left["peer_tun"], right["local_tun"])
+        self.assertEqual(left["family"], 6)
+        self.assertNotEqual(left["local_tun"], test_link(key(2), dict(request, side=0, direction=1))["local_tun"])
+
     def test_l2tp_has_reversed_ids_and_leaves_an_adjacent_session(self):
         group = data([{"id": key(4), "node_id": key(5), "method": "l2tpv3", "service_ip": "203.0.113.20",
                        "l2tpv3": {"ingress": {"tunnel_id": 100, "session_id": 101, "port": 37001},

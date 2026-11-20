@@ -47,8 +47,16 @@ def serve(address, marker, port):
             data, sock = self.request
             sock.sendto(b"ready" if data == b"gremgr-health" else marker + data, self.client_address)
 
-    tcp = socketserver.ThreadingTCPServer((address, port), TCP)
-    udp = socketserver.UDPServer((address, port), UDP)
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
+
+    class TCPServer(socketserver.ThreadingTCPServer):
+        address_family = family
+
+    class UDPServer(socketserver.UDPServer):
+        address_family = family
+
+    tcp = TCPServer((address, port), TCP)
+    udp = UDPServer((address, port), UDP)
     threading.Thread(target=udp.serve_forever, daemon=True).start()
     print("ready", flush=True)
     tcp.serve_forever()
@@ -64,8 +72,9 @@ def exchange(sock, payload):
 def sample(address, number, udp=False, port=5100, source_start=None):
     result = Counter()
     kind = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
     for case in range(number):
-        with socket.socket(socket.AF_INET, kind) as sock:
+        with socket.socket(family, kind) as sock:
             sock.settimeout(3)
             if source_start is not None:
                 sock.bind(("", source_start + case))
@@ -206,7 +215,7 @@ def bench_acceptance(stack, root, left, right, addresses):
         process.stdin.close()
         return process
 
-    for method, duration in (("gre", 2), ("ipip", 3)):
+    for method, duration in (("gre", 2), ("ipip", 3), ("sit", 3)):
         receipts = []
         job_id = uuid.uuid4().hex
         for direction, seconds in enumerate(direction_lengths(duration)):
@@ -240,6 +249,9 @@ def bench_acceptance(stack, root, left, right, addresses):
                 assert subprocess.run(["ip", "-n", host, "link", "show", link], capture_output=True).returncode != 0
                 rules = command("ip", "netns", "exec", host, "iptables-save", "-t", "filter", capture_output=True).stdout
                 assert "gmpbench:" + key not in rules
+                if method == "sit":
+                    rules = command("ip", "netns", "exec", host, "ip6tables-save", "-t", "filter", capture_output=True).stdout
+                    assert "gmpbench:" + key not in rules
         results = report(*receipts)
         assert results["finished"] and results["received_bytes"] == sum(item["received_bytes"] for item in receipts)
         print(f"v2 {method.upper()} benchmark proved {duration} seconds of real directional TCP and selective cleanup: {results['received_bytes']} bytes.", flush=True)
@@ -451,6 +463,40 @@ def lab(root):
             assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
         command("ip", "-n", "gm-ir", "link", "show", "gm-other-ipip", stdout=subprocess.DEVNULL)
         print("v2 IPIP carried TCP and UDP through both endpoints, changed TTL and removed only the owned device.", flush=True)
+
+        sit = listener("gm-ir", [first_target], "sit", [1])
+        sit.update(ports="all", port_map={}, protocols=[])
+        sit["members"][0]["sit"] = {"ingress": "fd34:5d09:ee5::1/64", "destination": "fd34:5d09:ee5::2/64"}
+        command("ip", "-n", "gm-ir", "link", "add", "gm-foreign-sit", "type", "sit", "local", nodes["gm-ir"][0],
+                "remote", nodes[services[-1]][0])
+        staged = normalize_group({"id": group_id, "name": "SIT prepare", "listeners": [sit]})
+        plan = {"groups": {}, "operations": {"prepared": {"phase": "prepared", "owner": owner, "change": {"group": staged}}}}
+        pending = gre_link(owner, staged["listeners"][0], staged["listeners"][0]["members"][0])
+        for host in ("gm-ir", first_target):
+            command(*namespace(host, "render", Path(root) / host, nodes[host][1], int(host == "gm-ir")), input=json.dumps(plan))
+            assert subprocess.run(["ip", "-n", host, "link", "show", pending["tunnel"]], capture_output=True).returncode != 0
+        compiled = apply([sit])
+        link = gre_link(owner, compiled, compiled["members"][0])
+        endpoint = link["peer_tun"]
+        echo = start_process(processes, namespace(first_target, "serve", endpoint, "6", 25244), stdout=subprocess.PIPE)
+        assert receive_line(echo) == "ready"
+        for proto in ("tcp", "udp"):
+            observed = command(*namespace("gm-ir", "sample", endpoint, 6, proto, 25244), capture_output=True).stdout
+            assert json.loads(observed) == {"6": 6}, observed
+        for host, inner in (("gm-ir", link["local_tun"]), (first_target, endpoint)):
+            device = json.loads(command("ip", "-n", host, "-j", "-d", "link", "show", link["tunnel"], capture_output=True).stdout)[0]
+            assert device["linkinfo"]["info_kind"] == "sit" and device["ifalias"] == "gremgr:v2:" + link["id"], device
+            ipv6 = json.loads(command("ip", "-n", host, "-j", "-6", "addr", "show", "dev", link["tunnel"], capture_output=True).stdout)
+            assert any(a["local"] == inner and a["prefixlen"] == 64 for a in ipv6[0]["addr_info"]), ipv6
+        stop_process(echo)
+        ipv6_default = ("ip", "netns", "exec", "gm-ir", "sysctl", "-qw", "net.ipv6.conf.default.disable_ipv6=")
+        command(*ipv6_default[:-1], ipv6_default[-1] + "1")
+        apply([weighted])
+        command(*ipv6_default[:-1], ipv6_default[-1] + "0")
+        for host in ("gm-ir", first_target):
+            assert subprocess.run(["ip", "-n", host, "link", "show", link["tunnel"]], capture_output=True).returncode != 0
+        command("ip", "-n", "gm-ir", "link", "show", "gm-foreign-sit", stdout=subprocess.DEVNULL)
+        print("v2 SIT reserved without installing, carried IPv6 TCP and UDP, and removed only the owned device with IPv6 disabled.", flush=True)
         bench_acceptance(processes, root, "gm-ir", first_target, [nodes["gm-ir"][0], nodes[first_target][0]])
 
         l2 = listener("gm-ir", [first_target], "gretap", [1])
