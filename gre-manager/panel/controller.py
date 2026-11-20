@@ -23,7 +23,7 @@ from .agent import read_peers, v2_participant
 from .engine import Engine, discovered_ssh_ports, gre_for, run
 from .model import PanelError, connection, ranges_for, resolve, settings_update, validate_conflicts
 from .remote import Remote, server_metadata
-from .store import BACKUP_NAME, Store, atomic_json, check_password, disk_full
+from .store import BACKUP_NAME, BACKUP_POLICY, Store, atomic_json, check_password, disk_full
 from .topology import legacy_topology
 from .transactions import Coordinator, fingerprint, identity, overlaps
 from .v2_access import AUTH_ROUTES, Access
@@ -374,7 +374,9 @@ class Controller:
         self.allocate_gre(updated, previous)
         self.engine.preflight(self.combined(updated))
         self.collect()
-        self.store.automatic_backup(updated["settings"])
+        old_settings, new_settings = previous["settings"], updated["settings"]
+        policy_change = any(old_settings[key] != new_settings[key] for key in BACKUP_POLICY)
+        self.store.automatic_backup(new_settings, stage=policy_change)
         journal = {"previous": previous, "updated": updated, "remote": [], "phase": "prepare", "created": time.time()}
         atomic_json(self.pending, journal)
         servers = {x["id"]: x for x in previous["servers"] + updated["servers"]}
@@ -847,6 +849,32 @@ class Controller:
             return self.submit(route, copy.deepcopy(payload))
         raise PanelError("Endpoint not found.", "not_found")
 
+    def maintain_storage(self, settings, now):
+        if self.pending.exists() or (self.paths.etc / "web-pending.json").exists():
+            return
+        with self.paths.install_lock.open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            self.store.finish_settings_backup(settings)
+            if now - self.last_prune >= 60:
+                self.last_prune = now
+                try:
+                    self.store.prune(settings)
+                except sqlite3.OperationalError as error:
+                    if not disk_full(error):
+                        raise
+            if now - self.last_backup > 86400:
+                self.last_backup = now
+                try:
+                    self.store.automatic_backup()
+                except PanelError as error:
+                    if error.code != "storage":
+                        raise
+                    with contextlib.suppress(sqlite3.Error):
+                        self.store.event("warning", str(error))
+
     def tick(self):
         if not self.lock.acquire(blocking=False):
             return
@@ -885,21 +913,6 @@ class Controller:
                             self.collect()
                             self.engine.apply(self.combined(cfg), self.combined(cfg))
                         self.store.event("warning", "Owned GRE state refreshed after three failed checks; VPN services were not restarted.")
-            if now - self.last_prune >= 60:
-                self.last_prune = now
-                try:
-                    self.store.prune(cfg["settings"])
-                except sqlite3.OperationalError as error:
-                    if not disk_full(error):
-                        raise
-            if now - self.last_backup > 86400:
-                self.last_backup = now
-                try:
-                    self.store.automatic_backup()
-                except PanelError as error:
-                    if error.code != "storage":
-                        raise
-                    with contextlib.suppress(sqlite3.Error):
-                        self.store.event("warning", str(error))
+            self.maintain_storage(cfg["settings"], now)
         finally:
             self.lock.release()

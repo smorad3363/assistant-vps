@@ -25,6 +25,7 @@ MIN_FREE_BYTES = 512 * MIB
 WAL_HEADROOM = 4 * MIB
 MAX_BACKUP_BYTES = 32 * MIB
 SAMPLE_BATCH = 8192
+BACKUP_POLICY = ("backup_keep", "backup_limit_mib")
 BACKUP_NAME = re.compile(r"backup-[0-9]{8}-[0-9]{6}\.zip")
 INSTALL_BACKUP_NAME = re.compile(r"install-[0-9]{8}-[0-9]{6}-[0-9]+")
 TRAFFIC_SCHEMA = """
@@ -39,10 +40,12 @@ class Paths:
         self.etc = Path(home) / "etc" if home else Path("/etc/gremgr")
         self.var = Path(home) / "var" if home else Path("/var/lib/gremgr")
         self.run = Path(home) / "run" if home else Path("/run/gremgr")
+        self.install_lock = Path(home) / "install.lock" if home else Path("/run/lock/gremgr-install.lock")
         self.config = self.etc / "panel.json"
         self.db = self.var / "panel.sqlite3"
         self.socket = self.run / "control.sock"
         self.backups = self.var / "backups"
+        self.staged_backup = self.backups / ".settings-backup.zip"
         self.ssh = self.etc / "ssh"
         self.tls = self.etc / "tls"
         for p in (self.etc, self.var, self.run, self.backups, self.ssh, self.tls):
@@ -85,7 +88,7 @@ def file_size(path):
 
 
 def disk_full(error):
-    return getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_FULL or str(error) == "database or disk is full"
+    return getattr(error, "sqlite_errorname", None) == "SQLITE_FULL" or str(error) == "database or disk is full"
 
 
 def prune_install_backups(current):
@@ -330,7 +333,8 @@ class Store:
 
     def storage(self, settings):
         return {"telemetry_bytes": self.telemetry_bytes(), "telemetry_limit": settings["telemetry_limit_mib"] * MIB,
-                "backup_bytes": sum(map(file_size, self.backup_files())), "backup_limit": settings["backup_limit_mib"] * MIB,
+                "backup_bytes": sum(map(file_size, self.backup_files())) + file_size(self.paths.staged_backup),
+                "backup_limit": settings["backup_limit_mib"] * MIB,
                 "free_bytes": shutil.disk_usage(self.paths.var).free, "free_reserve": MIN_FREE_BYTES}
 
     def prune(self, settings=None):
@@ -434,7 +438,7 @@ class Store:
         except (zipfile.BadZipFile, KeyError, ValueError, OSError) as error:
             raise PanelError("The backup could not be read.") from error
 
-    def automatic_backup(self, settings=None):
+    def automatic_backup(self, settings=None, *, stage=False):
         with (self.paths.var / "backup.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             settings = settings or self.config()["settings"]
@@ -442,21 +446,44 @@ class Store:
             content = self.backup(limit)
             if shutil.disk_usage(self.paths.backups).free < len(content) + 65536:
                 raise PanelError("Insufficient space for a restorable backup.", "storage")
-            filename = self.paths.backups / (time.strftime("backup-%Y%m%d-%H%M%S", time.gmtime()) + ".zip")
+            filename = self.paths.staged_backup if stage else self._backup_path()
             try:
                 atomic_write(filename, lambda out: out.write(content), "wb")
             except OSError as error:
                 if error.errno != errno.ENOSPC:
                     raise
                 raise PanelError("Insufficient space for a restorable backup.", "storage") from error
-            used, kept = len(content), 1
-            for old in self.backup_files():
-                if old == filename:
-                    continue
-                size = file_size(old)
-                if kept >= settings["backup_keep"] or used + size > limit:
-                    old.unlink(missing_ok=True)
-                else:
-                    used += size
-                    kept += 1
+            if not stage:
+                self._rotate_backups(filename, settings)
             return filename.name
+
+    def _backup_path(self):
+        return self.paths.backups / (time.strftime("backup-%Y%m%d-%H%M%S", time.gmtime()) + ".zip")
+
+    def finish_settings_backup(self, settings):
+        staged = self.paths.staged_backup
+        if not staged.is_file():
+            return
+        with (self.paths.var / "backup.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            with zipfile.ZipFile(staged) as archive:
+                previous = json.loads(archive.read("config.json"))["settings"]
+            if all(previous[key] == settings[key] for key in BACKUP_POLICY):
+                staged.unlink()
+                return
+            filename = self._backup_path()
+            staged.replace(filename)
+            self._rotate_backups(filename, settings)
+
+    def _rotate_backups(self, filename, settings):
+        limit = settings["backup_limit_mib"] * MIB
+        used, kept = file_size(filename), 1
+        for old in self.backup_files():
+            if old == filename:
+                continue
+            size = file_size(old)
+            if kept >= settings["backup_keep"] or used + size > limit:
+                old.unlink(missing_ok=True)
+            else:
+                used += size
+                kept += 1

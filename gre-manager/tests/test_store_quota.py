@@ -1,5 +1,6 @@
 """File quotas protect recent samples, durable counters and recovery archives."""
 from contextlib import closing
+import fcntl
 import sqlite3
 import tempfile
 import time
@@ -7,6 +8,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from panel.controller import Controller
+from panel.demo import DemoEngine, DemoRemote
 from panel.store import MIB, MIN_FREE_BYTES, Paths, Store, TRAFFIC_SCHEMA, prune_install_backups
 
 
@@ -15,6 +18,13 @@ class StorageQuotaTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.paths = Paths(temporary.name)
+
+    def controller(self, store):
+        controller = Controller(store, DemoEngine(), DemoRemote(self.paths))
+        self.addCleanup(controller.executor.shutdown)
+        self.addCleanup(controller.v2_executor.shutdown)
+        controller.last_prune = controller.last_backup = time.time()
+        return controller
 
     def test_legacy_file_shrinks_under_volume_pressure(self):
         now = int(time.time() // 60) * 60
@@ -103,6 +113,48 @@ class StorageQuotaTests(unittest.TestCase):
         with patch("panel.store.MAX_BACKUP_BYTES", 2 * MIB):
             prune_install_backups(snapshots[-1])
         self.assertEqual(set(root.iterdir()), {manual, *snapshots[-2:]})
+
+    def test_failed_quota_change_keeps_every_preexisting_archive(self):
+        store = Store(self.paths)
+        controller = self.controller(store)
+        for index in range(4):
+            with patch("panel.store.time.strftime", return_value=f"backup-20261120-10000{index}"):
+                store.automatic_backup()
+        archives = {path.name: path.read_bytes() for path in store.backup_files()}
+        proposed = store.config()
+        proposed["settings"]["backup_keep"] = 1
+        with patch.object(controller.engine, "apply", side_effect=[RuntimeError("fixture apply failure"), None]):
+            with self.assertRaisesRegex(RuntimeError, "fixture apply failure"):
+                controller.transaction(proposed)
+        controller.maintain_storage(store.config()["settings"], time.time())
+        self.assertEqual(store.config()["settings"]["backup_keep"], 7)
+        self.assertEqual({path.name: path.read_bytes() for path in store.backup_files()}, archives)
+        self.assertFalse(store.paths.staged_backup.exists())
+        controller.transaction(proposed)
+        confirmation = store.paths.etc / "web-pending.json"
+        confirmation.touch()
+        controller.maintain_storage(store.config()["settings"], time.time())
+        self.assertEqual(len(store.backup_files()), 4)
+        confirmation.unlink()
+        controller.maintain_storage(store.config()["settings"], time.time())
+        latest, = store.backup_files()
+        stored_settings, _ = store.read_backup(latest.read_bytes())
+        self.assertEqual(stored_settings["settings"]["backup_keep"], 7)
+
+    def test_installer_lock_defers_destructive_maintenance(self):
+        store = Store(self.paths)
+        controller = self.controller(store)
+        controller.last_prune = controller.last_backup = 0
+        settings = store.config()["settings"]
+        with patch.object(store, "prune") as prune, patch.object(store, "automatic_backup") as backup:
+            with self.paths.install_lock.open("a") as installer:
+                fcntl.flock(installer, fcntl.LOCK_EX)
+                controller.maintain_storage(settings, time.time())
+                prune.assert_not_called()
+                backup.assert_not_called()
+            controller.maintain_storage(settings, time.time())
+            prune.assert_called_once_with(settings)
+            backup.assert_called_once()
 
 
 if __name__ == "__main__":
