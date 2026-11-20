@@ -25,6 +25,8 @@ python3 "$temporary/candidate/build-release.py" WORKTREE
 first_install=false
 if [[ ! -e /opt/gremgr/current ]]; then
   first_install=true
+  owned_chains='^:GMP_(PRE|POST|LOCAL|FWD|INPUT|COUNT|MSS|MSS_LOCAL)[[:space:]]'
+  iptables-save >"$temporary/first-rules"
   if ! systemctl cat gremgr-peer-monitor.service >/dev/null 2>&1; then
     cat >"$fixture_monitor" <<'UNIT'
 [Unit]
@@ -41,6 +43,14 @@ UNIT
     exit 1
   fi
   [[ ! -e /opt/gremgr/current && ! -L /opt/gremgr/current && ! -e /etc/gremgr/panel.json ]]
+  if ! grep -Eq "$owned_chains" "$temporary/first-rules"; then
+    iptables-save >"$temporary/rolled-back-rules"
+    if grep -Eq "$owned_chains" "$temporary/rolled-back-rules"; then
+      echo 'The failed first installation left panel firewall chains or hooks behind.' >&2
+      exit 1
+    fi
+    echo 'Failed first install removed its firewall hooks and chains.'
+  fi
   if grep -Fq 'Password:' "$temporary/failed-init"; then
     echo 'Failed installation disclosed unusable credentials.' >&2
     exit 1

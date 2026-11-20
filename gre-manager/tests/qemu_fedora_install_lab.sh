@@ -41,6 +41,7 @@ EOF
 printf 'instance-id: gremgr-fedora\nlocal-hostname: gremgr-fedora\n' >"$lab/meta-data"
 cloud-localds "$lab/seed.img" "$lab/user-data" "$lab/meta-data"
 qemu-system-x86_64 -machine accel=kvm:tcg -smp 2 -m 2048 -display none -monitor none \
+  -object rng-random,id=guest-rng,filename=/dev/urandom -device virtio-rng-pci,rng=guest-rng \
   -serial "file:$lab/console" -drive "file=$lab/disk.qcow2,format=qcow2,if=virtio" \
   -drive "file=$lab/seed.img,format=raw,readonly=on,if=virtio" \
   -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:25333-:22 &
