@@ -11,10 +11,15 @@ import socket
 import ssl
 from urllib.parse import parse_qs, urlsplit
 
+from .v2_access import AUTH_ROUTES
+
 MAX_REQUEST = 48 * 1024 * 1024
 STATIC = Path(__file__).parent / "static"
-GET_ROUTES = {"state", "live", "stats", "job", "backup.download"}
-POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update"}
+GET_ROUTES = {"state", "live", "stats", "job", "backup.download", "v2/topology", "v2/jobs", "v2/groups", "v2/peers", "v2/metrics",
+              "v2/benchmark.status"}
+POST_ROUTES = {"login", "logout", "password", "web.confirm", "backup.preview", "v2/migration.preview", "connection.save", "connection.delete", "connection.toggle", "connection.probe", "server.connect", "server.delete", "settings.save", "backup.create", "backup.restore", "tls.save", "tls.auto", "update",
+               "v2/plan", "v2/apply", "v2/pairing.invite", "v2/pairing.connect", "v2/pairing.revoke",
+               "v2/benchmark.capabilities", "v2/benchmark.plan", "v2/benchmark.start", "v2/benchmark.cancel"} | AUTH_ROUTES
 
 
 class RPC:
@@ -43,6 +48,12 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         self.connection.settimeout(30)
+
+    def handle(self):
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def reply(self, status, content, content_type="application/json; charset=utf-8", extra=None):
         if isinstance(content, (dict, list)):
@@ -80,7 +91,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(404, {"error": "Not found", "code": "not_found"})
             payload = {key: values[-1] for key, values in parse_qs(path.query).items()}
             return self.api(route, payload)
-        names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg"}
+        names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/v2-fields.js": "v2-fields.js",
+                 "/style.css": "style.css", "/favicon.svg": "favicon.svg"}
         if path.path not in names:
             return self.reply(404, {"error": "Not found", "code": "not_found"})
         file = STATIC / names[path.path]
@@ -101,7 +113,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json" or self.headers.get("Transfer-Encoding"):
             self.close_connection = True
             return self.reply(400, {"error": "JSON required", "code": "invalid"})
-        if route != "login":
+        if route in AUTH_ROUTES and not self.server.secure:
+            self.close_connection = True
+            return self.reply(403, {"error": "Agent operations require HTTPS.", "code": "auth"})
+        if route != "login" and route not in AUTH_ROUTES:
             try:
                 check = self.server.backend.request("auth.check", {}, self.token(), self.headers.get("X-Gremgr-CSRF"), self.client_address[0])
             except (OSError, ValueError):
@@ -111,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(401 if check.get("code") == "auth" else 403, check)
         try:
             length = int(self.headers.get("Content-Length", "-1"))
-            maximum = MAX_REQUEST if route in ("backup.restore", "backup.preview") else 4096 if route == "login" else 262144
+            maximum = MAX_REQUEST if route in ("backup.restore", "backup.preview", "v2/migration.preview") else 4096 if route == "login" else 262144
             if not 0 <= length <= maximum:
                 raise ValueError()
             payload = json.loads(self.rfile.read(length))

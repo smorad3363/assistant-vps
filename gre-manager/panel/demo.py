@@ -33,7 +33,7 @@ class DemoEngine:
         cfg = self.current or {"connections": [], "settings": {}}
         counters = {}
         for c in cfg["connections"]:
-            if not c["enabled"]:
+            if not c["enabled"] or c["kind"] == "peer":
                 continue
             counters[(c["id"], "all")] = [self.amount, self.amount * 4]
             for port in monitored(c, cfg["settings"]):

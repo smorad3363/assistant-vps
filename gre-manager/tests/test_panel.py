@@ -18,7 +18,7 @@ from panel.controller import Controller
 from panel.demo import DemoEngine, DemoRemote, LocalBackend
 from panel.engine import Engine, build_rules, gre_for, pair_values
 from panel.model import DEFAULTS, PanelError, connection, port_ranges, ranges_for, validate_conflicts
-from panel.remote import BOOTSTRAP, Remote
+from panel.remote import BOOTSTRAP, Remote, server_metadata
 from panel.store import Paths, Store
 from panel.web import Handler, ThreadingHTTPServer
 
@@ -129,6 +129,34 @@ class ConfigurationTests(unittest.TestCase):
         payload=next(kw["input"] for args,kw in calls if args[0]=="iptables-restore")
         self.assertIn("multiport ! --dports",payload)
         self.assertNotIn("'!'",payload)
+
+    def test_clear_owned_removes_tagged_and_legacy_jumps(self):
+        import subprocess
+
+        tagged = ("PREROUTING", "-m", "comment", "--comment", "gmpanel:hook", "-j", "GMP_PRE")
+        legacy = ("PREROUTING", "-j", "GMP_PRE")
+        unrelated = ("PREROUTING", "-j", "OTHER_PRE")
+        remaining = [tagged, tagged, legacy, unrelated]
+        deleted_chains = []
+
+        def run(*args, **kwargs):
+            table, operation, *rule = args[4:]
+            rule = tuple(rule)
+            success = True
+            if operation == "-C":
+                success = table == "nat" and rule in remaining
+            elif operation == "-D":
+                remaining.remove(rule)
+            elif operation == "-S":
+                success = table == "nat" and rule == ("GMP_PRE",)
+            elif operation == "-X":
+                self.assertEqual(remaining, [unrelated])
+                deleted_chains.append((table, rule[0]))
+            return subprocess.CompletedProcess(args, 0 if success else 1, "", "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            Engine(Paths(directory), run).clear_owned()
+        self.assertEqual(deleted_chains, [("nat", "GMP_PRE")])
 
 
 class StoreTests(unittest.TestCase):
@@ -373,6 +401,51 @@ class HTTPTests(unittest.TestCase):
         fixture = json.loads((Path(__file__).parent / "fixtures" / "v1.2.0-api.json").read_text())
         _, response = self.capture_release_api(fixture["requests"])
         self.assertEqual(response, fixture["response"])
+
+    def test_v2_migration_preview_and_v1_restore_keep_data(self):
+        self.assertEqual(self.call("/api/v2/topology")[0], 401)
+        fixture = json.loads((Path(__file__).parent / "fixtures" / "v1.2.0-api.json").read_text())
+        self.capture_release_api(fixture["requests"])
+        store = self.controller.store
+        config = store.config()
+        original = store.paths.config.read_bytes()
+        gre = next(item for item in config["connections"] if item["kind"] == "gre")
+        store.sample({(gre["id"], "all"): (150, 350)}, "migration-fixture")
+        totals = store.stats()["totals"]
+        backup = store.backup()
+        payload = {"content": base64.b64encode(backup).decode()}
+        self.assertEqual(self.call("/api/v2/migration.preview", payload, {"X-Gremgr-CSRF": ""})[0], 403)
+
+        status, _, raw = self.call("/api/v2/topology")
+        self.assertEqual(status, 200, raw)
+        topology = json.loads(raw)
+        self.assertEqual(topology["schema"], 2)
+        self.assertEqual(topology["host_policy"]["protected_ports"], [22, 8787])
+        groups = {item["id"]: item for item in topology["groups"]}
+        self.assertCountEqual(groups, [c["id"] for c in config["connections"]])
+        listener, = groups[gre["id"]]["listeners"]
+        member, = listener["members"]
+        self.assertEqual(listener["port_map"], {"5100": 5000, "3300": 3000})
+        self.assertEqual(member["service_ip"], gre["service_ip"])
+        self.assertFalse(member["requires_connection"])
+        self.assertEqual(groups[gre["id"]]["traffic_id"], gre["id"])
+
+        status, _, raw = self.call("/api/v2/migration.preview", payload)
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(json.loads(raw)["groups"], topology["groups"])
+        self.assertEqual(store.paths.config.read_bytes(), original)
+        self.assertEqual(store.stats()["totals"], totals)
+
+        changed = self.submit_job("connection.toggle", {"id": gre["id"]})
+        self.assertEqual(changed["status"], "done", changed)
+        restored = self.submit_job("backup.restore", payload)
+        self.assertEqual(restored["status"], "done", restored)
+        config["servers"] = [server_metadata(server) for server in config["servers"]]
+        self.assertEqual(store.config(), config)
+        self.assertCountEqual(store.stats()["totals"], totals)
+        status, _, raw = self.call("/api/v2/topology")
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(json.loads(raw), topology)
 
     def test_auth_csp_and_traversal(self):
         status,headers,body=self.call("/");self.assertEqual(status,200);self.assertIn("frame-ancestors 'none'",headers["Content-Security-Policy"])

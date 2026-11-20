@@ -135,13 +135,25 @@ their addresses/MTU; the web worker takes ownership without deleting the live
 GRE interface and keeps their original JSON in `pairs/backups/`.
 
 Settings offers portable ZIP backups, downloads and restore previews. Backups
-contain configuration and a consistent SQLite snapshot; login secrets, live
-sessions, TLS private keys and SSH private keys are excluded. The current local
+contain configuration, cumulative traffic totals and the newest history that
+fits the archive. Login secrets and live sessions stay on the server, along with
+TLS and SSH private keys. The current local
 panel port/login and current SSH protected ports are preserved during restore.
 On a different machine, GRE connections lacking keys restore paused; reconnect
 the foreign server before enabling them. The API also accepts an `address_map`
-when moving source IPv4 addresses. Daily automatic backups and old application
-releases have bounded retention.
+when moving source IPv4 addresses.
+
+The default telemetry budget is 256 MiB, including the SQLite database, WAL,
+shared-memory sidecar and latest host metrics. The default retained ZIP budget
+is 128 MiB, with a maximum of seven local archives. Both budgets are adjustable
+under Settings. At pressure, maintenance trims old samples first and preserves
+cumulative counters, active jobs and credentials. At less than 512 MiB free,
+new history pauses and backups prioritize configuration and totals. A busy
+SQLite reader or a legacy file awaiting safe compaction can delay reclaim.
+Archives are staged and published atomically before older copies are retired.
+The installer keeps up to three recovery snapshots within 32 MiB and protects
+the snapshot used for the active installation or rollback. The OS journal
+remains governed by the host's journald settings.
 
 Panel port changes preserve the previous management port as reserved and roll
 back after 120 seconds unless an authenticated session confirms the new port.
@@ -157,7 +169,11 @@ login attempts, backup expansion, telemetry and event history are bounded.
 All downloaded files are pinned to one source commit and SHA256-checked against
 `release.json`. The same installer updates existing installations noninteractively;
 Settings schedules that updater. Existing application releases are retained for
-rollback. Initial trust is the GitHub HTTPS installer/manifest; these hashes are
+rollback. If activation fails, the installer restores the previous release,
+panel configuration, TLS files and service state. The short `gre.sh` command
+and `gre-manager/install.sh` both accept an explicit `--source-dir` for an
+already prepared source package or `--release-ref` with the full commit ID of a
+published release manifest. Initial trust is the GitHub HTTPS installer/manifest. These hashes are
 integrity checks, not an independent signing key.
 
 Account recovery is intentionally local and noninteractive:
@@ -203,6 +219,77 @@ python3 -m panel.demo --seed
 # http://127.0.0.1:8877 ; admin / Demo-Panel-2026!
 ```
 
+GRETAP members use a separate Ethernet interface to carry IPv4 between the
+two configured outer addresses. The panel generates matching keys on both
+ends unless a key is supplied. The link stays separate from the WAN bridge.
+
+EoIP uses a dedicated Linux TAP interface and a shared 16-bit tunnel ID.
+Specify the outer IPv4 address on both ends and allow protocol 47 between
+those addresses. Use an inner MTU with at least 42 bytes of underlay headroom.
+The EoIP task stops with its member and the kernel releases its TAP interface.
+
+L2TPv2 / PPP requires `xl2tpd`, `pppd` and kernel PPP support on both Linux
+hosts. Choose the LAC side and a separate UDP port on each host. Store the
+same 32-byte hex secret in a root-owned mode-0600 file on each host under
+`/etc/gremgr/ppp-credentials/`. Enter only those local file names in the
+panel. The two daemons use a private PPP configuration and assign addresses
+for the link. This mode carries unencrypted L2TPv2 traffic on its underlay.
+
+Static L2TPv3 uses an Ethernet pseudowire over UDP and a dedicated tunnel ID,
+session ID and port on each host. The panel reverses local and peer settings
+between the two ends and limits the carrier rule to the configured session.
+If another administrator attaches a session to the same kernel tunnel, the
+panel removes its own session and leaves the adjacent session and tunnel in place.
+
+In Path test, select two paired nodes and their outer IPv4 addresses. The
+preview shows the effective time and volume budget. The test prepares a
+separate GRE, IPIP or SIT link and measures two TCP streams over that link
+in each direction. A 37-second test transfers for 18 seconds from A to
+B and 19 seconds from B to A. Preparation is separate from that duration.
+
+Every method reports delivered application bytes and the fastest complete
+second observed at a receiver. Parallel methods share the effective host
+rate and total volume budget. The default ceiling is 100 Mbps and 1 GB, with
+the rate reduced to respect a lower configured host policy. Cancelling
+requests cleanup on both nodes. After a restart, saved receipts remain
+available and active leases expire without replaying traffic. IPIP and SIT
+tests require an outer endpoint pair free of another device of that
+type. The SIT test carries TCP over temporary inner IPv6 addresses.
+
+For a persistent SIT / 6in4 link, create a separate listener using SIT
+members. Select the two outer IPv4 endpoints and two distinct inner IPv6
+addresses in the same /64 to /126 subnet. IPv6 must be enabled on both hosts
+and on new interfaces. Use an MTU of at least 1280. Applications reach the
+other host at its inner IPv6 address, subject to its existing IPv6 firewall.
+Use a group without a shared rate limit. Service forwarding limits and member
+drain apply to the IPv4 forwarding methods.
+To replace inner addresses on the same outer pair, stop the member before
+changing its configuration.
+
+For a VXLAN member, select the outer IPv4 address at each end, set the VNI and
+choose a shared UDP destination port (4789 by default). Separate VNIs can share
+a GRE Manager UDP socket. Each device carries IPv4 packets over its own
+Ethernet segment with a fixed remote endpoint and MAC learning disabled. Use
+an MTU that is at least 50 bytes below the underlying interface MTU. If the
+host already runs a separate VXLAN or another UDP service on the port, use a
+different UDP port for the panel's links.
+
+GENEVE members also carry Ethernet between two IPv4 endpoints. Both sides use
+the same VNI and UDP destination port (6081 by default). On each node, select
+the source address that the kernel route to its peer would use.
+
 The direct-forwarding feature was informed by the behavior requested from
 [IPTABLE-Tunnel-multi-port](https://github.com/azavaxhuman/IPTABLE-Tunnel-multi-port).
 Its installer, shell menu and destructive global reset operations are not bundled.
+
+### WireGuard members in a paired v2 group
+
+Create each host's local key with `sudo gremgr wireguard-key`. On an SSH-only peer,
+use `sudo gremgr-peer --wireguard-key` from the administrator's shell. The command
+prints the public key. Keep the mode-0600 private key in that host's `/etc/gremgr`
+when restoring its identity.
+
+Enter each host's public key and an unused UDP listener port in the member form.
+The panel assigns the internal IPv4 link addresses. Each managed interface has a
+single peer and a host route for that peer. Existing WireGuard interfaces retain
+their settings. Allow the configured endpoint on the underlay before applying.

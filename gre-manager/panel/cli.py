@@ -3,6 +3,7 @@ import argparse
 import contextlib
 import json
 import os
+from pathlib import Path
 import secrets
 import sys
 
@@ -10,16 +11,25 @@ from . import __version__
 from .controller import Controller
 from .engine import discovered_ssh_ports, run
 from .store import Store
+from .v2_drivers import local_wireguard_key
 
 
 def main():
     parser = argparse.ArgumentParser(description="GRE Manager web panel; no interactive Bash menus.")
-    parser.add_argument("command", choices=["init", "status", "recover", "reset-password"], nargs="?", default="status")
+    parser.add_argument("command", choices=["init", "status", "recover", "reset-password", "topology", "wireguard-key"], nargs="?", default="status")
     parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--backup", type=Path, help="Preview the schema-1 backup topology.")
     args = parser.parse_args()
     if os.geteuid() != 0 and not os.environ.get("GRE_PANEL_HOME"):
         raise SystemExit("Run with sudo/root.")
     store = Store()
+    if args.command == "wireguard-key":
+        print(local_wireguard_key(store.paths, run, create=True))
+        return
+    if args.command == "topology":
+        config = store.read_backup(args.backup.read_bytes())[0] if args.backup else None
+        print(json.dumps(Controller(store).topology(config), ensure_ascii=False, indent=2))
+        return
     cfg = store.config()
     if args.command == "init":
         if not store.secret("password"):

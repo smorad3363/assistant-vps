@@ -25,7 +25,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Syntax and regression tests
         run: |
-          bash -n gre.sh gre-manager/install.sh gre-manager/gremgr.sh gre-manager/legacy-restore.sh gre-manager/tests/network_lab.sh
+          for script in gre.sh gre-manager/install.sh gre-manager/gremgr.sh gre-manager/legacy-restore.sh gre-manager/tests/*.sh; do
+            bash -n "$script"
+          done
           python3 gre-manager/build-release.py --check
           python3 -m compileall -q gre-manager/panel
           PYTHONPATH=gre-manager python3 -m unittest discover -s gre-manager/tests -p 'test_*.py' -v
@@ -33,26 +35,50 @@ jobs:
           python3 -m unittest discover -s gre-manager -p 'test_mtu.py' -v
           python3 -m unittest discover -s gre-manager -p 'test_docker_wireguard.py' -v
       - name: Install network test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq iptables iproute2 iputils-ping kmod sshpass conntrack strongswan xl2tpd ppp
+        run: bash gre-manager/tests/install_ci_deps.sh iptables iproute2 iputils-ping iperf3 kmod openssh-server sshpass conntrack strongswan xl2tpd ppp wireguard-tools
+      - name: Install the matching Ethernet pseudowire kernel module
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          if ! sudo modprobe -nq l2tp_eth; then
+            bash gre-manager/tests/install_ci_deps.sh "linux-modules-extra-$(uname -r)"
+          fi
+          sudo modprobe l2tp_eth
       - name: Real kernel TCP and UDP in isolated namespaces
+        env:
+          GREMGR_BENCH_LONG: ${{ matrix.os == 'ubuntu-24.04' }}
+          GREMGR_L2TPV3_VM: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
           sudo mkdir -p /run/netns
-          sudo unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
+          sudo --preserve-env=GREMGR_BENCH_LONG,GREMGR_L2TPV3_VM unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
       - name: Full noninteractive install and update on disposable runner
         run: |
           python3 gre-manager/build-release.py WORKTREE
-          sudo --preserve-env=GRE_PANEL_SKIP_ACME bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
+          sudo --preserve-env=GRE_PANEL_SKIP_ACME,GITHUB_ACTIONS bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
           sudo systemctl is-active gremgr-worker.service gremgr-web.service
-          sudo gremgr --version | grep -Fx 1.2.0
-          sudo --preserve-env=GRE_PANEL_SKIP_ACME bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
+          sudo gremgr --version | grep -Fx 2.0.0
+          sudo --preserve-env=GRE_PANEL_SKIP_ACME,GITHUB_ACTIONS bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
           curl -kfSs https://127.0.0.1:8787/ | grep -F GRE
           sudo systemctl kill --kill-who=main --signal=SIGKILL gremgr-worker.service
           for i in {1..30}; do curl -kfSs https://127.0.0.1:8787/ >/dev/null 2>&1 && break || sleep 1; done
           sudo systemctl is-active gremgr-worker.service gremgr-web.service
       - name: Real SSH provisioning and peer recovery
         run: |
-          sudo apt-get install -y -qq openssh-server
           sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/ssh_lab.py
+      - name: Benchmark lease cleanup after cancellation and process death
+        run: sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/bench_systemd_lab.py
+      - name: Both installer commands and automatic rollback
+        run: sudo env GITHUB_ACTIONS=true bash gre-manager/tests/install_rollback_lab.sh
+  release-upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Live upgrade from v1.2.0 using the pinned HTTPS installer
+        env:
+          GREMGR_RELEASE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: sudo --preserve-env=GITHUB_ACTIONS,GREMGR_RELEASE_REF bash gre-manager/tests/install_upgrade_lab.sh
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -72,8 +98,62 @@ jobs:
           trap 'kill $!' EXIT
           for i in {1..20}; do curl -fsS http://127.0.0.1:8877/ >/dev/null && break || sleep 1; done
           python3 tests/browser_test.py
+          python3 tests/v2_browser_test.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: panel-browser-screenshots
           path: gre-manager/test-output/
+  reboot-debian:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [gre, gretap, geneve, l2tpv3, l2tpv2, sit, eoip]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install virtual machine dependencies
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils
+      - name: Genuine Debian boot and saved flow acceptance
+        env:
+          GREMGR_REBOOT_METHOD: ${{ matrix.transport }}
+        run: bash gre-manager/tests/qemu_reboot_lab.sh
+  release-fedora:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install virtual machine dependencies
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils gnupg
+      - name: dnf installation, upgrade, rollback and reboot
+        run: bash gre-manager/tests/qemu_fedora_install_lab.sh
+  routeros-eoip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the RouterOS VM fixture dependencies
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 python3-pexpect unzip iptables iproute2 iputils-ping
+      - name: Verify EoIP interoperation with real RouterOS CHR
+        run: |
+          lab=$(mktemp -d)
+          trap 'sudo rm -rf -- "$lab"' EXIT
+          cd "$lab"
+          curl --fail --retry 3 --location --silent --show-error https://download.mikrotik.com/routeros/7.25.1/chr-7.25.1.img.zip --output chr.zip
+          printf '%s  %s\n' c78e8e24ca78d7f13496140e600702df07fe5c57d1a5d6d025654c8476ed2ed2 chr.zip | sha256sum --check
+          unzip -q chr.zip
+          sudo env GITHUB_ACTIONS=true PYTHONPATH="$GITHUB_WORKSPACE/gre-manager" /usr/bin/python3 "$GITHUB_WORKSPACE/gre-manager/tests/chr_eoip_lab.py" "$lab/chr-7.25.1.img" "$lab"
+  reboot-jammy-l2tpv3:
+    runs-on: ubuntu-24.04
+    # The stock guests may need matching kernel extras before a series of cold boots.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install virtual machine dependencies
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils
+      - name: L2TPv3 payload and reboot on stock Ubuntu 22.04 guests
+        env:
+          GREMGR_REBOOT_OS: ubuntu22
+          GREMGR_REBOOT_METHOD: l2tpv3
+        run: bash gre-manager/tests/qemu_reboot_lab.sh

@@ -14,7 +14,18 @@ import uuid
 from .engine import Engine, pair_values, run
 from . import __version__
 from .model import DEFAULTS, PanelError, address, integer
-from .store import Paths, atomic_json
+from .store import Paths, atomic_json, topology_node_id
+from .transactions import Journal, Participant
+from .v2_access import Access
+from .v2_bench_agent import configure as configure_benchmark
+from .v2_bench_agent import pending_for_owner
+from .v2_config import local_claims
+from .v2_drivers import local_wireguard_key
+from .v2_forwarding import require_ssh_protection, topology_views, with_ssh_protection
+
+PEER_MODULES = ("__init__.py", "model.py", "store.py", "engine.py", "agent.py",
+                "transactions.py", "v2_access.py", "v2_config.py", "v2_forwarding.py", "v2_health.py", "v2_resources.py", "v2_drivers.py",
+                "v2_benchmark.py", "v2_bench_agent.py", "v2_l2tp.py", "v2_ppp.py", "v2_eoip.py")
 
 
 def validate_peer(data):
@@ -49,6 +60,40 @@ def combined(paths, peers):
     config = json.loads(path.read_text()) if path.exists() else {"settings": dict(DEFAULTS), "connections": []}
     config["connections"] = config["connections"] + peers
     return config
+
+
+def v2_participant(paths, engine):
+    node_id = topology_node_id(paths)
+
+    def claims(change):
+        try:
+            config = json.loads(paths.config.read_text())
+        except FileNotFoundError:
+            config = {"settings": dict(DEFAULTS, port=22)}
+        if not change.get("group"):
+            return []
+        protected = with_ssh_protection(config, paths)
+        result = local_claims(change, node_id, protected, engine.interfaces())
+        candidate = Journal(paths.var / "v2-participant.json").read()
+        current = dict(protected, connections=combined(paths, read_peers(paths))["connections"])
+        if any(member["method"] in ("ipip", "gretap", "vxlan", "geneve", "l2tpv3", "l2tpv2", "sit", "eoip")
+               for listener in change["group"]["listeners"] for member in listener["members"]):
+            staged = dict(candidate, operations={**candidate["operations"], change["id"]: {
+                "phase": "prepared", "owner": change["owner"], "change": change,
+            }})
+            engine.preflight(topology_views(current, staged, node_id, paths=paths, require_keys_for=change["group_id"]))
+        candidate["groups"][change["group_id"]] = {"active": True, "owner": change["owner"], "group": change["group"]}
+        view = topology_views(current, candidate, node_id, paths=paths, require_keys_for=change["group_id"])
+        if isinstance(engine, Engine):
+            require_ssh_protection(view)
+        engine.preflight(view)
+        return result
+
+    def materialize(state, previous):
+        config = with_ssh_protection(combined(paths, read_peers(paths)), paths, remember=True)
+        engine.apply(topology_views(config, state, node_id, paths=paths), topology_views(config, previous, node_id, paths=paths))
+
+    return Participant(paths, node_id, claims, materialize=materialize)
 
 
 def recover(paths, transaction, engine):
@@ -109,18 +154,22 @@ def uninstall_peer(paths, engine):
     """Remove the dedicated helper only. Shared software and host tuning stay intact."""
     if paths.etc != Path("/etc/gremgr"):
         raise PanelError("Peer removal requires the system installation.")
+    if pending_for_owner(paths):
+        raise PanelError("A benchmark is still using this helper. Wait until its resources are released.", "busy")
     wrapper = Path("/usr/local/sbin/gremgr-peer")
     if "/opt/gremgr-peer" not in wrapper.read_text():
         raise PanelError("The peer wrapper is not owned by this installer.")
     engine.clear_owned()
     run("systemctl", "disable", "--now", "gremgr-peer.service")
+    run("systemctl", "disable", "--now", "gremgr-peer-monitor.service", check=False)
     Path("/etc/systemd/system/gremgr-peer.service").unlink(missing_ok=True)
+    Path("/etc/systemd/system/gremgr-peer-monitor.service").unlink(missing_ok=True)
     Path("/etc/sudoers.d/gremgr-peer").unlink(missing_ok=True)
     run("systemctl", "daemon-reload")
     base = Path("/opt/gremgr-peer/panel")
-    for name in ("__init__", "model", "store", "engine", "agent"):
-        (base / (name + ".py")).unlink(missing_ok=True)
-        for cached in (base / "__pycache__").glob(name + ".*.pyc"):
+    for name in PEER_MODULES:
+        (base / name).unlink(missing_ok=True)
+        for cached in (base / "__pycache__").glob(Path(name).stem + ".*.pyc"):
             cached.unlink()
     wrapper.unlink(missing_ok=True)
     (paths.etc / "peers.json").unlink(missing_ok=True)
@@ -136,15 +185,23 @@ def uninstall_peer(paths, engine):
 
 def action(paths, request, engine=None):
     engine = engine or Engine(paths)
+    operation = request.get("action")
+    if operation == "v2/request":
+        participant = v2_participant(paths, engine)
+        owner = Access(paths, participant.node_id).trusted_owner(request, "ssh")
+        step = request.get("step")
+        if isinstance(step, str) and step.startswith("benchmark/"):
+            return configure_benchmark(paths, engine, owner, step, request.get("change"))
+        return participant.request(owner, step, request.get("change"))
     # Reconcile expired leases even if a rollback unit failed or was killed.
     # Active leases retain their full commit window.
     for pending in (paths.etc / "transactions").glob("*.json"):
         if json.loads(pending.read_text()).get("deadline", 0) <= time.time():
             recover(paths, pending.stem, engine)
     peers = read_peers(paths)
-    operation = request.get("action")
     if operation == "status":
-        return {"version": __version__, "addresses": engine.interfaces(), "peers": len(peers),
+        return {"version": __version__, "v2_node_id": topology_node_id(paths), "v2_protocol": 2,
+                "addresses": engine.interfaces(), "peers": len(peers),
                 "routes": engine.routes(),
                 "pair_profiles": [{"gre_id": x["gre"]["id"], "service_ip": x["service_ip"], "mtu": x["gre"]["mtu"],
                                    "slot": x["gre"].get("slot", 0), "enabled": x.get("enabled", True),
@@ -155,9 +212,20 @@ def action(paths, request, engine=None):
             raise PanelError("The management key was not found.")
         if list((paths.etc / "transactions").glob("*.json")):
             raise PanelError("A peer transaction is still pending.", "busy")
+        participant = v2_participant(paths, engine)
+        access = Access(paths, participant.node_id)
+        owner = access.ssh_owner(blob)
+        if owner and pending_for_owner(paths, owner):
+            raise PanelError("A benchmark is still using the SSH management key.", "busy")
+        state = participant.journal.read()
+        if owner and (any(item["active"] and item["owner"] == owner for item in state["groups"].values())
+                      or any(op["phase"] == "prepared" and op["owner"] == owner for op in state["operations"].values())):
+            raise PanelError("The SSH key is still used by a v2 group or reservation.", "busy")
         reason = ("peers" if peers else "panel" if paths.config.exists() or Path("/opt/gremgr/current/panel/worker.py").exists() else
                   "legacy" if list((paths.etc / "pairs").glob("*.json")) else
                   "managers" if other_managers(path, blob) else "")
+        if owner:
+            access.forget_ssh(blob)
         if not reason:
             uninstall_peer(paths, engine)
         revoke_key(path, blob)
@@ -165,6 +233,9 @@ def action(paths, request, engine=None):
     if operation == "revoke-key":
         path, blob = management_key(request)
         revoke_key(path, blob)
+        access = Access(paths, topology_node_id(paths))
+        if access.ssh_owner(blob):
+            access.forget_ssh(blob)
         return {"revoked": True}
     if operation == "prepare":
         changes = request.get("changes", [{"peer": request.get("peer"), "remove": request.get("remove", False)}])
@@ -213,6 +284,18 @@ def main():
     if os.geteuid() != 0:
         raise SystemExit("Run the peer helper as root.")
     paths = Paths()
+    if sys.argv[1:] == ["--wireguard-key"]:
+        print(local_wireguard_key(paths, run, create=True))
+        return
+    if sys.argv[1:] == ["--watch"]:
+        import threading
+        from .v2_health import Watchdog
+
+        engine = Engine(paths)
+        monitor = Watchdog(v2_participant(paths, engine), lambda: with_ssh_protection(combined(paths, read_peers(paths)), paths),
+                           engine.run)
+        monitor.serve(threading.Event(), lambda error: print("V2 health checks: " + error[:550], file=sys.stderr))
+        return
     with open(paths.etc / "network.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         engine = Engine(paths)

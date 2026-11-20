@@ -1,12 +1,14 @@
 """Owned GRE devices and scoped Netfilter rules. Never restores a host firewall."""
 from collections import defaultdict
 import contextlib
+import fcntl
 import hashlib
 import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import subprocess
 import time
@@ -14,10 +16,16 @@ import uuid
 
 from .model import PanelError, address, ranges_for, subtract
 from .store import atomic_json
+from .v2_drivers import driver_for, gre_key, ipv6_enabled, local_wireguard_key
+from .v2_forwarding import add_listener_rules, add_receiver_rules, installed_topology, require_ssh_protection
+from .v2_resources import admission_pressure, pressure_file
 
-CHAINS = {"nat": ["GMP_PRE", "GMP_POST", "GMP_LOCAL"], "filter": ["GMP_FWD", "GMP_INPUT", "GMP_COUNT"], "mangle": ["GMP_MSS"]}
+CHAINS = {"nat": ["GMP_PRE", "GMP_POST", "GMP_LOCAL"], "filter": ["GMP_FWD", "GMP_INPUT", "GMP_COUNT"],
+          "mangle": ["GMP_MSS", "GMP_MSS_LOCAL"]}
 HOOKS = [("nat", "PREROUTING", "GMP_PRE"), ("nat", "POSTROUTING", "GMP_POST"), ("nat", "INPUT", "GMP_LOCAL"),
-         ("filter", "FORWARD", "GMP_FWD"), ("filter", "INPUT", "GMP_INPUT"), ("mangle", "FORWARD", "GMP_MSS")]
+         ("filter", "FORWARD", "GMP_FWD"), ("filter", "INPUT", "GMP_INPUT"), ("mangle", "FORWARD", "GMP_MSS"),
+         ("mangle", "OUTPUT", "GMP_MSS_LOCAL")]
+HOOK_TAG = ("-m", "comment", "--comment", "gmpanel:hook")
 
 
 def run(*args, check=True, timeout=20, input=None):
@@ -52,8 +60,48 @@ def local_addresses():
 
 
 def discovered_ssh_ports():
-    result = run("sshd", "-T", check=False)
-    return sorted({int(x.split()[1]) for x in result.stdout.splitlines() if re.fullmatch(r"port [0-9]+", x)}) or [22]
+    def probe(*args):
+        with contextlib.suppress(PanelError):
+            result = run(*args, check=False, timeout=5)
+            if result.returncode == 0 and (args[0] != "ss" or not result.stderr):
+                return result.stdout
+        return None
+
+    def port(value):
+        number = value.rsplit(":", 1)[-1]
+        if re.fullmatch(r"[0-9]{1,5}", number) and 1 <= int(number) <= 65535:
+            ports.add(int(number))
+
+    ports = set()
+    config = probe("sshd", "-T") or ""
+    for line in config.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] in ("port", "listenaddress"):
+            port(fields[1])
+    connection = os.environ.get("SSH_CONNECTION", "").split()
+    if len(connection) == 4:
+        port(connection[3])
+
+    listening = probe("ss", "-H", "-ltnp")
+    sockets = probe("systemctl", "list-sockets", "--no-legend", "--no-pager", "--plain")
+    systemd_listener = False
+    for line in (listening or "").splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        owners = " ".join(fields[5:])
+        if re.search(r'\("(?:sshd(?:-session)?|dropbear)",', owners):
+            port(fields[3])
+        systemd_listener |= '("systemd",' in owners
+    for line in (sockets or "").splitlines():
+        fields = line.split()
+        if len(fields) > 1 and any(re.fullmatch(r"(?:ssh|sshd|dropbear)(?:@\S*)?\.(?:socket|service)", f)
+                                   for f in fields[1:]):
+            port(fields[0])
+    if listening is None or (systemd_listener and sockets is None):
+        raise PanelError("Could not verify the host's SSH listeners. Check sshd, ss and systemd before applying.",
+                         "ssh_discovery", "ssh_ports")
+    return sorted(ports)
 
 
 def gre_for(c):
@@ -64,8 +112,72 @@ def gre_for(c):
     return result
 
 
+def restore_token(value):
+    """Render an argument for iptables-restore's double-quoted rules format."""
+    if value and not any(letter.isspace() or letter in '\"\\' for letter in value):
+        return value
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
 def match_port(low, high):
     return str(low) if low == high else f"{low}:{high}"
+
+
+def udp_carrier_matches(rule, link, interface=None):
+    protocol = ("ipv6", "41") if link.get("family") == 6 else ("udp", "17")
+    if "-p" in rule:
+        position = rule.index("-p")
+        if (rule[position + 1] in (*protocol, "all", "0")) == (rule[position - 1] == "!"):
+            return False
+    if interface and "-i" in rule:
+        position = rule.index("-i")
+        selector = rule[position + 1]
+        matches = interface.startswith(selector[:-1]) if selector.endswith("+") else interface == selector
+        if matches == (rule[position - 1] == "!"):
+            return False
+    for flag, name in (("-s", "outer_peer"), ("-d", "outer_local")):
+        if flag in rule:
+            position = rule.index(flag)
+            network = ipaddress.IPv4Network(rule[position + 1], strict=False)
+            if (ipaddress.IPv4Address(link[name]) in network) == (rule[position - 1] == "!"):
+                return False
+    for flag in ("--dport", "--dports"):
+        if flag not in rule:
+            continue
+        if "listen_port" not in link:
+            return False
+        try:
+            position = rule.index(flag)
+            ranges = [tuple(int(port) for port in value.split(":")) for value in rule[position + 1].split(",")]
+            matches = any(ports[0] <= link["listen_port"] <= ports[-1] for ports in ranges)
+            if matches == (rule[position - 1] == "!"):
+                return False
+        except ValueError:
+            pass
+    return True
+
+
+def external_carrier_forward(rules, link, interface):
+    chains = defaultdict(list)
+    for line in rules.splitlines():
+        if line.startswith("-A "):
+            fields = shlex.split(line)
+            chains[fields[1]].append(fields[2:])
+    visited, pending = {"GMP_PRE"}, ["PREROUTING"]
+    while pending:
+        chain = pending.pop()
+        if chain in visited:
+            continue
+        visited.add(chain)
+        for rule in chains[chain]:
+            jump = next((rule[rule.index(flag) + 1] for flag in ("-j", "-g") if flag in rule), None)
+            if not jump or not udp_carrier_matches(rule, link, interface):
+                continue
+            if jump in ("DNAT", "REDIRECT", "NETMAP"):
+                return True
+            if jump in chains:
+                pending.append(jump)
+    return False
 
 
 def monitored(c, settings):
@@ -92,21 +204,32 @@ def build_rules(config, interfaces, docker_udp=False):
     protected = sorted(set(config["settings"]["ssh_ports"] + config["settings"]["reserved_ports"] + [22, config["settings"]["port"]]))
     panel_enabled = config.get("web_enabled", any(x["kind"] != "peer" for x in config["connections"]))
     protected_ips = set(interfaces) if panel_enabled else {x["listen_ip"] for x in config["connections"] if x["kind"] != "peer"}
+    protected_ips.update(listener["ip"] for _, _, listener in config.get("v2_listeners", []))
     for ip in sorted(protected_ips):
         for proto in ("tcp", "udp"):
             for p in protected:
                 add("nat", "GMP_PRE", "-i", interfaces[ip], "-d", ip, "-p", proto, "--dport", p, "-j", "ACCEPT")
         if panel_enabled:
             add("filter", "GMP_INPUT", "-i", interfaces[ip], "-d", ip, "-p", "tcp", "--dport", config["settings"]["port"], "-j", "ACCEPT")
+    for link in Engine.gre_devices(config):
+        if "listen_port" in link or link.get("family") == 6:
+            add("nat", "GMP_PRE", "-i", interfaces[link["outer_local"]], "-s", link["outer_peer"],
+                "-d", link["outer_local"], *driver_for(link).firewall(link), "-j", "ACCEPT")
+        if link.get("family") == 6:
+            add("filter", "GMP_INPUT", "-i", interfaces[link["outer_local"]], "-s", link["outer_peer"],
+                "-d", link["outer_local"], *driver_for(link).firewall(link), "-j", "ACCEPT")
 
-    def limiter(base, identity, direction, speed, port="all"):
+    def limiter(base, identity, direction, speed, port="all", minimum=1000):
         if not speed:
             return
         # Byte-rate policing is confined to this flow. No host qdisc is replaced.
-        per_second = max(1000, int(speed * 1000000 / 8))
-        # xt_hashlimit requires a byte burst at least as large as one second's
-        # rate. Keep it explicit in bytes and never replace the host qdisc.
-        burst = max(2048, per_second)
+        per_second = max(16, minimum, int(speed * 1000000 / 8))
+        # xt_hashlimit encodes a reciprocal in 16-byte units. The decoded rate
+        # is also its minimum accepted burst and can exceed the requested rate.
+        max_cost = (1 << 32) - 1
+        encoded_rate = max_cost // (per_second // 16 + 1)
+        minimum_burst = (max_cost // encoded_rate - 1) * 16
+        burst = max(2048, per_second + 1024, minimum_burst)
         rate_name = f"gm{identity}{direction[0]}{port}"[:30]
         add("filter", "GMP_FWD", *base, "-m", "hashlimit", "--hashlimit-above", f"{per_second}b/s",
             "--hashlimit-burst", str(burst) + "b", "--hashlimit-name", rate_name, "--hashlimit-htable-expire", "1000",
@@ -120,8 +243,12 @@ def build_rules(config, interfaces, docker_udp=False):
             g = c["gre"]
             t, peer = g["tunnel"], g["peer_tun"]
             wan = interfaces[g["outer_local"]]
-            add("filter", "GMP_INPUT", "-i", wan, "-s", g["outer_peer"], "-d", g["outer_local"], "-p", "gre", "-j", "ACCEPT")
+            add("filter", "GMP_INPUT", "-i", wan, "-s", g["outer_peer"], "-d", g["outer_local"],
+                *driver_for(g).firewall(g), "-j", "ACCEPT")
             add("filter", "GMP_INPUT", "-i", t, "-s", peer, "-d", g["local_tun"], "-p", "icmp", "-j", "ACCEPT")
+            if "v2_ports" in c:
+                add_receiver_rules(add, c, interfaces, config["settings"])
+                continue
             for proto in ("tcp", "udp"):
                 incoming = ["-i", t, "-s", peer, "-d", g["local_tun"], "-p", proto]
                 if docker_udp and proto == "udp" and c["service_ip"] in interfaces:
@@ -197,6 +324,7 @@ def build_rules(config, interfaces, docker_udp=False):
             for switch in ("-i", "-o"):
                 add("mangle", "GMP_MSS", switch, device, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
                     "-j", "TCPMSS", "--set-mss", c["mtu"] - 40)
+    add_listener_rules(add, config, interfaces, limiter)
     return tables
 
 
@@ -217,8 +345,11 @@ class Engine:
     def clear_owned(self):
         """Used only after the peer confirms no panel, peers or other managers remain."""
         for table, hook, chain in HOOKS:
-            while self.run("iptables", "-w", "5", "-t", table, "-C", hook, "-j", chain, check=False).returncode == 0:
-                self.run("iptables", "-w", "5", "-t", table, "-D", hook, "-j", chain)
+            prefix = ("iptables", "-w", "5", "-t", table)
+            for tag in (HOOK_TAG, ()):
+                jump = (*tag, "-j", chain)
+                while self.run(*prefix, "-C", hook, *jump, check=False).returncode == 0:
+                    self.run(*prefix, "-D", hook, *jump)
         for table, chains in CHAINS.items():
             present = [chain for chain in chains if self.run("iptables", "-w", "5", "-t", table, "-S", chain, check=False).returncode == 0]
             for chain in present:
@@ -226,9 +357,150 @@ class Engine:
             for chain in reversed(present):
                 self.run("iptables", "-w", "5", "-t", table, "-X", chain)
 
+    def check_udp_overlays(self, links, interfaces):
+        if not links:
+            return
+        method = links[0]["method"]
+        name = method.upper()
+        identifiers, ports, devices = {}, set(), {}
+        for link in links:
+            interface = interfaces.get(link["outer_local"])
+            if not interface:
+                raise PanelError(f"The configured {name} source address is unavailable.", "local_ip", "outer_ip")
+            if method == "geneve":
+                if driver_for(link).preferred_source(link, self.run) != (link["outer_local"], interface):
+                    raise PanelError("Select the source address and interface used by the route to the GENEVE endpoint.", "route", "outer_ip")
+            if interface not in devices:
+                devices[interface] = json.loads(self.run("ip", "-j", "link", "show", "dev", interface).stdout)[0]
+            if link["mtu"] + driver_for(link).overhead > devices[interface]["mtu"]:
+                raise PanelError(f"Lower the {name} MTU for this underlay interface.", "link_policy", "mtu")
+            peer = link["outer_peer"] if method == "geneve" else None
+            identity = link["listen_port"], link["vni"], peer
+            if identifiers.setdefault(identity, link)["tunnel"] != link["tunnel"]:
+                raise PanelError(f"Two {name} links use the same endpoint, VNI and UDP port.", "device_conflict", "vni")
+            ports.add(link["listen_port"])
+        kernel_ports = set()
+        for row in driver_for(links[0]).inspect(self.run):
+            data = row.get("linkinfo", {}).get("info_data", {})
+            port = data.get("port")
+            if port not in ports:
+                continue
+            peer = data.get("remote") if method == "geneve" else None
+            expected = identifiers.get((port, data.get("id"), peer))
+            if expected and (row.get("ifname") != expected["tunnel"] or not self.owns_link(expected, row)):
+                raise PanelError(f"An existing {name} interface uses the requested VNI and UDP port.", "device_conflict", "vni")
+            if method == "vxlan" and expected and (data.get("link") != interfaces[expected["outer_local"]] or data.get("learning") is not False):
+                raise PanelError("The VXLAN underlay or learning setting was changed outside the panel.", "device_conflict", "outer_ip")
+            managed = expected and self.owns_link(expected, row)
+            if not managed and not row.get("ifalias", "").startswith("gremgr:v2:"):
+                raise PanelError(f"An existing {name} interface already uses this UDP port.", "device_conflict", "port")
+            kernel_ports.add(port)
+        unused = ports - kernel_ports
+        if unused:
+            for row in self.run("ss", "-H", "-una").stdout.splitlines():
+                fields = row.split()
+                port = fields[3].rsplit(":", 1)[-1] if len(fields) > 3 else ""
+                if port.isdecimal() and int(port) in unused:
+                    raise PanelError(f"An existing UDP socket already uses the {name} port.", "device_conflict", "port")
+
+    def check_wireguard(self, links, interfaces):
+        if not links:
+            return
+        local_key = local_wireguard_key(self.paths, self.run)
+        ports = {}
+        for link in links:
+            if local_key != link["public_key"]:
+                raise PanelError("The public key does not match this WireGuard host.", "wireguard_key")
+            route = json.loads(self.run("ip", "-j", "-4", "route", "get", link["outer_peer"]).stdout)[0]
+            if (route.get("prefsrc"), route.get("dev")) != (link["outer_local"], interfaces.get(link["outer_local"])):
+                raise PanelError("Select the source address and interface used by the route to the WireGuard endpoint.", "route", "outer_ip")
+            if ports.setdefault(link["listen_port"], link["tunnel"]) != link["tunnel"]:
+                raise PanelError("Two WireGuard links cannot share this UDP port.", "device_conflict")
+            known = self.run("wg", "show", link["tunnel"], "peers", check=False)
+            if known.returncode == 0 and any(key != link["peer_public_key"] for key in known.stdout.split()):
+                raise PanelError("Pause this group before replacing its WireGuard peer key.", "device_conflict", "public_key")
+        claimed = set()
+        for row in self.run("wg", "show", "all", "listen-port").stdout.splitlines():
+            fields = row.split()
+            if len(fields) != 2 or not fields[1].isdecimal():
+                continue
+            port = int(fields[1])
+            if port in ports:
+                if ports[port] != fields[0]:
+                    raise PanelError("An existing WireGuard interface already listens on this UDP port.", "device_conflict")
+                claimed.add(port)
+        for row in self.run("ss", "-H", "-lun").stdout.splitlines():
+            fields = row.split()
+            if len(fields) < 4:
+                continue
+            port = fields[3].rsplit(":", 1)[-1]
+            if port.isdecimal() and int(port) in ports.keys() - claimed:
+                raise PanelError("An existing UDP socket already listens on the WireGuard port.", "device_conflict", "port")
+
     def preflight(self, config):
         interfaces = self.interfaces()
-        for c in config["connections"]:
+        forwarding = list(config["connections"])
+        for _, _, listener in config.get("v2_listeners", []):
+            if any(member["method"] == "direct" and member["service_ip"] in interfaces for member in listener["members"]):
+                raise PanelError("A direct destination cannot be the input server itself.", "loop")
+            forwarding.append(dict(listener, listen_ip=listener["ip"], kind="v2"))
+        for g in config.get("v2_devices", []):
+            if g["outer_local"] not in interfaces:
+                raise PanelError("The selected tunnel outer address is unavailable on this node.", "local_ip")
+        unkeyed_pairs, keyed_pairs, vxlan, wg_links, geneve, l2tp, ppp_links, eoip = {}, {}, [], [], [], [], [], []
+        for link in self.gre_devices(config):
+            if (method := link.get("method")) in ("ipip", "sit"):
+                pair = link["outer_local"], link["outer_peer"]
+                if unkeyed_pairs.setdefault(method, {}).setdefault(pair, link)["tunnel"] != link["tunnel"]:
+                    raise PanelError(f"{method.upper()} cannot distinguish two tunnels with the same outer addresses.", "device_conflict")
+            if link.get("method") == "vxlan":
+                vxlan.append(link)
+            if link.get("method") == "geneve":
+                geneve.append(link)
+            if link.get("method") == "wireguard":
+                wg_links.append(link)
+            if link.get("method") == "eoip":
+                eoip.append(link)
+            if link.get("method") == "l2tpv2":
+                ppp_links.append(link)
+            if link.get("method") == "l2tpv3":
+                l2tp.append(link)
+            if link.get("method") == "gretap":
+                key = link["outer_local"], link["outer_peer"], link["key"]
+                if keyed_pairs.setdefault(key, link)["tunnel"] != link["tunnel"]:
+                    raise PanelError("Choose a different GRETAP key for this endpoint pair.", "device_conflict", "key")
+        if "sit" in unkeyed_pairs and not ipv6_enabled(self.run):
+            raise PanelError("Enable IPv6 on this host and new interfaces before creating a SIT link.", "ipv6_disabled", "sit")
+        for method, pairs in unkeyed_pairs.items():
+            inspected = self.run("ip", "-j", "-d", "link", "show", "type", method, check=False)
+            if inspected.returncode == 0:
+                for row in json.loads(inspected.stdout):
+                    data = row.get("linkinfo", {}).get("info_data", {})
+                    link = pairs.get((data.get("local"), data.get("remote")))
+                    if link and (row.get("ifname") != link["tunnel"] or not self.owns_link(link, row)):
+                        raise PanelError(f"An existing {method.upper()} interface uses the requested outer addresses.", "device_conflict")
+        if keyed_pairs:
+            observed = self.run("ip", "-j", "-d", "link", "show", "type", "gretap").stdout
+            for row in json.loads(observed):
+                data = row.get("linkinfo", {}).get("info_data", {})
+                link = keyed_pairs.get((data.get("local"), data.get("remote"), gre_key(data.get("ikey", 0))))
+                if link and (row.get("ifname") != link["tunnel"] or not self.owns_link(link, row)):
+                    raise PanelError("An existing GRETAP interface uses that endpoint pair and key.", "device_conflict", "key")
+        self.check_udp_overlays(vxlan, interfaces)
+        self.check_udp_overlays(geneve, interfaces)
+        self.check_wireguard(wg_links, interfaces)
+        if eoip:
+            driver_for(eoip[0]).check(eoip, interfaces, self.run)
+        if ppp_links:
+            driver_for(ppp_links[0]).check(ppp_links, interfaces, self.paths, self.run)
+        if l2tp:
+            driver_for(l2tp[0]).check(l2tp, interfaces, self.paths, self.run)
+        carriers = [*vxlan, *wg_links, *geneve, *l2tp, *ppp_links]
+        transports = {}
+        for link in carriers:
+            if transports.setdefault(link["listen_port"], link["method"]) != link["method"]:
+                raise PanelError("Different UDP tunnel types require separate ports on this node.", "device_conflict", "port")
+        for c in forwarding:
             if not c.get("enabled", True):
                 continue
             local = c["gre"]["outer_local"] if c["kind"] == "peer" else c["listen_ip"]
@@ -237,6 +509,9 @@ class Engine:
             if c["kind"] == "direct" and c["resolved_ip"] in interfaces:
                 raise PanelError("A direct destination cannot be the input server itself.", "loop")
         existing = self.run("iptables-save", "-t", "nat").stdout
+        for link in [*carriers, *unkeyed_pairs.get("sit", {}).values()]:
+            if external_carrier_forward(existing, link, interfaces[link["outer_local"]]):
+                raise PanelError("An external port forward already handles this tunnel endpoint.", "external_conflict", "port")
         for line in existing.splitlines():
             if not line.startswith("-A PREROUTING ") or "-j DNAT" not in line or "gmpanel:" in line:
                 continue
@@ -244,7 +519,7 @@ class Engine:
                 continue
             parts = shlex.split(line)
             destination = parts[parts.index("-d") + 1] if "-d" in parts else None
-            for c in config["connections"]:
+            for c in forwarding:
                 if not c.get("enabled", True) or c["kind"] == "peer":
                     continue
                 if destination and ipaddress.IPv4Address(c["listen_ip"]) not in ipaddress.IPv4Network(destination, strict=False):
@@ -266,24 +541,94 @@ class Engine:
         return interfaces
 
     def ensure_gre(self, g, interfaces):
-        self.run("modprobe", "ip_gre", check=False)
-        current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
-        if current.returncode == 0:
-            details = json.loads(current.stdout)[0].get("linkinfo", {})
-            data = details.get("info_data", {})
-            key = data.get("ikey", 0)
-            if isinstance(key, str):
-                key = int(ipaddress.IPv4Address(key)) if "." in key else int(key)
-            if details.get("info_kind") != "gre" or data.get("local") != g["outer_local"] or data.get("remote") != g["outer_peer"] or key != g["key"]:
-                raise PanelError("Another program owns this GRE interface.", "device_conflict")
+        driver = driver_for(g)
+        interface = interfaces[g["outer_local"]]
+        if driver.method == "l2tpv2":
+            driver.configure(g, self.paths, self.run)
+            return
+        v6 = g.get("family") == 6
+        subnet = ipaddress.ip_interface(g["local_tun"] + "/" + str(g.get("prefix_length", 30)))
+        self.run("modprobe", driver.module, check=False)
+        row = self.inspect_link(g, driver)
+        if not row:
+            routes = ["ip", "-j", "-6", "route", "show", "table", "all"] if v6 else ["ip", "-j", "-4", "route", "show"]
+            for route in json.loads(self.run(*routes).stdout):
+                destination = route.get("dst")
+                if destination in (None, "default"):
+                    continue
+                existing = ipaddress.ip_network(destination, strict=False)
+                if (subnet.network.overlaps(existing) if v6 else subnet.ip in existing):
+                    raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
+        if driver.method == "eoip":
+            driver.configure(g, self.paths, interface, row, self.run)
+            return
+        if driver.method == "l2tpv3":
+            driver.configure(g, self.paths, self.run)
         else:
-            for route in json.loads(self.run("ip", "-j", "-4", "route", "show").stdout):
-                if route.get("dst") not in (None, "default") and ipaddress.IPv4Address(g["local_tun"]) in ipaddress.IPv4Network(route["dst"], strict=False):
-                    raise PanelError("The private GRE subnet overlaps an existing route.", "route_conflict")
-            self.run("ip", "tunnel", "add", g["tunnel"], "mode", "gre", "local", g["outer_local"], "remote", g["outer_peer"], "key", g["key"], "ttl", "64", "dev", interfaces[g["outer_local"]])
-        self.run("ip", "addr", "replace", g["local_tun"] + "/30", "dev", g["tunnel"])
+            self.ensure_ip_link(g, driver, interface, row)
+        if driver.method == "wireguard":
+            driver.configure(g, self.paths, self.run)
+        addr = ["ip", "-6", "addr"] if v6 else ["ip", "addr"]
+        self.run(*addr, "replace", str(subnet), "dev", g["tunnel"])
         self.run("ip", "link", "set", "dev", g["tunnel"], "mtu", g["mtu"], "up")
-        self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
+        if not v6:
+            self.run("sysctl", "-qw", "net.ipv4.conf." + g["tunnel"] + ".rp_filter=2")
+
+    def ensure_ip_link(self, g, driver, interface, row):
+        stage = self.staging_path(g) if getattr(driver, "staged_marker", False) else None
+        if row:
+            if not self.owns_link(g, row):
+                raise PanelError("Another program owns this tunnel interface.", "device_conflict")
+            if stage:
+                if not row.get("ifalias"):
+                    self.run("ip", "link", "set", "dev", g["tunnel"], "alias", driver.marker(g))
+                stage.unlink(missing_ok=True)
+            refresh = driver.refresh(g, row.get("linkinfo", {}), interface)
+            if refresh:
+                self.run(*refresh)
+        else:
+            create = driver.create(g, interface)
+            if stage:
+                suffix = secrets.token_hex(5)
+                mac = "02:" + ":".join(suffix[i:i + 2] for i in range(0, len(suffix), 2))
+                atomic_json(stage, {"id": g["id"], "mac": mac})
+                position = create.index("type")
+                create[position:position] = ["address", mac]
+            self.run(*create)
+            marker = driver.marker(g)
+            if marker:
+                try:
+                    self.run("ip", "link", "set", "dev", g["tunnel"], "alias", marker)
+                except PanelError:
+                    with contextlib.suppress(PanelError):
+                        self.run(*driver.delete(g))
+                    raise
+            if stage:
+                stage.unlink(missing_ok=True)
+
+    def staging_path(self, link):
+        return self.paths.var / "link-staging" / (link["tunnel"] + ".json")
+
+    def owns_link(self, link, row):
+        driver = driver_for(link)
+        if driver.owns(link, row):
+            return True
+        if row.get("ifalias") or not getattr(driver, "staged_marker", False):
+            return False
+        try:
+            saved = json.loads(self.staging_path(link).read_text())
+        except (OSError, ValueError):
+            return False
+        return (saved.get("id") == link["id"] and saved.get("mac") == row.get("address")
+                and bool(saved.get("mac")) and driver.owns(link, dict(row, ifalias=driver.marker(link))))
+
+    def inspect_link(self, link, driver):
+        if driver.method in ("vxlan", "geneve"):
+            rows = driver.inspect(self.run, link["tunnel"])
+        else:
+            result = self.run("ip", "-j", "-d", "link", "show", link["tunnel"], check=False)
+            rows = json.loads(result.stdout) if result.returncode == 0 else []
+        return rows[0] if rows else None
 
     def docker_udp(self):
         result = self.run("iptables", "-w", "10", "-t", "nat", "-S", "DOCKER", check=False)
@@ -298,25 +643,37 @@ class Engine:
             lines += ["-F " + name for name in chains]
             for name, rules in chains.items():
                 # iptables-restore parses a rules file, not a shell command.
-                # Inversion must remain a bare token; shlex.join quotes '!'.
-                lines += ["-A " + name + " " + " ".join("!" if x == "!" else shlex.quote(x) for x in rule) for rule in rules]
+                lines += ["-A " + name + " " + " ".join(map(restore_token, rule)) for rule in rules]
             lines.append("COMMIT")
             self.run("iptables-restore", "-w", "10", "--noflush", input="\n".join(lines) + "\n")
         for table, parent, own in HOOKS:
             prefix = ("iptables", "-w", "10", "-t", table)
-            if self.run(*prefix, "-C", parent, "-m", "comment", "--comment", "gmpanel:hook", "-j", own, check=False).returncode:
-                self.run(*prefix, "-I", parent, "1", "-m", "comment", "--comment", "gmpanel:hook", "-j", own)
+            if self.run(*prefix, "-C", parent, *HOOK_TAG, "-j", own, check=False).returncode:
+                self.run(*prefix, "-I", parent, "1", *HOOK_TAG, "-j", own)
         self.epoch_file.write_text(uuid.uuid4().hex)
 
     def apply(self, config, previous=None):
+        with (self.paths.etc / "kernel-apply.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return self._apply(config, previous)
+
+    def _apply(self, config, previous):
+        previous = installed_topology(self.paths, previous) if previous is not None else None
+        config = installed_topology(self.paths, config)
+        marker = pressure_file(self.paths)
+        was_busy = marker.exists()
+        busy = admission_pressure(config["settings"], was_busy)
+        config = dict(config, v2_conntrack_busy=busy)
+        require_ssh_protection(config, previous)
         interfaces = self.preflight(config)
-        previous = previous or dict(config, connections=[])
+        previous = previous or dict(config, connections=[], v2_listeners=[], v2_devices=[])
+        previous = dict(previous, v2_conntrack_busy=was_busy)
         old_gre = {g["tunnel"]: g for g in self.gre_devices(previous)}
         try:
             for g in self.gre_devices(config):
                 self.ensure_gre(g, interfaces)
             self.sync_reply_routes(config, interfaces)
-            if any(x.get("enabled", True) for x in config["connections"]):
+            if config.get("v2_listeners") or any(x.get("enabled", True) for x in config["connections"]):
                 self.run("sysctl", "-qw", "net.ipv4.ip_forward=1")
             self.restore_owned(build_rules(config, interfaces, self.docker_udp()))
         except Exception:
@@ -330,15 +687,24 @@ class Engine:
                     self.remove_gre(g)
             raise
         wanted = {g["tunnel"] for g in self.gre_devices(config)}
-        for name, g in old_gre.items():
+        retired = dict(old_gre)
+        for snapshot in (previous, config):
+            retired.update((link["tunnel"], link) for link in snapshot.get("v2_unavailable_devices", []))
+        for name, g in retired.items():
             if name not in wanted:
                 self.remove_gre(g)
+        if busy:
+            marker.touch()
+        else:
+            marker.unlink(missing_ok=True)
 
     def sync_reply_routes(self, config, interfaces):
         for c in config["connections"]:
             if c["kind"] != "peer" or not c.get("enabled", True):
                 continue
             g = c["gre"]
+            if g.get("method") == "l2tpv2":
+                continue
             source = c["service_ip"] if c["service_ip"] in interfaces else g["local_tun"]
             # Changes only the host route created for our own GRE address.
             # Public service-address routes and the default route are untouched.
@@ -352,22 +718,22 @@ class Engine:
 
     @staticmethod
     def gre_devices(config):
+        yield from config.get("v2_devices", [])
         for c in config["connections"]:
             if c.get("enabled", True) and c["kind"] in ("gre", "peer"):
                 yield c["gre"] if c["kind"] == "peer" else gre_for(c)
 
     def remove_gre(self, g):
         # Verify ownership even on deletion. Never deletes an arbitrary name.
-        current = self.run("ip", "-j", "-d", "link", "show", g["tunnel"], check=False)
-        if current.returncode:
+        driver = driver_for(g)
+        if driver.method in ("l2tpv2", "l2tpv3", "eoip"):
+            driver.remove(g, self.paths, self.run)
             return
-        details = json.loads(current.stdout)[0].get("linkinfo", {})
-        data = details.get("info_data", {})
-        key = data.get("ikey", 0)
-        if isinstance(key, str):
-            key = int(ipaddress.IPv4Address(key)) if "." in key else int(key)
-        if details.get("info_kind") == "gre" and data.get("local") == g["outer_local"] and data.get("remote") == g["outer_peer"] and key == g["key"]:
-            self.run("ip", "tunnel", "del", g["tunnel"])
+        row = self.inspect_link(g, driver)
+        if row and self.owns_link(g, row):
+            self.run(*driver.delete(g))
+            if getattr(driver, "staged_marker", False):
+                self.staging_path(g).unlink(missing_ok=True)
 
     def retire_legacy(self, config):
         """Adopt only matching pair profiles, after their replacement is active."""
@@ -404,7 +770,7 @@ class Engine:
         result = defaultdict(lambda: [0, 0])
         for line in raw.stdout.splitlines():
             counts = re.match(r"\[(\d+):(\d+)\] -A GMP_(?:FWD|COUNT) ", line)
-            label = re.search(r"gmpanel:([a-f0-9]{10}):(all|[0-9]+):(up|down)", line)
+            label = re.search(r"gmpanel:([a-f0-9]{32}|[a-f0-9]{10}):(all|[0-9]+):(up|down)", line)
             if counts and label:
                 result[(label[1], label[2])][0 if label[3] == "up" else 1] += int(counts[2])
         epoch = self.epoch_file.read_text().strip() if self.epoch_file.exists() else "initial"

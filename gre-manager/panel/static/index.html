@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#111616"><meta name="color-scheme" content="dark">
   <title>مدیریت تونل · GRE Manager</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
+  <script src="/v2-fields.js" defer></script><script src="/app.js" defer></script>
 </head>
 <body>
 <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
@@ -46,6 +46,8 @@
   <nav class="tabs" aria-label="بخش‌های پنل">
     <a href="#gre" data-page="gre"><svg class="icon"><use href="#i-link"/></svg><span>GRE</span><span class="tab-count" id="gre-count">۰</span></a>
     <a href="#direct" data-page="direct"><svg class="icon"><use href="#i-route"/></svg><span>IPTables</span><span class="tab-count" id="direct-count">۰</span></a>
+    <a href="#groups" data-page="groups"><svg class="icon"><use href="#i-route"/></svg><span>گروه‌ها</span></a>
+    <a href="#benchmark" data-page="benchmark"><svg class="icon"><use href="#i-chart"/></svg><span>تست مسیر</span></a>
     <a href="#settings" data-page="settings"><svg class="icon"><use href="#i-settings"/></svg><span>تنظیمات</span></a>
   </nav>
   <div id="recovery-alert" class="notice warning" role="status" hidden>بازگردانی یک تغییر ناتمام در حال انجام است. اتصال‌های قبلی حفظ می‌شوند.</div>
@@ -64,24 +66,102 @@
       <section class="events-panel"><div class="section-heading"><h2>آخرین رویدادها</h2><span class="muted small">خطاها و تغییرات مهم</span></div><div id="events-list"></div></section>
     </section>
 
+    <section id="groups-page" hidden aria-labelledby="v2-groups-title">
+      <div class="page-heading topology-heading"><h1 id="v2-groups-title">گروه‌های تونل</h1>
+        <div class="button-row"><button type="button" class="button secondary" id="v2-groups-refresh">تازه‌سازی</button>
+          <button type="button" class="button primary" id="v2-group-new">ساخت گروه</button></div>
+      </div>
+        <section class="panel wide" aria-labelledby="v2-groups-title">
+          <div id="v2-group-list" class="server-list" aria-live="polite"></div>
+          <div id="v2-host-resources" class="muted small" aria-live="polite"></div>
+          <form id="v2-group-form" hidden>
+            <div class="form-grid"><label>نام گروه<input name="name" maxlength="80" required></label>
+              <label>انتخاب مقصد<select name="selection"><option value="weighted">تقسیم بار</option><option value="failover">اصلی و پشتیبان</option><option value="single">تک‌مقصد</option></select></label></div>
+            <label class="switch-line"><input name="enabled" type="checkbox" checked>گروه فعال</label>
+            <div class="form-grid" id="v2-group-limits"></div>
+            <div id="v2-listener-list"></div>
+            <div class="button-row"><button type="button" id="v2-add-listener" class="button secondary">افزودن ورودی</button>
+              <button type="submit" class="button secondary">پیش‌نمایش</button>
+              <button type="button" id="v2-apply-group" class="button primary" disabled>اعمال</button></div>
+            <p class="form-error" role="alert"></p><div id="v2-group-result" class="muted small" aria-live="polite"></div>
+          </form>
+        </section>
+    </section>
+    <section id="benchmark-page" hidden aria-labelledby="v2-bench-title">
+      <div class="page-heading topology-heading"><h1 id="v2-bench-title">تست مسیر</h1></div>
+        <section class="panel wide" aria-labelledby="v2-bench-title">
+          <div id="v2-bench">
+            <form id="v2-bench-form">
+              <div class="form-grid">
+                <label>سرور A<select name="first_node" required></select></label>
+                <label>آدرس بیرونی A<select name="first" dir="ltr" required></select></label>
+                <label>سرور B<select name="second_node" required></select></label>
+                <label>آدرس بیرونی B<select name="second" dir="ltr" required></select></label>
+                <label>مدت هر روش (ثانیه)<input name="duration_s" inputmode="numeric" dir="ltr" value="30" maxlength="3" required></label>
+              </div>
+              <div class="form-grid">
+                <label><input type="checkbox" name="gre" checked> GRE</label>
+                <label>مدت GRE (اختیاری)<input name="gre_time" inputmode="numeric" dir="ltr" maxlength="3"></label>
+                <label><input type="checkbox" name="ipip"> IPIP</label>
+                <label>مدت IPIP (اختیاری)<input name="ipip_time" inputmode="numeric" dir="ltr" maxlength="3"></label>
+                <label><input type="checkbox" name="sit"> SIT / 6in4</label>
+                <label>مدت SIT (اختیاری)<input name="sit_time" inputmode="numeric" dir="ltr" maxlength="3"></label>
+              </div>
+              <label class="switch-line"><input type="checkbox" name="parallel">اجرای هم‌زمان با پهنای باند مشترک</label>
+              <p class="form-error" role="alert"></p>
+              <div class="button-row">
+                <button type="submit" class="button secondary">بررسی سقف و زمان</button>
+                <button type="button" id="v2-bench-start" class="button primary" disabled>شروع تست</button>
+                <button type="button" id="v2-bench-cancel" class="button secondary" hidden>لغو تست</button>
+              </div>
+              <p id="v2-bench-estimate" class="muted small" aria-live="polite"></p>
+              <div id="v2-bench-result" aria-live="polite"></div>
+            </form>
+          </div>
+        </section>
+    </section>
+
     <section id="settings-page" hidden aria-labelledby="settings-title">
       <div class="page-heading"><div><p class="eyebrow">تنظیمات مشترک</p><h1 id="settings-title">پنل، سرورها و پشتیبان</h1><p class="muted">تنظیم هر اتصال، در صفحه همان اتصال قرار دارد.</p></div><span class="version-chip" id="version"></span></div>
       <div class="settings-grid">
         <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-settings"/></svg><h2>تنظیمات عمومی</h2></div><form id="settings-form"><div class="form-grid">
           <label>پورت ورود پنل<input name="port" type="number" min="1024" max="65535" dir="ltr" required></label>
           <label>نام کاربری پنل<input name="username" dir="ltr" autocomplete="username" required></label>
-          <label>پورت‌های SSH<input name="ssh_ports" dir="ltr" placeholder="22,6111"></label>
+          <label>پورت‌های SSH<input name="ssh_ports" dir="ltr" placeholder="22,2222"></label>
           <label>پورت‌های محفوظ دیگر<input name="reserved_ports" dir="ltr" placeholder="2096,8443"></label>
           <label>حد بالای MTU خودکار<input name="mtu" type="number" min="576" max="1476" dir="ltr"></label>
           <label>نگهداری جزئیات آمار · روز<input name="retention_days" type="number" min="1" max="365" dir="ltr"></label>
+          <label>سقف تله‌متری · MiB<input name="telemetry_limit_mib" type="number" min="16" max="4096" dir="ltr"></label>
           <label>تعداد بکاپ‌های نگهداری‌شده<input name="backup_keep" type="number" min="1" max="30" dir="ltr"></label>
+          <label>سقف مجموع بکاپ‌ها · MiB<input name="backup_limit_mib" type="number" min="1" max="4096" dir="ltr"></label>
           <label>دامنه ورود پنل · اختیاری<input name="hostname" dir="ltr" placeholder="panel.example.com"></label>
-        </div><label class="switch-line"><input name="watchdog" type="checkbox" role="switch"><span><strong>بررسی و بازیابی خودکار GRE</strong><small>پس از سه بررسی ناموفق؛ با حفظ سرویس‌های دیگر</small></span></label><p class="form-error" role="alert"></p><button type="submit" class="button primary">ذخیره تنظیمات</button></form></section>
+          <label>سقف ارسال گروه‌ها روی این سرور (Mbps)<input name="v2_limit_up" type="number" min="0" step="0.001"></label>
+          <label>سقف دریافت گروه‌ها روی این سرور (Mbps)<input name="v2_limit_down" type="number" min="0" step="0.001"></label>
+          <label>توقف اتصال تازه در اشغال conntrack (٪)<input name="v2_conntrack_high" type="number" min="1" max="100"></label>
+          <label>ازسرگیری اتصال تازه در اشغال conntrack (٪)<input name="v2_conntrack_low" type="number" min="0" max="99"></label>
+        </div><p id="storage-status" class="muted small"></p><label class="switch-line"><input name="watchdog" type="checkbox" role="switch"><span><strong>بررسی و بازیابی خودکار GRE</strong><small>پس از سه بررسی ناموفق؛ با حفظ سرویس‌های دیگر</small></span></label><p class="form-error" role="alert"></p><button type="submit" class="button primary">ذخیره تنظیمات</button></form></section>
         <div class="settings-stack">
           <section class="panel"><div class="section-heading"><div class="panel-title"><svg class="icon"><use href="#i-server"/></svg><h2>سرورهای خارج</h2></div><button class="button compact secondary" data-action="add-server"><svg class="icon"><use href="#i-plus"/></svg>افزودن</button></div><p class="muted small">برای ساخت خودکار GRE. انتقال مستقیم به SSH نیاز ندارد.</p><div id="server-list" class="server-list"></div></section>
           <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-shield"/></svg><h2>ورود و ارتباط امن</h2></div><p id="certificate-status" class="muted">در حال بررسی گواهی HTTPS…</p><p class="field-hint">تمدید خودکار هر ۶ ساعت بررسی می‌شود. پورت ۸۰ هنگام اعتبارسنجی، موقتاً برای گواهی استفاده می‌شود.</p><div class="button-row"><button class="button secondary" data-action="password">تغییر رمز عبور</button><button class="button secondary" data-action="tls-auto">گواهی خودکار IP</button><button class="button secondary" data-action="tls">گواهی دستی</button></div></section>
           <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-refresh"/></svg><h2>به‌روزرسانی برنامه</h2></div><p class="muted small">نسخه جدید پس از بررسی فایل‌ها نصب می‌شود. تنظیمات و سابقه مصرف حفظ می‌شوند.</p><button class="button secondary" data-action="update">بررسی و نصب نسخه جدید</button></section>
         </div>
+        <section class="panel wide" aria-labelledby="v2-pairing-title">
+          <div class="section-heading"><h2 id="v2-pairing-title">جفت‌سازی پنل‌ها</h2><button type="button" class="button secondary" id="v2-peers-refresh">نمایش همتاها</button></div>
+          <label>شناسهٔ این پنل<input id="v2-local-node" dir="ltr" readonly></label>
+          <div class="form-grid">
+            <form id="v2-invite-form">
+              <label>آدرس این پنل<input name="host" dir="ltr" placeholder="panel.example.com" required></label>
+              <label>شناسهٔ پنلی که مجاز به مدیریت است<input name="owner" dir="ltr" pattern="[0-9a-f]{32}" maxlength="32" required></label>
+              <p class="form-error" role="alert"></p><button type="submit" class="button secondary">ساخت دعوت پنج‌دقیقه‌ای</button>
+              <label id="v2-invite-output" hidden>دعوت یک‌بارمصرف<textarea name="invitation" dir="ltr" rows="3" readonly></textarea></label>
+            </form>
+            <form id="v2-pair-form">
+              <label>دعوت پنل مقابل<textarea name="invitation" dir="ltr" rows="3" autocomplete="off" required></textarea></label>
+              <p class="form-error" role="alert"></p><button type="submit" class="button primary">جفت کردن</button>
+            </form>
+          </div>
+          <div id="v2-peer-list" class="server-list" aria-live="polite"></div>
+        </section>
         <section class="panel wide"><div class="section-heading"><div><h2>بکاپ و بازیابی</h2><p class="muted small">تنظیمات و آمار؛ کلیدهای خصوصی SSH و رمز ورود داخل بکاپ قرار نمی‌گیرند.</p></div><div class="button-row"><button class="button secondary" data-action="restore"><svg class="icon"><use href="#i-up"/></svg>بازیابی</button><button class="button primary" data-action="backup"><svg class="icon"><use href="#i-plus"/></svg>ساخت بکاپ</button></div></div><div id="backup-list" class="backup-list"></div><input id="backup-file" type="file" accept=".zip,application/zip" hidden></section>
       </div>
     </section>

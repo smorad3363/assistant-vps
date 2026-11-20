@@ -1,19 +1,19 @@
-# GRE Manager 1.1
+# GRE Manager 2.0
 
-A compact Persian web panel for GRE and direct TCP/UDP port forwarding.
-All create, edit, delete, pause, test, speed-limit, statistics, backup/restore and
-update actions live in three pages: **GRE**, **IPTables**, and **Settings**.
+A Persian web panel for managing tunnel groups and direct TCP/UDP forwarding
+across Linux servers. It includes weighted routing, failover, path tests,
+per-host SSH protection and recovery after reboot.
 The Bash installer has no interactive management menu.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre.sh | sudo bash
+curl -fsSLo gre-install.sh https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre.sh && sudo bash gre-install.sh
 ```
 
-Run on the Iran server. The installer prints the HTTPS URL (default port 8787)
+Run on a Linux server with systemd and apt or dnf. The installer prints the HTTPS URL (default port 8787)
 and random first-install login credentials. Public IPv4 installations request a
 trusted IP certificate with automatic renewal. Add the foreign server under Settings for
 automatic GRE setup over SSH; direct forwarding does not require outside SSH.
-SSH and panel ports are protected. Existing pair profiles and saved MTU values
+The worker discovers SSH ports on each managed server. Existing pair profiles and saved MTU values
 are adopted without deleting live GRE interfaces. Updates retain configuration
 and telemetry.
 

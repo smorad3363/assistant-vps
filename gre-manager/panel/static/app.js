@@ -8,6 +8,7 @@ const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const icon = name => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 let state, csrf = '', page = 'gre', toastTimer, activeJob = null;
 const expanded = new Set();
+const connectionPages = ['gre','direct'];
 const errors = {
   auth:'اطلاعات ورود درست نیست یا نشست منقضی شده است.', csrf:'نشست صفحه تازه نیست؛ صفحه را دوباره بارگذاری کن.',
   rate_limit:'تعداد تلاش‌های ورود زیاد شده؛ پنج دقیقه دیگر تلاش کن.',
@@ -26,7 +27,8 @@ const errors = {
   recovering:'بازیابی تغییر قبلی هنوز تمام نشده است. کمی صبر کن.', busy:'عملیات دیگری در خارج در حال انجام است؛ کمی صبر کن.',
   port_in_use:'پورت انتخابی پنل در حال استفاده است.', in_use:'این سرور هنوز در یک اتصال GRE استفاده می‌شود.',
   certificate:'گواهی و کلید خصوصی با هم سازگار نیستند یا فایل‌ها معتبر نیستند.', password:'رمز جدید باید بین ۱۲ تا ۲۵۶ کاراکتر باشد.',
-  unavailable:'سرویس مدیریت در حال راه‌اندازی مجدد است؛ چند لحظه دیگر تلاش می‌کنیم.', not_found:'این مورد دیگر موجود نیست.'
+  unavailable:'سرویس مدیریت در حال راه‌اندازی مجدد است؛ چند لحظه دیگر تلاش می‌کنیم.', not_found:'این مورد دیگر موجود نیست.',
+  storage:'فضای آزاد یا سقف بکاپ برای ساخت یک فایل قابل‌بازیابی کافی نیست.'
 };
 
 function bytes(value) {
@@ -79,7 +81,10 @@ function showToast(text) {
   clearTimeout(toastTimer); $('#toast').textContent = text; $('#toast').hidden = false;
   toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 4200);
 }
-function showLogin() { $('#app').hidden = true; $('#login-view').hidden = false; }
+function showLogin() {
+  $('#app').hidden = true; $('#login-view').hidden = false;
+  $('#v2-invite-form').reset(); $('#v2-pair-form').reset(); $('#v2-invite-output').hidden = true;
+}
 function setError(form, error) {
   $('.form-error', form).textContent = failText(error);
   $$('[aria-invalid]', form).forEach(x => x.removeAttribute('aria-invalid'));
@@ -111,10 +116,13 @@ async function refresh(quiet = false) {
 }
 
 function navigate() {
-  page = ['gre','direct','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'gre';
+  const previous = page;
+  page = [...connectionPages,'groups','benchmark','settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'gre';
+  if (previous !== page) window.scrollTo(0,0);
   $$('.tabs a').forEach(x => { if(x.dataset.page === page) x.setAttribute('aria-current','page'); else x.removeAttribute('aria-current'); });
-  $('#connections-page').hidden = page === 'settings'; $('#settings-page').hidden = page !== 'settings';
-  if (page !== 'settings') {
+  $('#connections-page').hidden = !connectionPages.includes(page);
+  for (const name of ['groups','benchmark','settings']) $('#' + name + '-page').hidden = page !== name;
+  if (connectionPages.includes(page)) {
     const gre = page === 'gre';
     $('#page-title').textContent = gre ? 'تونل‌های GRE' : 'انتقال مستقیم';
     $('#page-eyebrow').textContent = gre ? 'اتصال بین دو سرور' : 'IPTABLES';
@@ -122,6 +130,10 @@ function navigate() {
     $('#add-connection span').textContent = gre ? 'افزودن GRE' : 'افزودن انتقال';
   }
   if (state) render();
+  if (page === 'benchmark') {
+    benchJob ??= sessionStorage.getItem('gremgr-benchmark');
+    if (benchJob) pollBenchmark(benchJob);
+  }
 }
 
 function render() {
@@ -129,6 +141,15 @@ function render() {
   $('#direct-count').textContent = fa.format(state.connections.filter(x=>x.kind==='direct').length);
   $('#version').textContent = 'v' + state.version;
   if (page === 'settings') return renderSettings();
+  if (page === 'groups' || page === 'benchmark') {
+    if (!v2Load && Date.now() - v2LoadedAt >= 5000) {
+      v2Load = refreshGroups().catch(error => {
+        if (page === 'groups') $('#v2-group-list').textContent = failText(error);
+        else setError(benchForm,error);
+      }).finally(() => { v2Load = null; });
+    }
+    return;
+  }
   const items = state.connections.filter(x=>x.kind === page);
   const ids = new Set(items.map(x=>x.id));
   $('#metric-active').textContent = fa.format(items.filter(x=>x.enabled).length);
@@ -208,6 +229,17 @@ function renderEvents() {
 }
 function renderSettings() {
   const form=$('#settings-form');
+  const storage=state.storage;
+  if(storage){
+    const usage=(used,limit)=>`${latin.format(used/1048576)} از ${latin.format(limit/1048576)} MiB`;
+    $('#storage-status').textContent=`تله‌متری ${usage(storage.telemetry_bytes,storage.telemetry_limit)} · بکاپ‌ها ${usage(storage.backup_bytes,storage.backup_limit)} · فضای آزاد ${bytes(storage.free_bytes)}`;
+  }
+  if (!form.dataset.dirty) {
+    form.elements.v2_limit_up.value = state.settings.v2_limits?.up ?? '';
+    form.elements.v2_limit_down.value = state.settings.v2_limits?.down ?? '';
+    form.elements.v2_conntrack_high.value = state.settings.v2_conntrack_guard?.high ?? '';
+    form.elements.v2_conntrack_low.value = state.settings.v2_conntrack_guard?.low ?? '';
+  }
   const cert=state.certificate||{},labels={ready:'گواهی معتبر IP · تمدید خودکار فعال',pending:'صدور گواهی خودکار در انتظار اجرا',renewing:'در حال بررسی و تمدید گواهی',error:'صدور یا تمدید گواهی نیاز به بررسی دارد',manual:'گواهی دستی · تمدید خودکار غیرفعال'};
   $('#certificate-status').textContent=(labels[cert.status]||labels.manual)+(cert.expires_at?' · اعتبار تا '+new Date(cert.expires_at*1000).toLocaleDateString('fa-IR'):'')+(cert.error?' · '+cert.error:'');
   if(!form.dataset.dirty && !form.contains(document.activeElement))for(const [key,value]of Object.entries(state.settings)){const el=form.elements[key];if(!el)continue;if(el.type==='checkbox')el.checked=value;else el.value=Array.isArray(value)?value.join(','):value;}
@@ -335,7 +367,530 @@ $('#connection-form').addEventListener('submit',async e=>{
 });
 $('#server-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const id=await runJob('server.connect',Object.fromEntries(new FormData(form)),form,$('#server-dialog'));if(id){form.elements.password.value='';form.elements.private_key.value='';}});
 $('#settings-form').addEventListener('input',e=>e.currentTarget.dataset.dirty='true');
-$('#settings-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,p=Object.fromEntries(new FormData(form));p.watchdog=form.elements.watchdog.checked;const id=await runJob('settings.save',p,form);if(id)delete form.dataset.dirty;});
+$('#settings-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const form = event.currentTarget, payload = Object.fromEntries(new FormData(form));
+  payload.watchdog = form.elements.watchdog.checked;
+  payload.v2_limits = {up:payload.v2_limit_up, down:payload.v2_limit_down};
+  payload.v2_conntrack_guard = payload.v2_conntrack_high === '' && payload.v2_conntrack_low === '' ? null :
+    {high:payload.v2_conntrack_high, low:payload.v2_conntrack_low};
+  const id = await runJob('settings.save', payload, form);
+  if (id) delete form.dataset.dirty;
+});
+
+async function refreshV2Peers() {
+  const list = $('#v2-peer-list');
+  try {
+    const {peers, node_id} = await api('v2/peers');
+    $('#v2-local-node').value = node_id;
+    list.innerHTML = peers.length ? peers.map(peer => {
+      const directions = [peer.outbound ? 'مدیریت مقصد' : '', peer.inbound.length ? 'دسترسی ورودی' : ''].filter(Boolean);
+      return `<div class="server-item"><div class="server-info"><strong dir="ltr">${esc(peer.hostname || peer.id)}</strong>
+        <small>${directions.join(' · ')}</small></div><button type="button" class="button secondary compact"
+        data-action="v2-revoke" data-node="${esc(peer.id)}">لغو دسترسی</button></div>`;
+    }).join('') : '<p class="empty-line">همتایی ثبت نشده است.</p>';
+  } catch (error) { list.textContent = failText(error); }
+}
+
+$('#v2-peers-refresh').addEventListener('click', refreshV2Peers);
+$('#v2-invite-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  setBusy(form, true);
+  try {
+    const invite = await api('v2/pairing.invite', {host: form.elements.host.value.trim(), owner: form.elements.owner.value.trim()});
+    form.elements.invitation.value = JSON.stringify(invite);
+    $('#v2-invite-output').hidden = false;
+  } catch (error) { setError(form, error); }
+  finally { setBusy(form, false); }
+});
+$('#v2-pair-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  setBusy(form, true);
+  try {
+    let invite;
+    try { invite = JSON.parse(form.elements.invitation.value); }
+    catch { throw new Error('متن دعوت را کامل وارد کن.'); }
+    await api('v2/pairing.connect', invite);
+    form.reset();
+    showToast('پنل مقابل جفت شد.');
+    await refreshV2Peers();
+  } catch (error) { setError(form, error); }
+  finally { setBusy(form, false); }
+});
+
+const topologyId = () => crypto.randomUUID().replaceAll('-', '');
+const groupForm = $('#v2-group-form');
+const groupOutput = $('#v2-group-result');
+let v2Nodes = [], v2Groups = [], v2Local, groupDraft, groupPlan, groupEdit = 0;
+let v2Load, v2LoadedAt = 0;
+function nodeOptions(selected, unmanaged = false) {
+  return (unmanaged ? '<option value="">مقصد مستقیم بدون مدیریت</option>' : '') +
+    v2Nodes.map(node => `<option value="${esc(node.id)}" ${node.id === selected ? 'selected' : ''}>${esc(node.name)}</option>`).join('');
+}
+function rateFields(limits = {}, visibility = '') {
+  return ['up','down'].map((direction,index) => `<label ${visibility}>سقف ${index ? 'دریافت' : 'ارسال'} (Mbps)
+    <input data-value="rate-${direction}" type="number" dir="ltr" min="0" max="100000" step="0.001" placeholder="ارث‌بری" value="${esc(limits[direction])}"></label>`).join('');
+}
+function readRateFields(row) {
+  return Object.fromEntries(['up','down'].map(direction => [direction,$(`[data-value="rate-${direction}"]`,row).value]).filter(([,value]) => value !== ''));
+}
+function memberForm(parent, member = {}) {
+  const row = document.createElement('div');
+  row.className = 'form-grid topology-member';
+  row.dataset.v2Member = member.id || topologyId();
+  row.dataset.unmanaged = member.managed === false ? member.node_id : topologyId();
+  const sideFields = (side, title) => {
+    const options = member.link_settings?.[side] || {};
+    const modes = {mtu:'از MTU',pmtu:'از PMTU',manual:'دستی',off:'خاموش'};
+    return `<label>MTU ${title}<input data-value="${side}-mtu" type="number" min="576" max="1476" value="${esc(options.mtu)}"></label>
+      <label>MSS ${title}<select data-value="${side}-mode">${Object.entries(modes).map(([mode,label]) =>
+        `<option value="${mode}" ${options.mss_mode === mode ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      <label>عدد MSS ${title}<input data-value="${side}-mss" type="number" min="64" max="1436" value="${esc(options.mss)}"></label>`;
+  };
+  const wgFields = (side, title) => `<label>کلید عمومی ${title}<input data-value="${side}-wg-key" dir="ltr" maxlength="44"
+    value="${esc(member.wireguard?.[side]?.public_key)}"></label>
+    <label>پورت UDP ${title}<input data-value="${side}-wg-port" type="number" min="1024" max="65535" value="${esc(member.wireguard?.[side]?.port)}"></label>`;
+  const pppFields = (side, title) => `<label>پورت UDP ${title}<input data-value="${side}-ppp-port" dir="ltr" type="number" min="1024" max="65535"
+    value="${esc(member.l2tpv2?.[side]?.port)}" required></label>
+    <label>مرجع اعتبارنامهٔ ${title}<input data-value="${side}-ppp-credential" dir="ltr" maxlength="48" pattern="[A-Za-z0-9_\\-]+"
+    value="${esc(member.l2tpv2?.[side]?.credential)}" required></label>`;
+  const l2tpFields = (side, title) => [['tunnel_id','شناسهٔ تونل',4294967295],['session_id','شناسهٔ نشست',4294967295],['port','پورت UDP',65535]].map(
+    ([key,label,max]) => `<label>${label} ${title}<input data-value="${side}-l2tp-${key}" type="number" dir="ltr" min="1" max="${max}"
+      value="${esc(member.l2tpv3?.[side]?.[key])}"></label>`).join('');
+  row.innerHTML = `<label>سرور مقصد<select data-value="node">${nodeOptions(member.node_id, true)}</select></label>
+    <label>روش<select data-value="method"><option value="direct">Direct</option><option value="gre" ${member.method === 'gre' ? 'selected' : ''}>GRE</option>
+      <option value="ipip" ${member.method === 'ipip' ? 'selected' : ''}>IPIP</option>
+      <option value="wireguard" ${member.method === 'wireguard' ? 'selected' : ''}>WireGuard</option>
+      <option value="vxlan" ${member.method === 'vxlan' ? 'selected' : ''}>VXLAN</option>
+      <option value="gretap" ${member.method === 'gretap' ? 'selected' : ''}>GRETAP</option>
+      <option value="eoip" ${member.method === 'eoip' ? 'selected' : ''}>EoIP</option>
+      <option value="l2tpv2" ${member.method === 'l2tpv2' ? 'selected' : ''}>L2TPv2 / PPP</option>
+      <option value="geneve" ${member.method === 'geneve' ? 'selected' : ''}>GENEVE</option>
+      <option value="l2tpv3" ${member.method === 'l2tpv3' ? 'selected' : ''}>L2TPv3</option>
+      <option value="sit" ${member.method === 'sit' ? 'selected' : ''}>SIT / 6in4</option></select></label>
+    <label data-method="direct gre ipip wireguard vxlan gretap eoip geneve l2tpv3 l2tpv2">IP سرویس<input data-value="service" dir="ltr" required value="${esc(member.service_ip)}"></label>
+    <label data-method="gre ipip wireguard vxlan gretap eoip geneve l2tpv3 l2tpv2 sit">IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(member.outer_ip)}"></label>
+    <label data-method="gre ipip wireguard vxlan gretap eoip geneve l2tpv3 l2tpv2 sit">MTU تونل<input data-value="mtu" dir="ltr" type="number" min="576" max="1476" value="${member.mtu || 1280}" required></label>
+    <label data-method="ipip">TTL در IPIP<input data-value="ttl" dir="ltr" type="number" min="0" max="255" value="${esc(member.ttl ?? 64)}" required></label>
+    <label data-sit-excluded>وزن<input data-value="weight" type="number" min="1" max="1000" value="${member.weight || 1}" required></label>
+    <label data-sit-excluded>اولویت<input data-value="priority" type="number" min="0" max="1000" value="${member.priority || 0}" required></label>
+    ${rateFields(member.limits,'data-sit-excluded')}
+    <label>وضعیت<select data-value="state"><option value="on">فعال</option><option value="drain" ${member.draining ? 'selected' : ''}>در حال تخلیه</option>
+      <option value="off" ${member.enabled === false ? 'selected' : ''}>متوقف</option></select></label>
+    <details data-method="vxlan" ${member.method === 'vxlan' ? 'open' : ''}><summary>تنظیمات VXLAN</summary><div class="form-grid">
+      <label>شناسهٔ VNI<input data-value="vxlan-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.vxlan?.vni)}"></label>
+      <label>پورت UDP هر دو سر<input data-value="vxlan-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.vxlan?.port ?? 4789)}"></label>
+    </div></details>
+    <details data-method="gre ipip wireguard vxlan gretap eoip geneve l2tpv3 l2tpv2"><summary>MTU و MSS دو سر تونل</summary><div class="form-grid">
+      ${sideFields('ingress','ورودی')}${sideFields('destination','مقصد')}</div></details>
+    <details data-method="wireguard" ${member.method === 'wireguard' ? 'open' : ''}><summary>تنظیمات WireGuard</summary><div class="form-grid">
+      ${wgFields('ingress','ورودی')}${wgFields('destination','مقصد')}
+      <label>Keepalive (ثانیه)<input data-value="keepalive" type="number" min="0" max="65535" value="${esc(member.wireguard?.keepalive ?? 25)}"></label>
+      </div><small>کلید عمومی هر نود را از <code>sudo gremgr wireguard-key</code> بگیرید.</small></details>
+    <details data-method="gretap" ${member.method === 'gretap' ? 'open' : ''}><summary>تنظیمات GRETAP</summary><label>کلید GRETAP (اختیاری)<input
+      data-value="gretap-key" type="number" min="1" max="4294967295" dir="ltr" value="${esc(member.gretap?.key)}"></label></details>
+    <details data-method="eoip"><summary>تنظیمات EoIP</summary><label>شناسهٔ تونل EoIP<input data-value="eoip-id" type="number" min="1" max="65535" dir="ltr"
+      value="${esc(member.eoip?.tunnel_id)}" required></label></details>
+    <details data-method="l2tpv2"><summary>تنظیمات L2TPv2 / PPP</summary><div class="form-grid">
+      <label>نقش LAC<select data-value="ppp-lac"><option value="ingress">ورودی</option>
+        <option value="destination" ${member.l2tpv2?.lac === 'destination' ? 'selected' : ''}>مقصد</option></select></label>
+      ${pppFields('ingress','ورودی')}${pppFields('destination','مقصد')}
+    </div></details>
+    <details data-method="l2tpv3" ${member.method === 'l2tpv3' ? 'open' : ''}><summary>تنظیمات L2TPv3 دو سر</summary><div class="form-grid">
+      ${l2tpFields('ingress','ورودی')}${l2tpFields('destination','مقصد')}</div></details>
+
+    <details data-method="geneve"><summary>تنظیمات GENEVE</summary><div class="form-grid">
+      <label>شناسهٔ VNI<input data-value="geneve-vni" type="number" min="1" max="16777215" dir="ltr" value="${esc(member.geneve?.vni)}"></label>
+      <label>پورت UDP هر دو سر<input data-value="geneve-port" type="number" min="1" max="65535" dir="ltr" value="${esc(member.geneve?.port ?? 6081)}"></label>
+    </div></details>
+    <details data-method="sit"><summary>آدرس‌های داخلی SIT</summary><div class="form-grid">
+      <label>IPv6 ورودی با پیشوند<input data-value="ingress-sit-ip" dir="ltr" required placeholder="fd00:1234::1/64" value="${esc(member.sit?.ingress)}"></label>
+      <label>IPv6 مقصد با پیشوند<input data-value="destination-sit-ip" dir="ltr" required placeholder="fd00:1234::2/64" value="${esc(member.sit?.destination)}"></label>
+    </div></details>
+    <button type="button" class="button secondary" data-v2-edit="remove">حذف مقصد</button>`;
+  parent.append(row);
+  syncMemberMethod(row);
+  decorateFields(row,'member');
+}
+function syncMemberMethod(row) {
+  const method = $('[data-value="method"]', row).value;
+  const ipv6 = method === 'sit';
+  $('[data-value="mtu"]',row).min = ipv6 ? 1280 : 576;
+  $('[data-value="outer"]',row).required = ipv6;
+  const state = $('[data-value="state"]',row);
+  const drain = $('option[value="drain"]',state);
+  if (ipv6 && state.value === 'drain') state.value = 'on';
+  drain.hidden = drain.disabled = ipv6;
+  for (const field of $$('[data-method],[data-sit-excluded]',row)) {
+    const visible = field.dataset.method ? field.dataset.method.split(' ').includes(method) : !ipv6;
+    field.hidden = !visible;
+    const wrapper = field.closest('.field-with-help');
+    if (wrapper) wrapper.hidden = !visible;
+    for (const input of $$('input,select,textarea',field)) input.disabled = !visible;
+    if (visible && field.tagName === 'DETAILS' && field.dataset.method === method) field.open = true;
+  }
+}
+function sitOnly(row) {
+  const members = $$('[data-value="method"]',row);
+  return members.length > 0 && members.every(field => field.value === 'sit');
+}
+function syncListenerMethod(row) {
+  const ipv6 = sitOnly(row);
+  for (const field of $$('[data-forwarding]',row)) {
+    field.hidden = ipv6;
+    const wrapper = field.closest('.field-with-help');
+    if (wrapper) wrapper.hidden = ipv6;
+    for (const control of $$('input,select,textarea',field)) control.disabled = ipv6;
+  }
+}
+function listenerForm(listener = {}) {
+  const section = document.createElement('fieldset');
+  section.dataset.v2Listener = listener.id || topologyId();
+  const portMap = Object.entries(listener.port_map || {}).map(([from,to]) => from + ':' + to).join(',') ||
+    (listener.target_port ? listener.ports + ':' + listener.target_port : '');
+  section.innerHTML = `<legend>ورودی</legend><div class="form-grid">
+    <label>سرور ورودی<select data-value="node">${nodeOptions(listener.node_id || v2Local)}</select></label>
+    <label>IP شنونده<input data-value="ip" dir="ltr" required value="${esc(listener.ip)}"></label>
+    <label>IP بیرونی تونل<input data-value="outer" dir="ltr" value="${esc(listener.outer_ip)}"></label>
+    <label data-forwarding>پورت‌ها<input data-value="ports" dir="ltr" required placeholder="5100,3300 یا all" value="${esc(listener.ports)}"></label>
+    <label data-forwarding>نگاشت پورت<input data-value="map" dir="ltr" placeholder="5100:5000,3300:3000" value="${esc(portMap)}"></label>
+    <label data-forwarding>استثناها<input data-value="excluded" dir="ltr" value="${esc((listener.exclude_ports || []).join(','))}"></label>
+    <label data-forwarding>سقف هر پورت<input data-value="port-rates" dir="ltr" placeholder="5100:20:10" value="${esc(
+      Object.entries(listener.port_limits || {}).map(([port,limits]) => [port,limits.up,limits.down].join(':')).join(','))}"></label>
+    <label data-forwarding>پروتکل<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
+      <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label>${rateFields(listener.limits,'data-forwarding')}</div>
+    <details data-forwarding ${listener.probe ? 'open' : ''}><summary>سنجش سلامت سرویس</summary><div class="form-grid">
+      <label><input data-value="watch-link" type="checkbox" ${(listener.watch_link ?? !listener.id) ? 'checked' : ''}> پذیرش بر اساس سلامت لینک تونل</label>
+      <label>روش سنجش<select data-value="probe-protocol"><option value="">تنظیم نشده</option>
+        <option value="tcp" ${listener.probe?.protocol === 'tcp' ? 'selected' : ''}>TCP</option>
+        <option value="udp" ${listener.probe?.protocol === 'udp' ? 'selected' : ''}>UDP</option></select></label>
+      <label>پورت ورودی سنجش<input data-value="probe-port" type="number" min="1" max="65535" value="${esc(listener.probe?.port)}"></label>
+      <label>متن درخواست<textarea data-value="probe-request" dir="ltr" maxlength="512">${esc(listener.probe?.request)}</textarea></label>
+      <label>پاسخ موردانتظار<textarea data-value="probe-response" dir="ltr" maxlength="512">${esc(listener.probe?.response)}</textarea></label>
+    </div></details>
+    <div data-v2-members></div><div class="button-row"><button type="button" class="button secondary" data-v2-edit="add">افزودن مقصد</button>
+    <button type="button" class="button secondary" data-v2-edit="remove-listener">حذف ورودی</button></div>`;
+  for (const member of listener.members || [{}]) memberForm($('[data-v2-members]', section), member);
+  $('#v2-listener-list').append(section);
+  decorateFields(section,'listener');
+  syncListenerMethod(section);
+}
+function resetGroupPlan() {
+  groupEdit++;
+  groupPlan = undefined;
+  $('#v2-apply-group').disabled = true;
+  groupOutput.textContent = '';
+}
+function openGroup(record) {
+  groupForm.hidden = false;
+  groupDraft = {id: record?.id || topologyId(), revision: record?.revision || 0};
+  groupForm.elements.name.value = record?.group.name || '';
+  groupForm.elements.selection.value = record?.group.selection || 'weighted';
+  groupForm.elements.enabled.checked = record?.group.enabled ?? true;
+  $('#v2-group-limits').innerHTML = rateFields(record?.group.limits);
+  decorateFields(groupForm,'group');
+  $('#v2-listener-list').replaceChildren();
+  for (const listener of record?.group.listeners || [{}]) listenerForm(listener);
+  resetGroupPlan();
+}
+async function refreshGroups() {
+  const [topology, groups, metrics] = await Promise.all([api('v2/topology'), api('v2/groups'), api('v2/metrics').catch(() => ({}))]);
+  const pressure = metrics?.conntrack;
+  $('#v2-host-resources').textContent = pressure?.percent == null ? '' :
+    `conntrack این سرور ${fa.format(Math.round(pressure.percent))}٪ · فضای آزاد ${fa.format(Math.round(metrics.disk_free_bytes / 1048576))} MiB`;
+  v2Local = topology.local_node_id;
+  v2Nodes = [{id:v2Local,name:'این پنل'}, ...topology.paired_nodes.map(node => ({id:node.id,name:node.hostname})),
+    ...state.servers.filter(node => node.v2_node_id && node.key_ready).map(node => ({id:node.v2_node_id,name:node.name}))];
+  benchNodeOptions();
+  v2Groups = groups;
+  v2LoadedAt = Date.now();
+  const status = value => value === true ? 'سالم' : value === false ? 'قطع' : 'نامشخص';
+  const evidence = record => record.group.listeners.flatMap(listener => listener.members.filter(member => member.enabled).map(member => {
+    const sample = record.health?.[member.id] || {};
+    const issues = {wireguard_key:'نیاز به کلید WireGuard روی این سرور',geneve_route:'مسیر بیرونی GENEVE آماده نیست',ipv6_disabled:'IPv6 روی این سرور یا رابط‌های تازه غیرفعال است',ppp_requirements:'نیاز به xl2tpd و PPP روی میزبان',ppp_credential:'مرجع اعتبارنامهٔ PPP پیدا نشد'};
+    const summary = issues[record.driver_issues?.[member.id]] ||
+      `مدیریت ${status(sample.management)} · لینک ${status(sample.link)} · سرویس ${status(sample.service)} · ICMP ${status(sample.icmp)}`;
+    const checked = sample.checked ? ' · ' + new Date(sample.checked * 1000).toLocaleTimeString('fa-IR') : '';
+    return `<small><bdi>${esc(member.sit?.destination || member.service_ip)}</bdi> ${esc(summary + checked)}</small>`;
+  })).join('');
+  const activity = record => {
+    if (!record.group.enabled) return {rank:3, label:'متوقف'};
+    const recent = Object.values(record.health || {}).filter(sample => sample.checked && Date.now()/1000 - sample.checked <= 300);
+    if (Object.keys(record.driver_issues || {}).length || recent.some(sample => [sample.service,sample.link,sample.management].includes(false)))
+      return {rank:0, label:'نیاز به بررسی'};
+    if (!recent.length) return {rank:1, label:'دادهٔ تازه در دسترس نیست'};
+    return {rank:2, label:'پایش فعال'};
+  };
+  const existing = $('#v2-group-list');
+  const opened = new Set($$('details[open][data-group-detail]',existing).map(item => item.dataset.groupDetail));
+  const cards = groups.map(record => ({record,...activity(record)})).sort((a,b) => a.rank-b.rank);
+  existing.innerHTML = cards.length ? cards.map(({record,rank,label}) => {
+    const methods = [...new Set(record.group.listeners.flatMap(listener => listener.members.map(member => member.method.toUpperCase())))];
+    const rates = record.rates ? `رفت ${speed(record.rates.up)} · برگشت ${speed(record.rates.down)} Mbps` : 'سرعت —';
+    return `<article class="topology-card" data-state="${rank}"><div class="topology-card-header"><div><h2>${esc(record.group.name)}</h2>
+      <p><span class="topology-status">${esc(label)}</span><bdi dir="ltr">${esc(methods.join(' · '))}</bdi></p></div>${record.owner === v2Local ?
+      `<button class="button secondary" type="button" data-group-id="${esc(record.id)}">ویرایش</button>` : ''}</div>
+      <p class="muted small">${fa.format(record.group.listeners.length)} ورودی · ${esc(rates)}</p>
+      <details data-group-detail="${esc(record.id)}" ${opened.has(record.id) ? 'open' : ''}><summary>وضعیت مقصدها</summary>${evidence(record) || '<small>مقصد فعال ندارد</small>'}</details></article>`;
+  }).join('') : '<p class="empty-line">هنوز گروهی ثبت نشده است.</p>';
+}
+const benchForm = $('#v2-bench-form');
+const benchStart = $('#v2-bench-start');
+const benchCancel = $('#v2-bench-cancel');
+let benchPreview, benchJob, benchPoll, benchEdit = 0;
+
+function benchNodeOptions() {
+  for (const side of ['first','second']) {
+    const select = benchForm.elements[side + '_node'];
+    const nodes = [{name:'انتخاب سرور', id:''},...v2Nodes];
+    if (select.options.length === nodes.length && nodes.every((node,i) => select.options[i].value === node.id && select.options[i].text === node.name)) continue;
+    const selected = select.value;
+    select.replaceChildren(...nodes.map(node => new Option(node.name, node.id)));
+    if (v2Nodes.some(node => node.id === selected)) select.value = selected;
+  }
+}
+function resetBenchmark() {
+  benchEdit++;
+  benchPreview = undefined;
+  benchStart.disabled = true;
+  $('#v2-bench-estimate').textContent = '';
+}
+async function benchAddresses(side, node) {
+  const select = benchForm.elements[side];
+  select.replaceChildren();
+  if (!node) return;
+  const result = await api('v2/benchmark.capabilities', {node_id:node});
+  if (benchForm.elements[side + '_node'].value !== node) return;
+  select.replaceChildren(...result.addresses.map(address => new Option(address,address)));
+  benchForm.elements.duration_s.setAttribute('aria-describedby', 'v2-bench-estimate');
+  $('#v2-bench-estimate').textContent = `حداکثر مدت روی این سرور ${fa.format(result.max_seconds)} ثانیه است.`;
+}
+function benchmarkSeconds(value) {
+  const plain = value.trim().replace(/[۰-۹]/g, digit => digit.charCodeAt(0) - 1776)
+    .replace(/[٠-٩]/g, digit => digit.charCodeAt(0) - 1632);
+  if (!/^\d+$/.test(plain)) throw new Error('مدت تست باید به ثانیه و عدد صحیح باشد.');
+  return Number(plain);
+}
+function benchNumbers(row) {
+  const volume = row?.received_bytes == null ? '—' : `${fa.format(row.received_bytes / 1000000)} MB`;
+  const rate = row?.peak_mbps == null ? '—' : `${fa.format(row.peak_mbps)} Mbps (${row.peak_direction === 'inbound' ? 'برگشت' : 'رفت'})`;
+  return `${volume} · اوج ${rate}`;
+}
+function renderBenchmark(job) {
+  const names = {queued:'در صف',running:'در حال سنجش',cancelling:'در حال لغو',cancelled:'لغو شد',done:'پایان یافت',partial:'ناتمام',interrupted:'پس از راه‌اندازی دوباره متوقف شد'};
+  const reasons = {byte_budget:'سقف حجم پر شد',connection_lost:'جریان TCP قطع شد',receiver_unavailable:'گیرنده آماده نشد',
+    no_peer:'داده‌ای از سرور مقابل دریافت نشد',device_conflict:'تداخل با رابط موجود',transport:'ارتباط مدیریت قطع شد',cancelled:'لغو شد'};
+  const active = ['queued','running','cancelling'].includes(job.phase);
+  benchCancel.hidden = !active;
+  const result = $('#v2-bench-result');
+  const rows = job.plan.methods.map(method => {
+    const row = job.results?.[method.method];
+    const details = ['outbound','inbound'].map((name,index) => {
+      const sample = row?.directions?.[name];
+      const duration = sample ? fa.format(sample.elapsed_ns / 1000000000) : '—';
+      const bytes = sample ? `${fa.format(sample.received_bytes / 1000000)} MB` : '—';
+      const peak = sample?.peak_second_bytes == null ? '—' : `${fa.format(sample.peak_second_bytes * 8 / 1000000)} Mbps`;
+      const reason = reasons[sample?.reason || row?.reasons?.[index]];
+      return `<div>${index ? 'برگشت' : 'رفت'} · ${duration} از ${fa.format(method.directions[index])} ثانیه · <bdi>${bytes}</bdi> · اوج <bdi>${peak}</bdi>${reason ? ' · ' + reason : ''}</div>`;
+    }).join('');
+    return `<details><summary><bdi>${esc(method.method.toUpperCase())}</bdi> · ${benchNumbers(row)}${!active && !row?.finished ? ' · ناتمام' : ''}</summary>${details}</details>`;
+  }).join('');
+  result.innerHTML = `<p>${esc(names[job.phase] || job.phase)}${job.plan.request.parallel ? ' · پهنای باند مشترک' : ''}</p>${rows}`;
+  return active;
+}
+async function pollBenchmark(id) {
+  clearTimeout(benchPoll);
+  if (benchJob !== id) return;
+  try {
+    const job = await api('v2/benchmark.status', undefined, {query:{id}});
+    if (benchJob === id && renderBenchmark(job)) benchPoll = setTimeout(() => pollBenchmark(id), 1000);
+  } catch (error) {
+    if (benchJob === id && error.status !== 401 && error.status !== 404) benchPoll = setTimeout(() => pollBenchmark(id), 2000);
+  }
+}
+decorateFields(benchForm,'benchmark');
+decorateFields($('#settings-form'),'settings');
+benchForm.addEventListener('input', resetBenchmark);
+benchForm.addEventListener('change', event => {
+  for (const side of ['first','second']) if (event.target.name === side + '_node')
+    benchAddresses(side, event.target.value).catch(error => setError(benchForm,error));
+});
+benchForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  resetBenchmark();
+  const version = benchEdit;
+  $('.form-error', benchForm).textContent = '';
+  setBusy(benchForm, true);
+  try {
+    const fields = benchForm.elements;
+    const duration_s = benchmarkSeconds(fields.duration_s.value);
+    const methods = ['gre','ipip','sit'].filter(method => fields[method].checked).map(method => ({method,
+      duration_s:fields[method + '_time'].value.trim() ? benchmarkSeconds(fields[method + '_time'].value) : duration_s}));
+    const requested = {nodes:[fields.first_node.value,fields.second_node.value], first:fields.first.value, second:fields.second.value,
+      methods, duration_s, parallel:fields.parallel.checked};
+    const plan = await api('v2/benchmark.plan', requested);
+    if (version !== benchEdit) return;
+    benchPreview = {...requested, id:topologyId(), digest:plan.digest};
+    $('#v2-bench-estimate').textContent = `انتقال ${fa.format(plan.transfer_seconds)} ثانیه · سقف هر روش ${fa.format(plan.max_seconds)} ثانیه · ${fa.format(plan.rate * 8 / 1000000)} Mbps · حداکثر ${fa.format(plan.estimated_bytes / 1000000)} MB`;
+    benchStart.disabled = false;
+  } catch (error) { setError(benchForm,error); }
+  finally { setBusy(benchForm,false); }
+});
+benchStart.addEventListener('click', async () => {
+  if (!benchPreview) return;
+  const preview = benchPreview;
+  benchStart.disabled = true;
+  try {
+    const job = await api('v2/benchmark.start', preview);
+    benchJob = job.id;
+    sessionStorage.setItem('gremgr-benchmark', benchJob);
+    renderBenchmark(job);
+    pollBenchmark(benchJob);
+  } catch (error) { setError(benchForm,error); if (benchPreview === preview) benchStart.disabled = false; }
+});
+benchCancel.addEventListener('click', async () => {
+  try { renderBenchmark(await api('v2/benchmark.cancel', {id:benchJob})); }
+  catch (error) { setError(benchForm,error); }
+});
+$('#v2-groups-refresh').addEventListener('click', () => refreshGroups().catch(error => showToast(failText(error))));
+$('#v2-group-new').addEventListener('click', async () => {
+  try {
+    if (!v2Nodes.length) await (v2Load || refreshGroups());
+    openGroup();
+    groupForm.elements.name.focus();
+  } catch (error) { showToast(failText(error)); }
+});
+$('#v2-group-list').addEventListener('click', event => {
+  const button = event.target.closest('[data-group-id]');
+  if (button) openGroup(v2Groups.find(record => record.id === button.dataset.groupId));
+});
+$('#v2-add-listener').addEventListener('click', () => { listenerForm(); resetGroupPlan(); });
+groupForm.addEventListener('input', resetGroupPlan);
+groupForm.addEventListener('change', event => {
+  if (event.target.dataset.value === 'method') {
+    syncMemberMethod(event.target.closest('[data-v2-member]'));
+    syncListenerMethod(event.target.closest('[data-v2-listener]'));
+  }
+});
+groupForm.addEventListener('click', event => {
+  const button = event.target.closest('[data-v2-edit]');
+  if (!button) return;
+  const listener = button.closest('[data-v2-listener]');
+  if (button.dataset.v2Edit === 'add') memberForm($('[data-v2-members]', listener));
+  else if (button.dataset.v2Edit === 'remove') button.closest('[data-v2-member]').remove();
+  else listener.remove();
+  syncListenerMethod(listener);
+  resetGroupPlan();
+});
+function groupRequest() {
+  const value = (row, field) => $(`[data-value="${field}"]`, row).value.trim();
+  function portLimits(raw) {
+    const result = {};
+    for (const row of raw.split(',').filter(Boolean)) {
+      const [port,up,down,...extra] = row.split(':').map(token => token.trim());
+      if (!/^\d+$/.test(port) || result[port] || !up || !down || extra.length || !Number.isFinite(+up) || !Number.isFinite(+down))
+        throw new Error('سقف پورت را به شکل پورت:ارسال:دریافت وارد کنید.');
+      result[port] = {up,down};
+    }
+    return result;
+  }
+  const linkSettings = member => Object.fromEntries(['ingress','destination'].flatMap(side => {
+    const mtu = value(member,side+'-mtu'), mss = value(member,side+'-mss'), mss_mode = value(member,side+'-mode');
+    return mtu || mss_mode !== 'mtu' ? [[side,{mss_mode,...(mtu && {mtu}),...(mss_mode === 'manual' && {mss})}]] : [];
+  }));
+  const wireguard = member => ({keepalive:Number(value(member,'keepalive')),
+    ...Object.fromEntries(['ingress','destination'].map(side => [side,
+      {public_key:value(member,side+'-wg-key'),port:Number(value(member,side+'-wg-port'))}]))});
+  const l2tpv2 = member => ({lac:value(member,'ppp-lac'),
+    ...Object.fromEntries(['ingress','destination'].map(side => [side,
+      {credential:value(member,side+'-ppp-credential'),port:Number(value(member,side+'-ppp-port'))}]))});
+  const l2tpv3 = member => Object.fromEntries(['ingress','destination'].map(side => [side,Object.fromEntries(
+    ['tunnel_id','session_id','port'].map(key => [key,Number(value(member,side+'-l2tp-'+key))]))]));
+  const listeners = $$('[data-v2-listener]', groupForm).map(row => ({
+    id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
+    ...(sitOnly(row) ? {ports:'all',protocols:[]} : {
+      ports:value(row,'ports'), port_map:value(row,'map'), exclude_ports:value(row,'excluded'),
+      protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')], limits:readRateFields(row),
+      port_limits:portLimits(value(row,'port-rates')), watch_link:$('[data-value="watch-link"]', row).checked,
+      ...(value(row,'probe-protocol') && {probe:{protocol:value(row,'probe-protocol'), port:Number(value(row,'probe-port')),
+        request:$('[data-value="probe-request"]', row).value, response:$('[data-value="probe-response"]', row).value}}),
+    }),
+    members:$$('[data-v2-member]', row).map(member => ({
+      id:member.dataset.v2Member, node_id:value(member,'node') || member.dataset.unmanaged, managed:!!value(member,'node'),
+      method:value(member,'method'), service_ip:value(member,'service'), outer_ip:value(member,'outer'),
+      mtu:Number(value(member,'mtu')),
+      ...(value(member,'method') !== 'direct' && {link_settings:linkSettings(member)}),
+      ...(value(member,'method') === 'ipip' && {ttl:Number(value(member,'ttl'))}),
+      ...(value(member,'method') === 'vxlan' && {vxlan:{vni:Number(value(member,'vxlan-vni')), port:Number(value(member,'vxlan-port'))}}),
+      ...(value(member,'method') === 'wireguard' && {wireguard:wireguard(member)}),
+      ...(value(member,'method') === 'gretap' && {gretap:value(member,'gretap-key') ? {key:Number(value(member,'gretap-key'))} : {}}),
+      ...(value(member,'method') === 'eoip' && {eoip:{tunnel_id:Number(value(member,'eoip-id'))}}),
+      ...(value(member,'method') === 'l2tpv2' && {l2tpv2:l2tpv2(member)}),
+      ...(value(member,'method') === 'l2tpv3' && {l2tpv3:l2tpv3(member)}),
+      ...(value(member,'method') === 'geneve' && {geneve:{vni:Number(value(member,'geneve-vni')), port:Number(value(member,'geneve-port'))}}),
+      ...(value(member,'method') === 'sit' && {sit:{ingress:value(member,'ingress-sit-ip'), destination:value(member,'destination-sit-ip')}}),
+      ...(value(member,'method') !== 'sit' && {
+        weight:Number(value(member,'weight')), priority:Number(value(member,'priority')), limits:readRateFields(member),
+      }),
+      enabled:value(member,'state') !== 'off', draining:value(member,'state') === 'drain',
+    })),
+  }));
+  return {id:topologyId(), group_id:groupDraft.id, expected_revision:groupDraft.revision,
+    group:{id:groupDraft.id, name:groupForm.elements.name.value, selection:groupForm.elements.selection.value,
+      enabled:groupForm.elements.enabled.checked, limits:readRateFields($('#v2-group-limits')), listeners}};
+}
+async function topologyJob(id, phase, showProgress = () => {}) {
+  for (let attempt = 0; attempt < 160; attempt++) {
+    const result = await api('v2/jobs', undefined, {query:{id}});
+    showProgress(result);
+    if (phase(result)) return result;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw new Error('عملیات در سرور ادامه دارد.');
+}
+groupForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  setBusy(groupForm, true);
+  resetGroupPlan();
+  const edit = groupEdit;
+  try {
+    const request = groupRequest();
+    const {job} = await api('v2/plan', request);
+    const result = await topologyJob(job, item => !['queued','running'].includes(item.status));
+    if (edit !== groupEdit) return;
+    if (result.status !== 'done') throw result;
+    groupPlan = {...request, digest:result.result.digest};
+    const changes = request.group.listeners.flatMap(listener => listener.members.map(member =>
+      ({node:listener.node_id, peer:member.node_id, source:listener.ip, target:member.service_ip, method:member.method.toUpperCase()})));
+    groupOutput.innerHTML = `<div class="table-scroll"><table class="detail-table topology-preview"><thead><tr><th>سرور</th><th>تغییر</th><th>نتیجه</th></tr></thead><tbody>${
+      result.result.participants.map(node => {
+        const name = v2Nodes.find(row => row.id === node)?.name || node;
+        const related = changes.filter(change => [change.node,change.peer].includes(node));
+        const paths = related.map(change => `<bdi dir="ltr">${esc(change.source)} → ${esc(change.target)} · ${esc(change.method)}</bdi>`).join('<br>');
+        return `<tr><td>${esc(name)}</td><td>${paths || 'هماهنگی گروه'}</td><td>پیش‌نمایش تأیید شد</td></tr>`;
+      }).join('')}</tbody></table></div>`;
+  } catch (error) {setError(groupForm,error);}
+  finally {setBusy(groupForm,false);$('#v2-apply-group').disabled = !groupPlan;}
+});
+$('#v2-apply-group').addEventListener('click', async () => {
+  if (!groupPlan) return;
+  setBusy(groupForm,true);
+  try {
+    const job = await api('v2/apply',groupPlan);
+    const completed = await topologyJob(job.id,item=>['committed','aborted'].includes(item.phase),item=>{
+      const count = Object.values(item.participants).filter(node=>node.phase==='committed').length;
+      groupOutput.textContent = `${fa.format(count)} از ${fa.format(item.total)} میزبان اعمال شد`;
+    });
+    if (completed.phase === 'aborted') throw new Error('اعمال لغو شد. اتصال همتاها را بررسی کن.');
+    await refreshGroups();
+    const applied = v2Groups.find(record => record.id === completed.group_id);
+    if (applied) openGroup(applied);
+    groupOutput.textContent = 'گروه ذخیره و اعمال شد.';
+  } catch (error) {setError(groupForm,error);}
+  finally {setBusy(groupForm,false);$('#v2-apply-group').disabled = !groupPlan;}
+});
 $('#password-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;setBusy(form,true);try{await api('password',Object.fromEntries(new FormData(form)));form.reset();$('#password-dialog').close();showLogin();showToast('رمز تغییر کرد؛ دوباره وارد شو.');}catch(error){setError(form,error);}finally{setBusy(form,false);}});
 $('#tls-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const certificate=await form.elements.certificate.files[0].text(),key=await form.elements.key.files[0].text();await runJob('tls.save',{certificate,key},form,$('#tls-dialog'));form.reset();});
 $('#job-dismiss').addEventListener('click',()=>$('#job-status').hidden=true);
@@ -345,6 +900,12 @@ document.addEventListener('click',async e=>{
   const action=e.target.closest('[data-action]');if(!action)return;
   const row=action.closest('[data-id]'),c=row?state.connections.find(x=>x.id===row.dataset.id):null;
   switch(action.dataset.action){
+    case 'v2-revoke':
+      if(await confirmAction('لغو دسترسی همتا','برای مدیریت دوباره باید یک دعوت تازه ساخته شود.','لغو دسترسی')){
+        try { await api('v2/pairing.revoke',{node_id:action.dataset.node}); await refreshV2Peers(); }
+        catch(error){showToast(failText(error));}
+      }
+      break;
     case 'add':openConnection();break;
     case 'edit':openConnection(c);break;
     case 'expand':expanded.has(c.id)?expanded.delete(c.id):expanded.add(c.id);action.setAttribute('aria-expanded',expanded.has(c.id));$('.connection-details',row).hidden=!expanded.has(c.id);break;
@@ -380,7 +941,7 @@ $('#backup-file').addEventListener('change',async e=>{
 });
 window.addEventListener('hashchange',navigate);navigate();refresh();
 let chartResizeFrame;
-window.addEventListener('resize',()=>{cancelAnimationFrame(chartResizeFrame);chartResizeFrame=requestAnimationFrame(()=>{if(state&&page!=='settings')renderChart();});});
+window.addEventListener('resize',()=>{cancelAnimationFrame(chartResizeFrame);chartResizeFrame=requestAnimationFrame(()=>{if(state&&connectionPages.includes(page))renderChart();});});
 setInterval(()=>{if(!document.hidden)refresh(true);},5000);
 let liveBusy=false;
 async function refreshLive(){
@@ -389,7 +950,7 @@ async function refreshLive(){
   try{
     const live=await api('live');state.sampled_at=live.sampled_at;
     for(const value of live.connections){const c=state.connections.find(x=>x.id===value.id);if(!c)continue;c.rate=value.rate;c.port_rates=value.port_rates;const row=$(`.connection[data-id="${c.id}"]`);if(!row)continue;const up=$('.speed-value .up',row),down=$('.speed-value .down',row);if(up)up.textContent=speed(c.rate.up);if(down)down.textContent=speed(c.rate.down);for(const el of $$('[data-live-port]',row))el.textContent=speed(portRate(c,el.dataset.livePort,el.dataset.direction));}
-    if(page!=='settings'){const items=state.connections.filter(x=>x.kind===page);$('#metric-up').textContent=speed(items.reduce((n,x)=>n+x.rate.up,0));$('#metric-down').textContent=speed(items.reduce((n,x)=>n+x.rate.down,0));}
+    if(connectionPages.includes(page)){const items=state.connections.filter(x=>x.kind===page);$('#metric-up').textContent=speed(items.reduce((n,x)=>n+x.rate.up,0));$('#metric-down').textContent=speed(items.reduce((n,x)=>n+x.rate.down,0));}
   }catch(error){if(error.status===401){state=null;showLogin();}}
   finally{liveBusy=false;}
 }

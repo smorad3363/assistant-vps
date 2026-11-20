@@ -15,7 +15,8 @@ class PanelError(ValueError):
 DEFAULTS = {
     "port": 8787, "bind": "0.0.0.0", "tls": True,
     "ssh_ports": [22], "reserved_ports": [], "mtu": 1400,
-    "retention_days": 30, "backup_keep": 7, "watchdog": True,
+    "retention_days": 30, "telemetry_limit_mib": 256, "backup_keep": 7, "backup_limit_mib": 128,
+    "watchdog": True,
     "timezone": "Asia/Tehran", "hostname": "", "username": "admin",
 }
 
@@ -138,6 +139,12 @@ def rate(value):
     return round(n, 3)
 
 
+def bandwidth_limits(value):
+    if not isinstance(value, dict) or set(value) - {"up", "down"}:
+        raise PanelError("Set upload and download limits in Mbps.", field="limits")
+    return {direction: rate(speed) for direction, speed in value.items() if speed is not None and speed != ""}
+
+
 def connection(data, settings, previous=None, resolver=resolve):
     if not isinstance(data, dict):
         raise PanelError("Invalid connection.")
@@ -239,12 +246,25 @@ def settings_update(old, data):
     result = copy.deepcopy(old)
     if not isinstance(data, dict):
         raise PanelError("Invalid settings.")
-    for key, lo, hi in (("port", 1024, 65535), ("mtu", 576, 1476), ("retention_days", 1, 365), ("backup_keep", 1, 30)):
+    for key, lo, hi in (("port", 1024, 65535), ("mtu", 576, 1476), ("retention_days", 1, 365),
+                        ("telemetry_limit_mib", 16, 4096), ("backup_keep", 1, 30), ("backup_limit_mib", 1, 4096)):
         if key in data:
             result[key] = integer(data[key], lo, hi, key)
     for key in ("ssh_ports", "reserved_ports"):
         if key in data:
             result[key] = port_list(data[key])
+    if "v2_limits" in data:
+        result["v2_limits"] = bandwidth_limits(data["v2_limits"])
+    if "v2_conntrack_guard" in data:
+        policy = data["v2_conntrack_guard"]
+        if policy is None:
+            result.pop("v2_conntrack_guard", None)
+        elif isinstance(policy, dict):
+            high = integer(policy.get("high"), 1, 100, "high")
+            low = integer(policy.get("low"), 0, high - 1, "low")
+            result["v2_conntrack_guard"] = {"high": high, "low": low}
+        else:
+            raise PanelError("Set high and low conntrack fill percentages.", field="v2_conntrack_guard")
     if "watchdog" in data:
         result["watchdog"] = bool(data["watchdog"])
     if "hostname" in data:
