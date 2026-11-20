@@ -135,13 +135,25 @@ their addresses/MTU; the web worker takes ownership without deleting the live
 GRE interface and keeps their original JSON in `pairs/backups/`.
 
 Settings offers portable ZIP backups, downloads and restore previews. Backups
-contain configuration and a consistent SQLite snapshot; login secrets, live
-sessions, TLS private keys and SSH private keys are excluded. The current local
+contain configuration, cumulative traffic totals and the newest history that
+fits the archive. Login secrets and live sessions stay on the server, along with
+TLS and SSH private keys. The current local
 panel port/login and current SSH protected ports are preserved during restore.
 On a different machine, GRE connections lacking keys restore paused; reconnect
 the foreign server before enabling them. The API also accepts an `address_map`
-when moving source IPv4 addresses. Daily automatic backups and old application
-releases have bounded retention.
+when moving source IPv4 addresses.
+
+The default telemetry budget is 256 MiB, including the SQLite database, WAL,
+shared-memory sidecar and latest host metrics. The default retained ZIP budget
+is 128 MiB, with a maximum of seven local archives. Both budgets are adjustable
+under Settings. At pressure, maintenance trims old samples first and preserves
+cumulative counters, active jobs and credentials. At less than 512 MiB free,
+new history pauses and backups prioritize configuration and totals. A busy
+SQLite reader or a legacy file awaiting safe compaction can delay reclaim.
+Archives are staged and published atomically before older copies are retired.
+The installer keeps up to three recovery snapshots within 32 MiB and protects
+the snapshot used for the active installation or rollback. The OS journal
+remains governed by the host's journald settings.
 
 Panel port changes preserve the previous management port as reserved and roll
 back after 120 seconds unless an authenticated session confirms the new port.
@@ -160,7 +172,8 @@ Settings schedules that updater. Existing application releases are retained for
 rollback. If activation fails, the installer restores the previous release,
 panel configuration, TLS files and service state. The short `gre.sh` command
 and `gre-manager/install.sh` both accept an explicit `--source-dir` for an
-already prepared source package. Initial trust is the GitHub HTTPS installer/manifest. These hashes are
+already prepared source package or `--release-ref` with the full commit ID of a
+published release manifest. Initial trust is the GitHub HTTPS installer/manifest. These hashes are
 integrity checks, not an independent signing key.
 
 Account recovery is intentionally local and noninteractive:

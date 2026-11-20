@@ -15,7 +15,8 @@ class PanelError(ValueError):
 DEFAULTS = {
     "port": 8787, "bind": "0.0.0.0", "tls": True,
     "ssh_ports": [22], "reserved_ports": [], "mtu": 1400,
-    "retention_days": 30, "backup_keep": 7, "watchdog": True,
+    "retention_days": 30, "telemetry_limit_mib": 256, "backup_keep": 7, "backup_limit_mib": 128,
+    "watchdog": True,
     "timezone": "Asia/Tehran", "hostname": "", "username": "admin",
 }
 
@@ -245,7 +246,8 @@ def settings_update(old, data):
     result = copy.deepcopy(old)
     if not isinstance(data, dict):
         raise PanelError("Invalid settings.")
-    for key, lo, hi in (("port", 1024, 65535), ("mtu", 576, 1476), ("retention_days", 1, 365), ("backup_keep", 1, 30)):
+    for key, lo, hi in (("port", 1024, 65535), ("mtu", 576, 1476), ("retention_days", 1, 365),
+                        ("telemetry_limit_mib", 16, 4096), ("backup_keep", 1, 30), ("backup_limit_mib", 1, 4096)):
         if key in data:
             result[key] = integer(data[key], lo, hi, key)
     for key in ("ssh_ports", "reserved_ports"):

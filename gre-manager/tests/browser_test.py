@@ -73,8 +73,11 @@ with sync_playwright() as p:
     page.locator('#settings-page').wait_for(state='visible')
     page.screenshot(path=str(out/"settings-desktop.png"),full_page=True)
     page.locator('#settings-form [name=retention_days]').fill('14')
+    page.locator('#settings-form [name=telemetry_limit_mib]').fill('384')
+    page.locator('#settings-form [name=backup_limit_mib]').fill('96')
     page.locator('#settings-form button[type=submit]').click()
-    page.wait_for_timeout(1800)
+    expect(page.locator('#storage-status')).to_contain_text('از 384 MiB')
+    expect(page.locator('#storage-status')).to_contain_text('از 96 MiB')
     assert page.locator('#settings-form [name=retention_days]').input_value()=='14'
     for width in (375,390,768):
         page.set_viewport_size({"width":width,"height":844})

@@ -55,7 +55,7 @@ jobs:
           python3 gre-manager/build-release.py WORKTREE
           sudo --preserve-env=GRE_PANEL_SKIP_ACME,GITHUB_ACTIONS bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
           sudo systemctl is-active gremgr-worker.service gremgr-web.service
-          sudo gremgr --version | grep -Fx 1.2.0
+          sudo gremgr --version | grep -Fx 2.0.0
           sudo --preserve-env=GRE_PANEL_SKIP_ACME,GITHUB_ACTIONS bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
           curl -kfSs https://127.0.0.1:8787/ | grep -F GRE
           sudo systemctl kill --kill-who=main --signal=SIGKILL gremgr-worker.service
@@ -68,6 +68,17 @@ jobs:
         run: sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/bench_systemd_lab.py
       - name: Both installer commands and automatic rollback
         run: sudo env GITHUB_ACTIONS=true bash gre-manager/tests/install_rollback_lab.sh
+  release-upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Live upgrade from v1.2.0 using the pinned HTTPS installer
+        env:
+          GREMGR_RELEASE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: sudo --preserve-env=GITHUB_ACTIONS,GREMGR_RELEASE_REF bash gre-manager/tests/install_upgrade_lab.sh
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

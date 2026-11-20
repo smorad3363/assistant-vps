@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import time
 
-from .store import atomic_json
+from .store import MIN_FREE_BYTES, atomic_json
 
 
 def read(path):
@@ -86,7 +86,7 @@ class HostSampler:
                     if counters[key] is not None and old.get(key) is not None and counters[key] >= old[key]:
                         counters[key + "_per_second"] = (counters[key] - old[key]) / (now - previous["time"])
         self.previous = {"epoch": epoch, "cpu": cpu, "time": now, "interfaces": interfaces}
-        if now - self.last_persist >= 5 and result["disk_free_bytes"] >= 512 * 1024 * 1024:
+        if now - self.last_persist >= 5 and result["disk_free_bytes"] >= MIN_FREE_BYTES:
             atomic_json(self.path, result)
             self.last_persist = now
         return result

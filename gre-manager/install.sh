@@ -5,16 +5,23 @@ set -Eeuo pipefail
 [[ -d /run/systemd/system ]] || { echo 'A running systemd host is required.' >&2; exit 1; }
 SOURCE_DIR=""
 PANEL_PORT=""
+RELEASE_REF=""
 while (($#)); do
   case "$1" in
     --source-dir) [[ $# -ge 2 && -d $2 ]] || { echo 'Provide a GRE Manager source directory.' >&2; exit 1; }
       SOURCE_DIR=$(realpath "$2"); shift 2 ;;
+    --release-ref) [[ $# -ge 2 && $2 =~ ^[a-f0-9]{40}$ ]] || { echo 'Supply the 40-character release manifest commit.' >&2; exit 1; }
+      RELEASE_REF=$2; shift 2 ;;
     --port) [[ $# -ge 2 ]] || { echo 'Provide a panel port.' >&2; exit 1; }
       PANEL_PORT=$2; shift 2 ;;
     --update-only|--no-wizard) shift ;;
     *) echo "Unknown installation option: $1" >&2; exit 1 ;;
   esac
 done
+if [[ -n $SOURCE_DIR && -n $RELEASE_REF ]]; then
+  echo 'Choose either a local source directory or a release manifest commit.' >&2
+  exit 1
+fi
 if [[ -n "$PANEL_PORT" ]]; then
   if [[ ! "$PANEL_PORT" =~ ^[0-9]{4,5}$ ]] || ((10#$PANEL_PORT < 1024 || 10#$PANEL_PORT > 65535)); then
     echo 'Panel port must be between 1024 and 65535.' >&2; exit 1
@@ -43,7 +50,7 @@ BASE='https://raw.githubusercontent.com/smorad3363/assistant-vps'
 if [[ -n "$SOURCE_DIR" ]]; then
   cp "$SOURCE_DIR/release.json" "$work/release.json"
 else
-  curl -fsSL --retry 2 --connect-timeout 10 --max-time 90 "$BASE/master/gre-manager/release.json" -o "$work/release.json"
+  curl -fsSL --retry 2 --connect-timeout 10 --max-time 90 "$BASE/${RELEASE_REF:-master}/gre-manager/release.json" -o "$work/release.json"
 fi
 python3 - "$work/release.json" > "$work/files" <<'PY'
 import json,re,sys
@@ -108,6 +115,12 @@ if iptables-save > "$work/kernel-before" 2>/dev/null &&
   owned_rules_absent=true
 fi
 
+trim_install_backups() {
+  if ! (cd "$release" && python3 -c 'import sys; from panel.store import prune_install_backups; prune_install_backups(sys.argv[1])' "$backup"); then
+    echo 'Old installation backups could not be pruned.' >&2
+  fi
+}
+
 rollback_install() {
   local code=$1 target saved
   if [[ $BASHPID != "$install_owner" ]]; then exit "$code"; fi
@@ -152,6 +165,7 @@ PY
   fi
   if ((${#restart[@]})); then systemctl start "${restart[@]}"; fi
   if $activated && $peer_monitor; then systemctl start gremgr-peer-monitor.service; fi
+  if $activated; then trim_install_backups; fi
   exit "$code"
 }
 
@@ -220,6 +234,7 @@ for attempt in {1..30}; do
 done
 if (( ! ready )); then rollback_install 1; fi
 trap - ERR HUP INT TERM
+trim_install_backups
 cat "$work/initialize"
 if [[ ${GRE_PANEL_SKIP_ACME:-0} != 1 ]]; then
   if (cd "$release" && python3 -m panel.certificates configure); then

@@ -131,13 +131,15 @@
           <label>پورت‌های محفوظ دیگر<input name="reserved_ports" dir="ltr" placeholder="2096,8443"></label>
           <label>حد بالای MTU خودکار<input name="mtu" type="number" min="576" max="1476" dir="ltr"></label>
           <label>نگهداری جزئیات آمار · روز<input name="retention_days" type="number" min="1" max="365" dir="ltr"></label>
+          <label>سقف تله‌متری · MiB<input name="telemetry_limit_mib" type="number" min="16" max="4096" dir="ltr"></label>
           <label>تعداد بکاپ‌های نگهداری‌شده<input name="backup_keep" type="number" min="1" max="30" dir="ltr"></label>
+          <label>سقف مجموع بکاپ‌ها · MiB<input name="backup_limit_mib" type="number" min="1" max="4096" dir="ltr"></label>
           <label>دامنه ورود پنل · اختیاری<input name="hostname" dir="ltr" placeholder="panel.example.com"></label>
           <label>سقف ارسال گروه‌ها روی این سرور (Mbps)<input name="v2_limit_up" type="number" min="0" step="0.001"></label>
           <label>سقف دریافت گروه‌ها روی این سرور (Mbps)<input name="v2_limit_down" type="number" min="0" step="0.001"></label>
           <label>توقف اتصال تازه در اشغال conntrack (٪)<input name="v2_conntrack_high" type="number" min="1" max="100"></label>
           <label>ازسرگیری اتصال تازه در اشغال conntrack (٪)<input name="v2_conntrack_low" type="number" min="0" max="99"></label>
-        </div><label class="switch-line"><input name="watchdog" type="checkbox" role="switch"><span><strong>بررسی و بازیابی خودکار GRE</strong><small>پس از سه بررسی ناموفق؛ با حفظ سرویس‌های دیگر</small></span></label><p class="form-error" role="alert"></p><button type="submit" class="button primary">ذخیره تنظیمات</button></form></section>
+        </div><p id="storage-status" class="muted small"></p><label class="switch-line"><input name="watchdog" type="checkbox" role="switch"><span><strong>بررسی و بازیابی خودکار GRE</strong><small>پس از سه بررسی ناموفق؛ با حفظ سرویس‌های دیگر</small></span></label><p class="form-error" role="alert"></p><button type="submit" class="button primary">ذخیره تنظیمات</button></form></section>
         <div class="settings-stack">
           <section class="panel"><div class="section-heading"><div class="panel-title"><svg class="icon"><use href="#i-server"/></svg><h2>سرورهای خارج</h2></div><button class="button compact secondary" data-action="add-server"><svg class="icon"><use href="#i-plus"/></svg>افزودن</button></div><p class="muted small">برای ساخت خودکار GRE. انتقال مستقیم به SSH نیاز ندارد.</p><div id="server-list" class="server-list"></div></section>
           <section class="panel"><div class="panel-title"><svg class="icon"><use href="#i-shield"/></svg><h2>ورود و ارتباط امن</h2></div><p id="certificate-status" class="muted">در حال بررسی گواهی HTTPS…</p><p class="field-hint">تمدید خودکار هر ۶ ساعت بررسی می‌شود. پورت ۸۰ هنگام اعتبارسنجی، موقتاً برای گواهی استفاده می‌شود.</p><div class="button-row"><button class="button secondary" data-action="password">تغییر رمز عبور</button><button class="button secondary" data-action="tls-auto">گواهی خودکار IP</button><button class="button secondary" data-action="tls">گواهی دستی</button></div></section>

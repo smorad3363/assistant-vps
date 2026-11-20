@@ -27,7 +27,8 @@ const errors = {
   recovering:'بازیابی تغییر قبلی هنوز تمام نشده است. کمی صبر کن.', busy:'عملیات دیگری در خارج در حال انجام است؛ کمی صبر کن.',
   port_in_use:'پورت انتخابی پنل در حال استفاده است.', in_use:'این سرور هنوز در یک اتصال GRE استفاده می‌شود.',
   certificate:'گواهی و کلید خصوصی با هم سازگار نیستند یا فایل‌ها معتبر نیستند.', password:'رمز جدید باید بین ۱۲ تا ۲۵۶ کاراکتر باشد.',
-  unavailable:'سرویس مدیریت در حال راه‌اندازی مجدد است؛ چند لحظه دیگر تلاش می‌کنیم.', not_found:'این مورد دیگر موجود نیست.'
+  unavailable:'سرویس مدیریت در حال راه‌اندازی مجدد است؛ چند لحظه دیگر تلاش می‌کنیم.', not_found:'این مورد دیگر موجود نیست.',
+  storage:'فضای آزاد یا سقف بکاپ برای ساخت یک فایل قابل‌بازیابی کافی نیست.'
 };
 
 function bytes(value) {
@@ -228,6 +229,11 @@ function renderEvents() {
 }
 function renderSettings() {
   const form=$('#settings-form');
+  const storage=state.storage;
+  if(storage){
+    const usage=(used,limit)=>`${latin.format(used/1048576)} از ${latin.format(limit/1048576)} MiB`;
+    $('#storage-status').textContent=`تله‌متری ${usage(storage.telemetry_bytes,storage.telemetry_limit)} · بکاپ‌ها ${usage(storage.backup_bytes,storage.backup_limit)} · فضای آزاد ${bytes(storage.free_bytes)}`;
+  }
   if (!form.dataset.dirty) {
     form.elements.v2_limit_up.value = state.settings.v2_limits?.up ?? '';
     form.elements.v2_limit_down.value = state.settings.v2_limits?.down ?? '';

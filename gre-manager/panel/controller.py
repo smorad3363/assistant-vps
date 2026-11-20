@@ -23,7 +23,7 @@ from .agent import read_peers, v2_participant
 from .engine import Engine, discovered_ssh_ports, gre_for, run
 from .model import PanelError, connection, ranges_for, resolve, settings_update, validate_conflicts
 from .remote import Remote, server_metadata
-from .store import Store, atomic_json, check_password
+from .store import BACKUP_NAME, Store, atomic_json, check_password, disk_full
 from .topology import legacy_topology
 from .transactions import Coordinator, fingerprint, identity, overlaps
 from .v2_access import AUTH_ROUTES, Access
@@ -45,6 +45,7 @@ class Controller:
         self.rates, self.health, self.failures = {}, {}, {}
         self.v2_remote_health = {}
         self.last_sample, self.last_probe, self.last_backup = 0, 0, 0
+        self.last_prune = 0
         self.live_counters, self.live_epoch, self.last_persist = {}, None, 0
         self.pending = self.paths.etc / "pending.json"
         self.stats_cache, self.stats_cached_at = None, 0
@@ -373,7 +374,7 @@ class Controller:
         self.allocate_gre(updated, previous)
         self.engine.preflight(self.combined(updated))
         self.collect()
-        self.store.automatic_backup()
+        self.store.automatic_backup(updated["settings"])
         journal = {"previous": previous, "updated": updated, "remote": [], "phase": "prepare", "created": time.time()}
         atomic_json(self.pending, journal)
         servers = {x["id"]: x for x in previous["servers"] + updated["servers"]}
@@ -744,7 +745,8 @@ class Controller:
         from .certificates import status
         return dict(cfg, version=__version__, csrf=session["csrf"], addresses=addresses, certificate=status(self.paths),
                     stats=self.stats_cache, events=self.store.events(), sampled_at=self.last_sample,
-                    recovering=self.pending.exists(), backups=[p.name for p in sorted(self.paths.backups.glob("backup-*.zip"), reverse=True)])
+                    recovering=self.pending.exists(), backups=[p.name for p in self.store.backup_files()],
+                    storage=self.store.storage(cfg["settings"]))
 
     def request(self, route, payload, token=None, csrf=None, peer="local"):
         if route == "login":
@@ -829,10 +831,10 @@ class Controller:
             return {}
         if route == "backup.download":
             name = str(payload.get("filename", ""))
-            if not re.fullmatch(r"backup-[0-9]{8}-[0-9]{6}\.zip", name):
+            if not BACKUP_NAME.fullmatch(name):
                 raise PanelError("Invalid backup name.")
             path = self.paths.backups / name
-            if not path.is_file():
+            if path.is_symlink() or not path.is_file():
                 raise PanelError("Backup not found.", "not_found")
             return {"content": base64.b64encode(path.read_bytes()).decode(), "filename": name}
         if route in ("backup.preview", "v2/migration.preview"):
@@ -883,9 +885,21 @@ class Controller:
                             self.collect()
                             self.engine.apply(self.combined(cfg), self.combined(cfg))
                         self.store.event("warning", "Owned GRE state refreshed after three failed checks; VPN services were not restarted.")
+            if now - self.last_prune >= 60:
+                self.last_prune = now
+                try:
+                    self.store.prune(cfg["settings"])
+                except sqlite3.OperationalError as error:
+                    if not disk_full(error):
+                        raise
             if now - self.last_backup > 86400:
-                self.store.prune()
-                self.store.automatic_backup()
                 self.last_backup = now
+                try:
+                    self.store.automatic_backup()
+                except PanelError as error:
+                    if error.code != "storage":
+                        raise
+                    with contextlib.suppress(sqlite3.Error):
+                        self.store.event("warning", str(error))
         finally:
             self.lock.release()
