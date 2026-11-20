@@ -74,6 +74,7 @@ EOF
   local forward=hostfwd=tcp:127.0.0.1:$ssh_port-:22
   if [[ -n $host_port ]]; then forward+=,hostfwd=tcp:127.0.0.1:$host_port-:5100; fi
   qemu-system-x86_64 -machine accel=kvm:tcg -smp 2 -m 1536 -display none -monitor none \
+    -object rng-random,id=guest-rng,filename=/dev/urandom -device virtio-rng-pci,rng=guest-rng \
     -serial "file:$root/console" -drive "file=$root/disk.qcow2,format=qcow2,if=virtio" \
     -drive "file=$root/seed.img,format=raw,readonly=on,if=virtio" -nic "user,model=virtio-net-pci,$forward" \
     -netdev "tap,id=gre,ifname=$tap,script=no,downscript=no" -device "virtio-net-pci,netdev=gre,mac=$mac" &
