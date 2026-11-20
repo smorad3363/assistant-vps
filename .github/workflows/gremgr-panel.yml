@@ -121,7 +121,8 @@ jobs:
           sudo env GITHUB_ACTIONS=true PYTHONPATH="$GITHUB_WORKSPACE/gre-manager" /usr/bin/python3 "$GITHUB_WORKSPACE/gre-manager/tests/chr_eoip_lab.py" "$lab/chr-7.25.1.img" "$lab"
   reboot-jammy-l2tpv3:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The stock guests may need matching kernel extras before a series of cold boots.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual machine dependencies
