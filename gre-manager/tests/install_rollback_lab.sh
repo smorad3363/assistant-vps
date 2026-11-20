@@ -26,7 +26,10 @@ first_install=false
 if [[ ! -e /opt/gremgr/current ]]; then
   first_install=true
   owned_chains='^:GMP_(PRE|POST|LOCAL|FWD|INPUT|COUNT|MSS|MSS_LOCAL)[[:space:]]'
-  iptables-save >"$temporary/first-rules"
+  # The first attempt installs iptables on a stock Fedora cloud guest.
+  if command -v iptables-save >/dev/null; then
+    iptables-save
+  fi >"$temporary/first-rules"
   if ! systemctl cat gremgr-peer-monitor.service >/dev/null 2>&1; then
     cat >"$fixture_monitor" <<'UNIT'
 [Unit]
