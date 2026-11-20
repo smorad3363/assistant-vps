@@ -117,6 +117,32 @@ def aggregate_udp(address):
         print(json.dumps({"bytes": total, "members": sorted(markers)}), flush=True)
 
 
+def received_mbps(report):
+    samples = [
+        stream for interval in report["intervals"] for stream in interval["streams"]
+        if not stream["sender"] and not stream.get("omitted") and .9 <= stream["seconds"] <= 1.1
+    ]
+    assert len(samples) >= 3, report.get("error", "Missing full receiver intervals")
+    return 8 * sum(row["bytes"] for row in samples) / (1_000_000 * sum(row["seconds"] for row in samples))
+
+
+def full_duplex_rates(processes, address, ports):
+    clients = [
+        start_process(processes, ["ip", "netns", "exec", "gm-client", "iperf3", "-c", address, "-p", str(port),
+                                  "-u", "--bidir", "-l", "1200", "-b", "50M", "-O", "2", "-t", "5",
+                                  "--get-server-output", "-J"],
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        for port in ports
+    ]
+    result = []
+    for client in clients:
+        output, error = client.communicate(timeout=22)
+        assert client.returncode == 0, (output[-500:], error)
+        data = json.loads(output)
+        result.append((received_mbps(data["server_output_json"]), received_mbps(data)))
+    return result
+
+
 def render(home, node, with_panel, crash=None):
     paths = Paths(home)
     empty = {"groups": {}, "operations": {}}
@@ -442,6 +468,39 @@ def lab(root):
             assert set(measured["members"]) == {"0", "1", "2", "3"}, measured
             assert 210000 < measured["bytes"] < 610000, (direction, measured)
             print(f"v2 four destinations shared the 1 Mbps {direction} aggregate: {measured['bytes']} bytes over 4 seconds.", flush=True)
+
+        bandwidth_ports = range(5211, 5215)
+        bandwidth_routes = []
+        for target, port in zip(services, bandwidth_ports):
+            address = nodes[target][0]
+            for proto in ("tcp", "udp"):
+                command("ip", "netns", "exec", target, "iptables", "-A", "INPUT", "-s", "192.0.2.10",
+                        "-p", proto, "--dport", "5220", "-j", "ACCEPT")
+            server = start_process(processes, ["ip", "netns", "exec", target, "iperf3", "-s", "-B", address, "-p", "5220", "-J"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            for _ in range(30):
+                if f"{address}:5220" in command("ip", "netns", "exec", target, "ss", "-Hlt", capture_output=True).stdout:
+                    break
+                assert server.poll() is None, server.stderr.read()
+                time.sleep(.1)
+            else:
+                raise RuntimeError(f"iperf3 did not listen on {address}:5220")
+            route = listener("gm-ir", [target], "direct", [1])
+            bandwidth_routes.append(dict(route, ports=str(port), port_map={str(port): 5220}))
+
+        apply(bandwidth_routes)
+        address = nodes["gm-ir"][0]
+        uncapped = full_duplex_rates(processes, address, bandwidth_ports)
+        assert all(sum(direction) > 125 for direction in zip(*uncapped)), uncapped
+        bandwidth_routes[0]["members"][0]["limits"] = {"up": 12, "down": 16}
+        apply(bandwidth_routes, limits={"up": 100, "down": 100})
+        capped = full_duplex_rates(processes, address, bandwidth_ports)
+        totals = tuple(sum(direction) for direction in zip(*capped))
+        assert all(86 <= rate <= 112 for rate in totals), (capped, totals)
+        for rate, limit in zip(capped[0], (12, 16)):
+            assert .75 * limit <= rate <= 1.15 * limit, capped
+        print(f"v2 100 Mbps group limit across four destinations, concurrent UDP, up/down {totals!r} Mbps. "
+              f"Per-member receiver rates {capped!r}, with 12/16 Mbps limits on the first member.", flush=True)
 
         ipip = listener("gm-ir", [first_target], "ipip", [1])
         command("ip", "netns", "exec", "gm-ir", "ip", "tunnel", "add", "gm-other-ipip", "mode", "ipip",
