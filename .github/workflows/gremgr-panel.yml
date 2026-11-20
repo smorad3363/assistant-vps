@@ -105,7 +105,8 @@ jobs:
         run: bash gre-manager/tests/qemu_reboot_lab.sh
   reboot-jammy-l2tpv3:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The stock guests may need matching kernel extras before a series of cold boots.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install virtual machine dependencies
