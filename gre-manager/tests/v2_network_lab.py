@@ -496,11 +496,20 @@ def lab(root):
         apply(bandwidth_routes, limits={"up": 100, "down": 100})
         capped = full_duplex_rates(processes, address, bandwidth_ports)
         totals = tuple(sum(direction) for direction in zip(*capped))
-        assert all(86 <= rate <= 112 for rate in totals), (capped, totals)
-        for rate, limit in zip(capped[0], (12, 16)):
-            assert .75 * limit <= rate <= 1.15 * limit, capped
         print(f"v2 100 Mbps group limit across four destinations, concurrent UDP, up/down {totals!r} Mbps. "
               f"Per-member receiver rates {capped!r}, with 12/16 Mbps limits on the first member.", flush=True)
+        assert all(86 <= rate <= 112 for rate in totals), (capped, totals)
+        assert all(min(rates) > 0 for rates in capped), capped
+        for rate, limit in zip(capped[0], (12, 16)):
+            assert rate <= 1.15 * limit, capped
+
+        # Competing UDP streams may use the group budget before an individual
+        # member meets its own ceiling. Saturate that member on its own as well.
+        isolated, = full_duplex_rates(processes, address, bandwidth_ports[:1])
+        for rate, limit in zip(isolated, (12, 16)):
+            assert .75 * limit <= rate <= 1.15 * limit, isolated
+        print(f"v2 individually capped destination, up/down {isolated!r} Mbps under 50 Mbps offered in each direction.",
+              flush=True)
 
         ipip = listener("gm-ir", [first_target], "ipip", [1])
         command("ip", "netns", "exec", "gm-ir", "ip", "tunnel", "add", "gm-other-ipip", "mode", "ipip",
