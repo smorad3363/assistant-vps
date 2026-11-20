@@ -52,6 +52,14 @@ class Paths:
             p.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
+def sync_directory(path):
+    directory = os.open(path, os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def atomic_write(path, writer, mode="w"):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -63,11 +71,7 @@ def atomic_write(path, writer, mode="w"):
             out.flush()
             os.fsync(out.fileno())
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        sync_directory(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -442,6 +446,8 @@ class Store:
         with (self.paths.var / "backup.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             settings = settings or self.config()["settings"]
+            if not stage:
+                settings = self._confirmed_backup_policy(settings)
             limit = settings["backup_limit_mib"] * MIB
             content = self.backup(limit)
             if shutil.disk_usage(self.paths.backups).free < len(content) + 65536:
@@ -460,6 +466,19 @@ class Store:
     def _backup_path(self):
         return self.paths.backups / (time.strftime("backup-%Y%m%d-%H%M%S", time.gmtime()) + ".zip")
 
+    def _confirmed_backup_policy(self, settings):
+        # Backup requests can still arrive while a network or panel-port
+        # change is pending. Keep the rollback policy until it is confirmed.
+        for name in ("web-pending.json", "pending.json"):
+            try:
+                previous = json.loads((self.paths.etc / name).read_text())["previous"]
+            except FileNotFoundError:
+                continue
+            if name == "pending.json":
+                previous = previous["settings"]
+            return dict(settings, **{key: previous.get(key, DEFAULTS[key]) for key in BACKUP_POLICY})
+        return settings
+
     def finish_settings_backup(self, settings):
         staged = self.paths.staged_backup
         if not staged.is_file():
@@ -473,6 +492,7 @@ class Store:
                 return
             filename = self._backup_path()
             staged.replace(filename)
+            sync_directory(filename.parent)
             self._rotate_backups(filename, settings)
 
     def _rotate_backups(self, filename, settings):

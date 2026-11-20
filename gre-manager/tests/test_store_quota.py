@@ -1,6 +1,8 @@
 """File quotas protect recent samples, durable counters and recovery archives."""
 from contextlib import closing
 import fcntl
+import json
+import socket
 import sqlite3
 import tempfile
 import time
@@ -8,8 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from panel.controller import Controller
-from panel.demo import DemoEngine, DemoRemote
+from panel.demo import DemoController, DemoEngine, DemoRemote
 from panel.store import MIB, MIN_FREE_BYTES, Paths, Store, TRAFFIC_SCHEMA, prune_install_backups
 
 
@@ -20,7 +21,7 @@ class StorageQuotaTests(unittest.TestCase):
         self.paths = Paths(temporary.name)
 
     def controller(self, store):
-        controller = Controller(store, DemoEngine(), DemoRemote(self.paths))
+        controller = DemoController(store, DemoEngine(), DemoRemote(self.paths))
         self.addCleanup(controller.executor.shutdown)
         self.addCleanup(controller.v2_executor.shutdown)
         controller.last_prune = controller.last_backup = time.time()
@@ -155,6 +156,30 @@ class StorageQuotaTests(unittest.TestCase):
             controller.maintain_storage(settings, time.time())
             prune.assert_called_once_with(settings)
             backup.assert_called_once()
+
+    def test_manual_backup_during_unconfirmed_port_uses_previous_policy(self):
+        store = Store(self.paths)
+        controller = self.controller(store)
+        for index in range(4):
+            with patch("panel.store.time.strftime", return_value=f"backup-20261120-10000{index}"):
+                store.automatic_backup()
+        archives = {path.name: path.read_bytes() for path in store.backup_files()}
+        with socket.socket() as temporary_port:
+            temporary_port.bind(("127.0.0.1", 0))
+            port = temporary_port.getsockname()[1]
+        controller.operation("settings.save", {"port": port, "backup_keep": 1}, lambda *_: None)
+        confirmation = store.paths.etc / "web-pending.json"
+        self.assertTrue(confirmation.is_file())
+        with patch("panel.store.time.strftime", return_value="backup-20261120-100009"):
+            controller.operation("backup.create", {}, lambda *_: None)
+        self.assertEqual(len(store.backup_files()), 5)
+        pending = json.loads(confirmation.read_text())
+        confirmation.write_text(json.dumps(dict(pending, deadline=0)))
+        controller.tick()
+        self.assertEqual(store.config()["settings"]["backup_keep"], 7)
+        self.assertEqual(store.config()["settings"]["port"], 8787)
+        self.assertEqual({name: (store.paths.backups / name).read_bytes() for name in archives}, archives)
+        self.assertFalse(store.paths.staged_backup.exists())
 
 
 if __name__ == "__main__":
