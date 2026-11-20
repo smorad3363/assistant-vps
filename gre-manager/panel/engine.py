@@ -25,6 +25,7 @@ CHAINS = {"nat": ["GMP_PRE", "GMP_POST", "GMP_LOCAL"], "filter": ["GMP_FWD", "GM
 HOOKS = [("nat", "PREROUTING", "GMP_PRE"), ("nat", "POSTROUTING", "GMP_POST"), ("nat", "INPUT", "GMP_LOCAL"),
          ("filter", "FORWARD", "GMP_FWD"), ("filter", "INPUT", "GMP_INPUT"), ("mangle", "FORWARD", "GMP_MSS"),
          ("mangle", "OUTPUT", "GMP_MSS_LOCAL")]
+HOOK_TAG = ("-m", "comment", "--comment", "gmpanel:hook")
 
 
 def run(*args, check=True, timeout=20, input=None):
@@ -341,8 +342,11 @@ class Engine:
     def clear_owned(self):
         """Used only after the peer confirms no panel, peers or other managers remain."""
         for table, hook, chain in HOOKS:
-            while self.run("iptables", "-w", "5", "-t", table, "-C", hook, "-j", chain, check=False).returncode == 0:
-                self.run("iptables", "-w", "5", "-t", table, "-D", hook, "-j", chain)
+            prefix = ("iptables", "-w", "5", "-t", table)
+            for tag in (HOOK_TAG, ()):
+                jump = (*tag, "-j", chain)
+                while self.run(*prefix, "-C", hook, *jump, check=False).returncode == 0:
+                    self.run(*prefix, "-D", hook, *jump)
         for table, chains in CHAINS.items():
             present = [chain for chain in chains if self.run("iptables", "-w", "5", "-t", table, "-S", chain, check=False).returncode == 0]
             for chain in present:
@@ -641,8 +645,8 @@ class Engine:
             self.run("iptables-restore", "-w", "10", "--noflush", input="\n".join(lines) + "\n")
         for table, parent, own in HOOKS:
             prefix = ("iptables", "-w", "10", "-t", table)
-            if self.run(*prefix, "-C", parent, "-m", "comment", "--comment", "gmpanel:hook", "-j", own, check=False).returncode:
-                self.run(*prefix, "-I", parent, "1", "-m", "comment", "--comment", "gmpanel:hook", "-j", own)
+            if self.run(*prefix, "-C", parent, *HOOK_TAG, "-j", own, check=False).returncode:
+                self.run(*prefix, "-I", parent, "1", *HOOK_TAG, "-j", own)
         self.epoch_file.write_text(uuid.uuid4().hex)
 
     def apply(self, config, previous=None):

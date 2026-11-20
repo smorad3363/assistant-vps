@@ -7,8 +7,10 @@ SOURCE_DIR=""
 PANEL_PORT=""
 while (($#)); do
   case "$1" in
-    --source-dir) SOURCE_DIR=$(realpath "$2"); shift 2 ;;
-    --port) PANEL_PORT=$2; shift 2 ;;
+    --source-dir) [[ $# -ge 2 && -d $2 ]] || { echo 'Provide a GRE Manager source directory.' >&2; exit 1; }
+      SOURCE_DIR=$(realpath "$2"); shift 2 ;;
+    --port) [[ $# -ge 2 ]] || { echo 'Provide a panel port.' >&2; exit 1; }
+      PANEL_PORT=$2; shift 2 ;;
     --update-only|--no-wizard) shift ;;
     *) echo "Unknown installation option: $1" >&2; exit 1 ;;
   esac
@@ -70,11 +72,11 @@ while read -r file digest; do
   printf '%s  %s\n' "$digest" "$work/package/$file" | sha256sum -c --status
 done < "$work/files"
 python3 -m compileall -q "$work/package/panel"
-bash -n "$work/package/install.sh" "$work/package/gremgr.sh" "$work/package/legacy-restore.sh"
+for script in install.sh gremgr.sh legacy-restore.sh; do bash -n "$work/package/$script"; done
 getent group gremgr >/dev/null || groupadd --system gremgr
 id gremgr >/dev/null 2>&1 || useradd --system --gid gremgr --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin gremgr
-release="/opt/gremgr/releases/$VERSION-$REVISION-$(date +%s)"
-install -d -m 755 "$release"
+install -d -m 755 /opt/gremgr/releases
+release=$(mktemp -d "/opt/gremgr/releases/$VERSION-$REVISION-XXXXXX")
 cp -a "$work/package/." "$release/"
 find "$release" -type d -exec chmod 755 {} +
 find "$release" -type f -exec chmod 644 {} +
@@ -84,11 +86,86 @@ backup="/etc/gremgr/backups/install-$(date +%Y%m%d-%H%M%S)-$$"
 install -d -m 700 "$backup"
 old_release=""
 if [[ -e /opt/gremgr/current ]]; then old_release=$(readlink -f /opt/gremgr/current); fi
-for target in /usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-worker.service /etc/systemd/system/gremgr-web.service /etc/systemd/system/gremgr-certificate.service /etc/systemd/system/gremgr-certificate.timer; do
-  [[ ! -e "$target" ]] || cp -aL "$target" "$backup/$(basename "$target")"
+targets=(/usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-worker.service
+         /etc/systemd/system/gremgr-web.service /etc/systemd/system/gremgr-certificate.service
+         /etc/systemd/system/gremgr-certificate.timer /etc/gremgr/panel.json /etc/gremgr/tls/cert.pem /etc/gremgr/tls/key.pem)
+services=(gremgr-worker.service gremgr-web.service)
+restart=()
+enabled=()
+for unit in "${services[@]}"; do
+  if systemctl is-active --quiet "$unit" 2>/dev/null; then restart+=("$unit"); fi
+  if systemctl is-enabled --quiet "$unit" 2>/dev/null; then enabled+=("$unit"); fi
+done
+activated=false
+install_owner=$BASHPID
+owned_password=false
+owned_rules_absent=false
+peer_monitor=false
+state_db=/var/lib/gremgr/panel.sqlite3
+if systemctl is-active --quiet gremgr-peer-monitor.service 2>/dev/null; then peer_monitor=true; fi
+if iptables-save > "$work/kernel-before" 2>/dev/null &&
+   ! grep -Eq '^:GMP_(PRE|POST|LOCAL|FWD|INPUT|COUNT|MSS|MSS_LOCAL)[[:space:]]' "$work/kernel-before"; then
+  owned_rules_absent=true
+fi
+
+rollback_install() {
+  local code=$1 target saved
+  if [[ $BASHPID != "$install_owner" ]]; then exit "$code"; fi
+  trap - ERR HUP INT TERM
+  set +e
+  echo "The panel update failed. Installation backup: $backup" >&2
+  if $activated; then
+    if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+      systemctl show "${services[@]}" -p Id -p ActiveState -p SubState -p Result -p ExecMainStatus >&2
+      journalctl -u gremgr-worker.service -u gremgr-web.service -n 24 --no-pager >&2
+    fi
+    systemctl stop "${services[@]}"
+    systemctl disable "${services[@]}" >/dev/null 2>&1
+    if [[ -n "$old_release" && -d "$old_release" ]]; then
+      ln -sfn "$old_release" /opt/gremgr/current.rollback
+      mv -Tf /opt/gremgr/current.rollback /opt/gremgr/current
+    elif [[ $(readlink -f /opt/gremgr/current) == "$release" ]]; then
+      rm -f /opt/gremgr/current
+    fi
+    for target in "${targets[@]}"; do
+      saved="$backup/$(basename "$target")"
+      if [[ -e "$saved" || -L "$saved" ]]; then
+        cp -a --remove-destination "$saved" "$target"
+      else
+        rm -f -- "$target"
+      fi
+    done
+    if $owned_password && [[ -f "$state_db" ]]; then
+      python3 - "$state_db" <<'PY'
+from contextlib import closing
+import sqlite3, sys
+with closing(sqlite3.connect(sys.argv[1], timeout=15)) as db, db:
+    db.execute("DELETE FROM secrets WHERE key='password'")
+PY
+    fi
+    if $owned_rules_absent; then
+      (cd "$release" && env -u GRE_PANEL_HOME python3 -c 'from panel.engine import Engine; from panel.store import Paths; Engine(Paths()).clear_owned()')
+    fi
+    systemctl daemon-reload
+    if ((${#enabled[@]})); then systemctl enable "${enabled[@]}" >/dev/null; fi
+    systemctl reset-failed "${services[@]}" 2>/dev/null
+  fi
+  if ((${#restart[@]})); then systemctl start "${restart[@]}"; fi
+  if $activated && $peer_monitor; then systemctl start gremgr-peer-monitor.service; fi
+  exit "$code"
+}
+
+trap 'rollback_install $?' ERR
+trap 'rollback_install 129' HUP
+trap 'rollback_install 130' INT
+trap 'rollback_install 143' TERM
+if [[ -n "$old_release" ]]; then systemctl stop "${services[@]}"; fi
+for target in "${targets[@]}"; do
+  [[ ! -e "$target" && ! -L "$target" ]] || cp -a "$target" "$backup/$(basename "$target")"
 done
 if [[ -n "$old_release" ]]; then printf '%s\n' "$old_release" > "$backup/previous-release"; fi
-ln -s "$release" /opt/gremgr/current.new
+activated=true
+ln -sfn "$release" /opt/gremgr/current.new
 mv -Tf /opt/gremgr/current.new /opt/gremgr/current
 install -m 755 "$release/gremgr.sh" /usr/local/sbin/gremgr
 install -m 755 "$release/pair.py" /usr/local/sbin/gremgr-pair
@@ -96,11 +173,25 @@ install -m 644 "$release/gremgr-worker.service" /etc/systemd/system/gremgr-worke
 install -m 644 "$release/gremgr-web.service" /etc/systemd/system/gremgr-web.service
 install -m 644 "$release/gremgr-certificate.service" /etc/systemd/system/gremgr-certificate.service
 install -m 644 "$release/gremgr-certificate.timer" /etc/systemd/system/gremgr-certificate.timer
+previous_password=$(python3 - "$state_db" <<'PY'
+from contextlib import closing
+from pathlib import Path
+import sqlite3, sys
+path = Path(sys.argv[1])
+previous = False
+if path.is_file():
+    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=15)) as db:
+        table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='secrets'").fetchone()
+        previous = table is not None and db.execute("SELECT 1 FROM secrets WHERE key='password'").fetchone() is not None
+print('yes' if previous else 'no')
+PY
+)
+if [[ $previous_password == no ]]; then owned_password=true; fi
+init_args=()
 if [[ -n "$PANEL_PORT" ]]; then
-  (cd "$release" && python3 -m panel.cli init --port "$PANEL_PORT")
-else
-  (cd "$release" && python3 -m panel.cli init)
+  init_args+=(--port "$PANEL_PORT")
 fi
+(cd "$release" && env -u GRE_PANEL_HOME python3 -m panel.cli init "${init_args[@]}") > "$work/initialize"
 if [[ ! -s /etc/gremgr/tls/cert.pem || ! -s /etc/gremgr/tls/key.pem ]]; then
   openssl req -x509 -newkey ed25519 -nodes -keyout /etc/gremgr/tls/key.pem -out /etc/gremgr/tls/cert.pem -days 365 -subj '/CN=GRE Manager' >/dev/null 2>&1
   chmod 600 /etc/gremgr/tls/key.pem /etc/gremgr/tls/cert.pem
@@ -108,29 +199,28 @@ fi
 install -d -m 750 -o root -g gremgr /run/gremgr
 systemctl daemon-reload
 systemctl enable gremgr-worker.service gremgr-web.service >/dev/null
-systemctl restart gremgr-worker.service
-systemctl restart gremgr-web.service
-PORT=$(python3 -c 'import json;print(json.load(open("/etc/gremgr/panel.json"))["settings"]["port"])')
+systemctl start "${services[@]}"
+readiness_url=$(python3 - <<'PY'
+import json
+from pathlib import Path
+settings = json.loads(Path('/etc/gremgr/panel.json').read_text())['settings']
+host = {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(settings['bind'], settings['bind'])
+if ':' in host:
+    host = '[' + host + ']'
+protocol = 'https' if settings['tls'] else 'http'
+print(f"{protocol}://{host}:{settings['port']}/")
+PY
+)
 ready=0
 for attempt in {1..30}; do
-  if curl --noproxy '*' -kfsS --connect-timeout 1 --max-time 2 "https://127.0.0.1:$PORT/" -o /dev/null 2>/dev/null; then ready=1; break; fi
+  if systemctl is-active --quiet gremgr-worker.service && systemctl is-active --quiet gremgr-web.service &&
+     curl --noproxy '*' -kfsS --connect-timeout 1 --max-time 2 "$readiness_url" -o "$work/readiness" 2>/dev/null &&
+     grep -Fq 'GRE Manager' "$work/readiness"; then ready=1; break; fi
   sleep 1
 done
-if (( ! ready )); then
-  echo "The panel did not become ready. Installation backup: $backup" >&2
-  if [[ -n "$old_release" && -d "$old_release" ]]; then
-    ln -s "$old_release" /opt/gremgr/current.rollback
-    mv -Tf /opt/gremgr/current.rollback /opt/gremgr/current
-    for target in /usr/local/sbin/gremgr /usr/local/sbin/gremgr-pair /etc/systemd/system/gremgr-worker.service /etc/systemd/system/gremgr-web.service /etc/systemd/system/gremgr-certificate.service /etc/systemd/system/gremgr-certificate.timer; do
-      saved="$backup/$(basename "$target")"
-      [[ ! -f "$saved" ]] || cp -a "$saved" "$target"
-    done
-    systemctl daemon-reload
-    systemctl restart gremgr-worker.service gremgr-web.service || true
-    echo 'Previous program release restored.' >&2
-  fi
-  exit 1
-fi
+if (( ! ready )); then rollback_install 1; fi
+trap - ERR HUP INT TERM
+cat "$work/initialize"
 if [[ ${GRE_PANEL_SKIP_ACME:-0} != 1 ]]; then
   if (cd "$release" && python3 -m panel.certificates configure); then
     if [[ ! -x /opt/gremgr/acme-venv/bin/certbot ]]; then

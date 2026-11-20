@@ -215,13 +215,16 @@ def bench_acceptance(stack, root, left, right, addresses):
         process.stdin.close()
         return process
 
-    for method, duration in (("gre", 2), ("ipip", 3), ("sit", 3)):
+    cases = [("gre", 2), ("ipip", 3), ("sit", 3)]
+    if os.getenv("GREMGR_BENCH_LONG") == "true":
+        cases.extend([("gre", 37), ("ipip", 300)])
+    for method, duration in cases:
         receipts = []
         job_id = uuid.uuid4().hex
         for direction, seconds in enumerate(direction_lengths(duration)):
             sender, receiver = direction, 1 - direction
             payload = {"job_id": job_id, "method": method, "direction": direction, "nodes": node_ids,
-                       "first": addresses[0], "second": addresses[1], "seconds": seconds, "budget": 800_000,
+                       "first": addresses[0], "second": addresses[1], "seconds": seconds, "budget": seconds * 200_000 + 100_000,
                        "rate": 200_000, "secret": secrets.token_hex(32)}
             key = key_for(payload)
             receiving = launch(receiver, payload)

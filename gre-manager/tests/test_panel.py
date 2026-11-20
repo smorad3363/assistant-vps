@@ -130,6 +130,34 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("multiport ! --dports",payload)
         self.assertNotIn("'!'",payload)
 
+    def test_clear_owned_removes_tagged_and_legacy_jumps(self):
+        import subprocess
+
+        tagged = ("PREROUTING", "-m", "comment", "--comment", "gmpanel:hook", "-j", "GMP_PRE")
+        legacy = ("PREROUTING", "-j", "GMP_PRE")
+        unrelated = ("PREROUTING", "-j", "OTHER_PRE")
+        remaining = [tagged, tagged, legacy, unrelated]
+        deleted_chains = []
+
+        def run(*args, **kwargs):
+            table, operation, *rule = args[4:]
+            rule = tuple(rule)
+            success = True
+            if operation == "-C":
+                success = table == "nat" and rule in remaining
+            elif operation == "-D":
+                remaining.remove(rule)
+            elif operation == "-S":
+                success = table == "nat" and rule == ("GMP_PRE",)
+            elif operation == "-X":
+                self.assertEqual(remaining, [unrelated])
+                deleted_chains.append((table, rule[0]))
+            return subprocess.CompletedProcess(args, 0 if success else 1, "", "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            Engine(Paths(directory), run).clear_owned()
+        self.assertEqual(deleted_chains, [("nat", "GMP_PRE")])
+
 
 class StoreTests(unittest.TestCase):
     def setUp(self):

@@ -25,7 +25,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Syntax and regression tests
         run: |
-          bash -n gre.sh gre-manager/install.sh gre-manager/gremgr.sh gre-manager/legacy-restore.sh gre-manager/tests/network_lab.sh
+          for script in gre.sh gre-manager/install.sh gre-manager/gremgr.sh gre-manager/legacy-restore.sh gre-manager/tests/*.sh; do
+            bash -n "$script"
+          done
           python3 gre-manager/build-release.py --check
           python3 -m compileall -q gre-manager/panel
           PYTHONPATH=gre-manager python3 -m unittest discover -s gre-manager/tests -p 'test_*.py' -v
@@ -43,17 +45,18 @@ jobs:
           sudo modprobe l2tp_eth
       - name: Real kernel TCP and UDP in isolated namespaces
         env:
+          GREMGR_BENCH_LONG: ${{ matrix.os == 'ubuntu-24.04' }}
           GREMGR_L2TPV3_VM: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
           sudo mkdir -p /run/netns
-          sudo --preserve-env=GREMGR_L2TPV3_VM unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
+          sudo --preserve-env=GREMGR_BENCH_LONG,GREMGR_L2TPV3_VM unshare --mount --net --fork bash gre-manager/tests/network_lab.sh
       - name: Full noninteractive install and update on disposable runner
         run: |
           python3 gre-manager/build-release.py WORKTREE
-          sudo --preserve-env=GRE_PANEL_SKIP_ACME bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
+          sudo --preserve-env=GRE_PANEL_SKIP_ACME,GITHUB_ACTIONS bash gre-manager/install.sh --source-dir "$PWD/gre-manager"
           sudo systemctl is-active gremgr-worker.service gremgr-web.service
           sudo gremgr --version | grep -Fx 1.2.0
-          sudo --preserve-env=GRE_PANEL_SKIP_ACME bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
+          sudo --preserve-env=GRE_PANEL_SKIP_ACME,GITHUB_ACTIONS bash gre-manager/install.sh --source-dir "$PWD/gre-manager" --update-only
           curl -kfSs https://127.0.0.1:8787/ | grep -F GRE
           sudo systemctl kill --kill-who=main --signal=SIGKILL gremgr-worker.service
           for i in {1..30}; do curl -kfSs https://127.0.0.1:8787/ >/dev/null 2>&1 && break || sleep 1; done
@@ -63,6 +66,8 @@ jobs:
           sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/ssh_lab.py
       - name: Benchmark lease cleanup after cancellation and process death
         run: sudo env GITHUB_ACTIONS=true PYTHONPATH="$PWD/gre-manager" python3 gre-manager/tests/bench_systemd_lab.py
+      - name: Both installer commands and automatic rollback
+        run: sudo env GITHUB_ACTIONS=true bash gre-manager/tests/install_rollback_lab.sh
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -103,6 +108,15 @@ jobs:
         env:
           GREMGR_REBOOT_METHOD: ${{ matrix.transport }}
         run: bash gre-manager/tests/qemu_reboot_lab.sh
+  release-fedora:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install virtual machine dependencies
+        run: bash gre-manager/tests/install_ci_deps.sh qemu-system-x86 qemu-utils cloud-image-utils gnupg
+      - name: dnf installation, upgrade, rollback and reboot
+        run: bash gre-manager/tests/qemu_fedora_install_lab.sh
   routeros-eoip:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

@@ -157,7 +157,10 @@ login attempts, backup expansion, telemetry and event history are bounded.
 All downloaded files are pinned to one source commit and SHA256-checked against
 `release.json`. The same installer updates existing installations noninteractively;
 Settings schedules that updater. Existing application releases are retained for
-rollback. Initial trust is the GitHub HTTPS installer/manifest; these hashes are
+rollback. If activation fails, the installer restores the previous release,
+panel configuration, TLS files and service state. The short `gre.sh` command
+and `gre-manager/install.sh` both accept an explicit `--source-dir` for an
+already prepared source package. Initial trust is the GitHub HTTPS installer/manifest. These hashes are
 integrity checks, not an independent signing key.
 
 Account recovery is intentionally local and noninteractive:
