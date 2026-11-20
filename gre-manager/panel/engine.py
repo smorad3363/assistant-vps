@@ -440,7 +440,7 @@ class Engine:
         for g in config.get("v2_devices", []):
             if g["outer_local"] not in interfaces:
                 raise PanelError("The selected tunnel outer address is unavailable on this node.", "local_ip")
-        unkeyed_pairs, keyed_pairs, vxlan, wg_links, geneve, l2tp, ppp_links = {}, {}, [], [], [], [], []
+        unkeyed_pairs, keyed_pairs, vxlan, wg_links, geneve, l2tp, ppp_links, eoip = {}, {}, [], [], [], [], [], []
         for link in self.gre_devices(config):
             if (method := link.get("method")) in ("ipip", "sit"):
                 pair = link["outer_local"], link["outer_peer"]
@@ -452,6 +452,8 @@ class Engine:
                 geneve.append(link)
             if link.get("method") == "wireguard":
                 wg_links.append(link)
+            if link.get("method") == "eoip":
+                eoip.append(link)
             if link.get("method") == "l2tpv2":
                 ppp_links.append(link)
             if link.get("method") == "l2tpv3":
@@ -480,6 +482,8 @@ class Engine:
         self.check_udp_overlays(vxlan, interfaces)
         self.check_udp_overlays(geneve, interfaces)
         self.check_wireguard(wg_links, interfaces)
+        if eoip:
+            driver_for(eoip[0]).check(eoip, interfaces, self.run)
         if ppp_links:
             driver_for(ppp_links[0]).check(ppp_links, interfaces, self.paths, self.run)
         if l2tp:
@@ -548,6 +552,9 @@ class Engine:
                 existing = ipaddress.ip_network(destination, strict=False)
                 if (subnet.network.overlaps(existing) if v6 else subnet.ip in existing):
                     raise PanelError("The private tunnel subnet overlaps an existing route.", "route_conflict")
+        if driver.method == "eoip":
+            driver.configure(g, self.paths, interface, row, self.run)
+            return
         if driver.method == "l2tpv3":
             driver.configure(g, self.paths, self.run)
         else:
@@ -712,7 +719,7 @@ class Engine:
     def remove_gre(self, g):
         # Verify ownership even on deletion. Never deletes an arbitrary name.
         driver = driver_for(g)
-        if driver.method in ("l2tpv2", "l2tpv3"):
+        if driver.method in ("l2tpv2", "l2tpv3", "eoip"):
             driver.remove(g, self.paths, self.run)
             return
         row = self.inspect_link(g, driver)

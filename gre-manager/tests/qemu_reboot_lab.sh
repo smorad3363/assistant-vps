@@ -204,6 +204,8 @@ def identity(): return uuid.uuid4().hex
 group_id = identity()
 member = {"id": identity(), "node_id": dst, "method": method, "service_ip": "198.51.100.51",
           "outer_ip": "198.51.100.51", "mtu": 1280}
+if method == "eoip":
+    member["eoip"] = {"tunnel_id": 22411}
 if method == "l2tpv2":
     member["l2tpv2"] = {"lac": "ingress", "ingress": {"port": 37401, "credential": "lab"},
                        "destination": {"port": 37402, "credential": "lab"}}
@@ -227,7 +229,12 @@ PY
 request='import json, sys; from panel.agent import v2_participant; from panel.engine import Engine; from panel.store import Paths; p=Paths(); peer=v2_participant(p, Engine(p)); change=json.load(sys.stdin); assert peer.request(change["owner"], sys.argv[1], change)["phase"] == sys.argv[1] + ("d" if sys.argv[1] == "prepare" else "ted")'
 for stage in prepare commit; do
   for port in 25223 25222; do
-    guest "$port" "cd /opt/gremgr/current && sudo python3 -c '$request' '$stage'" <"$lab/change.json"
+    if ! guest "$port" "cd /opt/gremgr/current && sudo python3 -c '$request' '$stage'" <"$lab/change.json"; then
+      if [[ $method == eoip ]]; then
+        guest "$port" "sudo journalctl -b -u 'gremgr-eoip-*' -n 60 --no-pager && ip -br link" || true
+      fi
+      exit 1
+    fi
   done
 done
 
@@ -258,6 +265,13 @@ verify_restored() {
 }
 verify_restored
 echo "Initial ${method^^} payload passed."
+if [[ $method == eoip ]]; then
+  guest 25222 "sudo systemctl stop 'gremgr-eoip-*.service'"
+  if verify_flow; then echo 'A removed EoIP link unexpectedly carried traffic.' >&2; exit 1; fi
+  guest 25222 sudo iptables-save -c -t filter | awk '/^\[[1-9][0-9]*:.*\] -A GMP_FWD .* ! -o e2-.* -j DROP/{verified=1} END{exit(!verified)}'
+  guest 25222 sudo systemctl restart gremgr-worker.service
+  verify_restored
+fi
 guest 25223 sudo systemctl reboot || true
 boot_out=$(ready 25223 "$boot_out")
 verify_restored

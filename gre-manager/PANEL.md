@@ -207,6 +207,11 @@ GRETAP members use a separate Ethernet interface to carry IPv4 between the
 two configured outer addresses. The panel generates matching keys on both
 ends unless a key is supplied. The link stays separate from the WAN bridge.
 
+EoIP uses a dedicated Linux TAP interface and a shared 16-bit tunnel ID.
+Specify the outer IPv4 address on both ends and allow protocol 47 between
+those addresses. Use an inner MTU with at least 42 bytes of underlay headroom.
+The EoIP task stops with its member and the kernel releases its TAP interface.
+
 L2TPv2 / PPP requires `xl2tpd`, `pppd` and kernel PPP support on both Linux
 hosts. Choose the LAC side and a separate UDP port on each host. Store the
 same 32-byte hex secret in a root-owned mode-0600 file on each host under

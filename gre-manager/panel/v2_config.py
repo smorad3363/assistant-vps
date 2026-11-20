@@ -181,6 +181,11 @@ def normalize_group(raw):
                     raise PanelError("Configure the optional GRETAP key.", field="gretap")
                 normalized_members[-1]["gretap"] = ({"key": integer(settings["key"], 1, 4294967295, "key")}
                                                        if "key" in settings else {})
+            if method == "eoip":
+                params = member.get("eoip")
+                if not isinstance(params, dict) or set(params) != {"tunnel_id"}:
+                    raise PanelError("Set a shared 16-bit EoIP tunnel ID.", field="eoip")
+                normalized_members[-1]["eoip"] = {"tunnel_id": integer(params["tunnel_id"], 1, 65535, "tunnel_id")}
             if method == "sit":
                 if (draining or normalized_members[-1]["weight"] != 1 or normalized_members[-1]["priority"]
                         or any(normalized_members[-1].get("limits", {}).values())):
