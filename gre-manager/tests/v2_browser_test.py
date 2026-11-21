@@ -10,6 +10,115 @@ def no_overflow(page):
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
+def protocol_tabs(page, output, local, remote, original):
+    """Exercise the same production editor from every method URL."""
+    page.set_viewport_size({"width": 1440, "height": 950})
+    methods = {
+        "wireguard": "ingress-wg-key", "vxlan": "vxlan-vni", "geneve": "geneve-vni",
+        "gretap": "gretap-key", "eoip": "eoip-id", "l2tpv2": "ppp-lac",
+        "l2tpv3": "ingress-l2tp-tunnel_id", "sit": "ingress-sit-ip", "ipip": "ttl",
+    }
+    form = page.locator("#v2-group-form")
+    for method, field in methods.items():
+        link = page.locator(f'[data-page="{method}"]')
+        link.click()
+        expect(link).to_have_attribute("aria-current", "page")
+        expect(page.locator("#v2-group-list")).not_to_contain_text(original["group"]["name"])
+        page.locator("#v2-group-new").click()
+        expect(form.locator('[data-value="method"]')).to_have_value(method)
+        expect(form.locator('[data-value="method"]')).not_to_be_visible()
+        expect(form.locator('[name="selection"]')).to_have_value("single")
+        expect(form.locator('[data-v2-member] [data-value="node"]')).to_have_value(remote)
+        expect(form.locator(f'[data-value="{field}"]')).to_be_visible()
+        for other, different in methods.items():
+            if other != method:
+                expect(form.locator(f'[data-value="{different}"]')).not_to_be_visible()
+        if method == "wireguard":
+            for width in (390, 1440):
+                page.set_viewport_size({"width": width, "height": 950})
+                no_overflow(page)
+                page.screenshot(path=str(output / f"method-wireguard-{width}.png"), full_page=True)
+        if method == "sit":
+            expect(form.locator('[data-value="ports"]')).not_to_be_visible()
+
+    saved = []
+    submitted = []
+    page.route("**/api/v2/groups", lambda route: route.fulfill(json=[original, *saved]))
+
+    def plan(route):
+        request = route.request.post_data_json
+        submitted.append(request)
+        route.fulfill(json={"job": "method-test-preview"})
+
+    def apply(route):
+        request = route.request.post_data_json
+        assert request["digest"] == "method-plan" and request["id"] == submitted[-1]["id"]
+        saved[:] = [{"id": request["group_id"], "owner": local, "revision": 1, "group": request["group"]}]
+        route.fulfill(json={"id": "method-test-apply"})
+
+    def job(route):
+        if "preview" in route.request.url:
+            route.fulfill(json={"status": "done", "result": {"digest": "method-plan", "participants": [local, remote]}})
+        else:
+            route.fulfill(json={"phase": "committed", "participants": {}, "total": 2, "group_id": saved[0]["id"]})
+
+    page.route("**/api/v2/plan", plan)
+    page.route("**/api/v2/apply", apply)
+    page.route("**/api/v2/jobs?*", job)
+    form.locator('[name="name"]').fill("تونل تهران")
+    expect(form.locator('[data-value="ip"]')).to_have_value("")
+    form.locator('[data-value="ip"]').fill("192.0.2.11")
+    form.locator('[data-value="ports"]').fill("۸۴۴۳")
+    form.locator('[data-value="service"]').fill("203.0.113.50")
+    form.locator('[data-v2-member] [data-value="outer"]').fill("203.0.113.51")
+    ingress = form.locator('[data-listener-advanced]')
+    ingress.locator('summary').click()
+    ingress.locator('[data-value="outer"]').fill("192.0.2.10")
+    ingress.locator('[data-value="rate-up"]').fill("14")
+    form.locator('[data-value="ttl"]').fill("48")
+    form.get_by_text("تغییر پورت مقصد و سرعت هر پورت", exact=True).click()
+    form.locator('[data-v2-edit="add-port"]').click()
+    form.locator('[data-value="override-port"]').fill("8443")
+    form.locator('[data-value="override-target"]').fill("443")
+    form.locator('[data-value="override-up"]').fill("18")
+    form.locator('button[type="submit"]').click()
+    expect(form.locator(".topology-preview")).to_be_visible()
+    form.locator('#v2-apply-group').click()
+    expect(form).not_to_be_visible()
+    card = page.locator('#v2-group-list .topology-card').filter(has_text="تونل تهران")
+    expect(card).to_contain_text("8443")
+    card.get_by_role("button").click()
+    expect(form.locator('[data-value="ttl"]')).to_have_value("48")
+    expect(form.locator('[data-value="override-target"]')).to_have_value("443")
+    form.locator('button[type="submit"]').click()
+    expect(form.locator(".topology-preview")).to_be_visible()
+    assert len(submitted) == 2
+    first, reopened = submitted
+    assert first["group"] == reopened["group"] and reopened["expected_revision"] == 1
+    listener, = reopened["group"]["listeners"]
+    member, = listener["members"]
+    assert listener["ports"] == "8443" and listener["port_map"] == {"8443": 443}
+    assert listener["port_limits"] == {"8443": {"up": 18, "down": 0}}
+    assert listener["node_id"] == local and member["node_id"] == remote and member["method"] == "ipip"
+    assert listener["outer_ip"] == "192.0.2.10" and member["outer_ip"] == "203.0.113.51"
+    assert float(listener["limits"]["up"]) == 14 and not member["limits"]
+    assert member["ttl"] == 48 and reopened["group"]["selection"] == "single"
+    page.locator('[data-page="wireguard"]').click()
+    expect(page.locator('#v2-group-list')).not_to_contain_text("تونل تهران")
+    expect(page.locator('#v2-apply-group')).to_be_disabled()
+
+    # Multimember configurations keep all destinations and open in the group editor.
+    page.locator('[data-page="direct"]').click()
+    group_card = page.locator('#v2-group-list .topology-card').filter(has_text=original["group"]["name"])
+    group_card.get_by_role("button", name="ویرایش گروه").click()
+    expect(page.locator('[data-page="groups"]')).to_have_attribute("aria-current", "page")
+    expect(form.locator('[data-v2-member]')).to_have_count(16)
+    expect(form.locator('[name="selection"]')).to_have_value("weighted")
+    if output:
+        page.set_viewport_size({"width": 1440, "height": 950})
+        page.screenshot(path=str(output / "group-editor-desktop.png"))
+
+
 def run(page, output):
     page.goto("http://127.0.0.1:8877")
     page.locator("#login-form [name=username]").fill("admin")
@@ -29,9 +138,9 @@ def run(page, output):
     first.locator('[data-value="method"]').select_option("vxlan")
     expect(first.locator('[data-value="vxlan-vni"]')).to_be_visible()
     expect(first.locator('[data-value="ttl"]')).not_to_be_visible()
-    tip = first.get_by_role("button", name="راهنمای شناسهٔ VNI")
+    tip = first.locator('details[data-method="vxlan"]').get_by_role("button", name="راهنمای شناسه شبکه")
     tip.focus()
-    expect(page.get_by_role("tooltip")).to_contain_text("۲۴ بیتی")
+    expect(page.get_by_role("tooltip")).to_contain_text("دو طرف")
     page.keyboard.press("Escape")
     expect(page.get_by_role("tooltip")).to_have_count(0)
     first.locator('[data-value="method"]').select_option("sit")
@@ -50,10 +159,10 @@ def run(page, output):
         form.locator('[data-v2-edit="add"]').click()
         members.nth(index).locator('[data-value="service"]').fill(f"203.0.113.{50 + index}")
     expect(members).to_have_count(16)
-    page.locator("#v2-groups-refresh").click()
+    page.locator("#refresh").click()
     expect(form.locator('[name="name"]')).to_have_value(name)
     form.locator('button[type="submit"]').click()
-    expect(page.locator(".topology-preview")).to_contain_text("پیش‌نمایش تأیید شد")
+    expect(page.locator(".topology-preview")).to_contain_text("تنظیمات آماده ذخیره است")
     page.locator("#v2-apply-group").click()
     cards = page.locator(".topology-card")
     expect(cards.first).to_contain_text(name)
@@ -104,8 +213,8 @@ def run(page, output):
     benchmark.locator('button[type="submit"]').click()
     expect(page.locator("#v2-bench-estimate")).to_contain_text("۳۷ ثانیه")
     page.locator("#v2-bench-start").click()
-    expect(page.locator("#v2-bench-result")).to_contain_text("۱۵۰ MB")
-    expect(page.locator("#v2-bench-result")).to_contain_text("۱۰۰ Mbps (برگشت)")
+    expect(page.locator("#v2-bench-result")).to_contain_text("۱۵۰ مگابایت")
+    expect(page.locator("#v2-bench-result")).to_contain_text("۱۰۰ مگابیت بر ثانیه (برگشت)")
 
     for width in (360, 375, 390, 768, 1440):
         page.set_viewport_size({"width": width, "height": 844})
@@ -115,12 +224,22 @@ def run(page, output):
             no_overflow(page)
             if target == "groups" and width == 390:
                 assert 0 <= cards.first.bounding_box()["y"] < 360
+                toggle = page.get_by_role("button", name="نمایش همه روش‌ها")
+                toggle.click()
+                expect(page.locator("#method-menu-toggle")).to_have_attribute("aria-expanded", "true")
+                page.locator('[data-page="sit"]').click()
+                expect(page.locator("#method-menu-toggle")).to_have_attribute("aria-expanded", "false")
+                expect(page.locator('[data-page="sit"]')).to_be_in_viewport()
+                page.locator('[data-page="groups"]').click()
+                assert 0 <= cards.first.bounding_box()["y"] < 360
             if width in (390, 1440):
+                expect(page.locator("#toast")).not_to_be_visible(timeout=6500)
                 page.screenshot(path=str(output / f"v2-{target}-{width}.png"))
     for form_id in ("v2-group-form", "v2-bench-form", "settings-form"):
         missing = page.locator(f'#{form_id} input:not([type="hidden"]), #{form_id} select, #{form_id} textarea').evaluate_all(
             'fields => fields.filter(input => !input.closest(".field-with-help")).map(input => input.name || input.dataset.value)')
         assert not missing, (form_id, missing)
+    protocol_tabs(page, output, local, remote, original)
 
 
 if __name__ == "__main__":
@@ -142,4 +261,4 @@ if __name__ == "__main__":
             page.screenshot(path=str(output / "v2-failure.png"))
             raise
         assert not failures, failures
-        print("PASS: v2 creation, apply, 16 members, failed-path priority, field help, benchmark form and five widths.")
+        print("PASS: method pages, protocol settings, port editors, create/apply/reopen, group navigation, benchmarks and five widths.")

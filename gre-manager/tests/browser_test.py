@@ -76,8 +76,8 @@ with sync_playwright() as p:
     page.locator('#settings-form [name=telemetry_limit_mib]').fill('384')
     page.locator('#settings-form [name=backup_limit_mib]').fill('96')
     page.locator('#settings-form button[type=submit]').click()
-    expect(page.locator('#storage-status')).to_contain_text('از 384 MiB')
-    expect(page.locator('#storage-status')).to_contain_text('از 96 MiB')
+    expect(page.locator('#storage-status')).to_contain_text('از ۳۸۴ MiB')
+    expect(page.locator('#storage-status')).to_contain_text('از ۹۶ MiB')
     assert page.locator('#settings-form [name=retention_days]').input_value()=='14'
     for width in (375,390,768):
         page.set_viewport_size({"width":width,"height":844})

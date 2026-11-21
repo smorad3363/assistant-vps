@@ -1,9 +1,9 @@
-# GRE Manager 2.0
+# GRE Manager 2.1
 
 A Persian web panel for managing tunnel groups and direct TCP/UDP forwarding
 across Linux servers. It includes weighted routing, failover, path tests,
 per-host SSH protection and recovery after reboot.
-The Bash installer has no interactive management menu.
+Each tunnel method has its own page for setup and existing routes. Use Groups to share an entry point across multiple destinations.
 
 ```bash
 curl -fsSLo gre-install.sh https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre.sh && sudo bash gre-install.sh
