@@ -45,7 +45,7 @@ echo 'A failed upgrade from 1.2.0 restored the previous application, configurati
 curl -fsSL --retry 2 --connect-timeout 10 --max-time 90 \
   "https://raw.githubusercontent.com/smorad3363/assistant-vps/$GREMGR_RELEASE_REF/gre.sh" -o "$temporary/gre.sh"
 bash "$temporary/gre.sh" --release-ref "$GREMGR_RELEASE_REF" --update-only
-gremgr --version | grep -Fx 2.0.0
+gremgr --version | grep -Fx 2.1.0
 systemctl is-active --quiet gremgr-worker.service gremgr-web.service
 cmp /opt/gremgr/current/release.json "$repo/gre-manager/release.json"
 
@@ -71,4 +71,4 @@ config, telemetry = store.read_backup(Path(sys.argv[2]).read_bytes())
 assert config["settings"]["retention_days"] == 19
 Controller.validate_telemetry(telemetry)
 PY
-echo 'The pinned HTTPS upgrade to 2.0.0 retained v1 credentials, the custom panel port, totals and a readable v1 backup.'
+echo 'The pinned HTTPS upgrade to 2.1.0 retained v1 credentials, the custom panel port, totals and a readable v1 backup.'

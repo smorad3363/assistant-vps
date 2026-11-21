@@ -1,7 +1,6 @@
-# GRE Manager 1.0 — web control plane
+# GRE Manager web panel
 
-One installation on Iran provides three pages: **GRE**, **IPTables / direct
-forwarding**, and **Settings**. There are no interactive Bash management menus.
+Open a method under **روش‌های اتصال** to create a tunnel or edit its settings. GRE and direct forwarding also show connections from earlier installations. Use **گروه‌ها** for multi-destination routing, **تست مسیر** for benchmarks, and **تنظیمات** for server and panel settings.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smorad3363/assistant-vps/master/gre.sh | sudo bash

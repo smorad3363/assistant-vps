@@ -55,3 +55,96 @@ html{min-height:100%;scrollbar-gutter:stable}body{background:var(--bg);color:var
   .field-help { min-width:26px; min-height:26px }
   .field-with-help > label { padding-inline-end:30px }
 }
+
+/* Navigation remains visible while a protocol editor is open. */
+.app { max-inline-size: 1500px; }
+.workspace { display: grid; grid-template-columns: 192px minmax(0, 1fr); gap: clamp(20px, 3vw, 48px); align-items: start; padding-block: 26px 38px; }
+.workspace > main { min-width: 0; padding: 0; }
+.navigation { position: sticky; top: 18px; padding: 8px 0; }
+.section-tabs { display: grid; gap: 3px; padding-block-end: 18px; border-bottom: 1px solid var(--line); }
+.section-tabs a, .method-nav a { display: flex; align-items: center; gap: 11px; min-height: 40px; padding: 8px 13px; color: #b9c8c1; border-radius: 7px; }
+.section-tabs a { font-size: 14px; }
+.section-tabs .icon { width: 17px; height: 17px; }
+.method-nav h2 { margin: 16px 12px 7px; font-size: 13px; color: var(--muted); font-weight: 500; }
+.method-nav a { font-size: 14px; min-height: 34px; padding-block: 5px; border-inline-start: 3px solid transparent; }
+.navigation a:focus-visible, .navigation a:hover { color: var(--text); background: var(--raised); }
+.navigation a[aria-current=page] { background: #20372e; color: #b6f1d9; }
+.method-nav a[aria-current=page] { border-inline-start-color: var(--accent); }
+.navigation bdi { font-family: system-ui, sans-serif; font-weight: 550; letter-spacing: .01em; }
+.workspace .page-heading { margin: 3px 0 24px; }
+.workspace h1, .editor h2 { line-height: 1.55; }
+.workspace h1 { font-size: clamp(22px, 2.2vw, 31px); }
+.workspace label, dialog label { font-size: 13px; line-height: 1.75; }
+.workspace :is(input, select, textarea), dialog :is(input, select, textarea) { font-size: 15px; }
+.workspace label small, dialog label small, .field-hint { font-size: 12px; color: var(--muted); line-height: 1.8; }
+input[dir=ltr], textarea[dir=ltr], code[dir=ltr], bdi[dir=ltr] { unicode-bidi: isolate; }
+input[dir=ltr], textarea[dir=ltr] { text-align: left; }
+#v2-group-form, #v2-bench-form, #settings-form { --field-gap: 14px; }
+#v2-group-form { border: 0; margin: 0; padding: 0; scroll-margin-block-start: 14px; }
+.editor-heading, .editor-actions .button-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.editor-heading { margin-block: 2px 18px; }
+.editor-heading h2 { font-size: 23px; }
+.editor-block, #v2-group-form .listener-block { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: clamp(16px, 2vw, 24px); margin: 0 0 18px; }
+#v2-group-form legend { padding-inline: 7px; color: var(--accent); font-size: 16px; font-weight: 600; }
+#v2-group-form .topology-member { margin-block: 22px 8px; background: #16211d; padding: clamp(12px, 1.6vw, 21px); }
+#v2-group-form .topology-member legend { font-size: 14px; }
+.editor .form-grid { gap: var(--field-gap); }
+.editor .form-grid label { margin-block-end: 8px; }
+.check-line { display: flex; flex-direction: row; align-items: center; gap: 9px; margin-block: 8px; }
+.editor details, .fold { margin-block: 7px; border-block-start: 1px solid var(--line); }
+.editor details > summary, .fold > summary { padding: 11px 2px; cursor: pointer; font-size: 13px; font-weight: 500; }
+.editor details[open] > summary { color: var(--accent); }
+.editor .field-with-help { min-inline-size: 0; }
+.field-with-help > label { padding-inline-end: 0; }
+.field-with-help > label:not(.check-line):not(.switch-line) { padding-block-start: 0; }
+.field-with-help .field-help { width: 23px; height: 23px; min-height: 23px; min-width: 23px; line-height: 1; color: #a9bcb2; }
+.field-with-help > label:not(.check-line):not(.switch-line)::first-line { line-height: 24px; }
+.editor-actions { margin-block: 18px 0; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.editor-actions .button-row { justify-content: flex-end; }
+.editor-actions .button { min-width: 125px; }
+.button.text-action { border: 0; background: transparent; color: var(--muted); padding-inline: 0; font-size: 12px; }
+.button.text-action:hover { color: var(--red); }
+.editor.one-method [data-group-only], .editor.one-method .field-with-help:has(> [data-group-only]) { display: none; }
+.peer-hint { grid-column: 1 / -1; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.peer-hint a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.override-row { display: grid; align-items: end; gap: 10px; grid-template-columns: repeat(4,minmax(0,1fr)) 36px; margin: 10px 0; }
+.override-row .icon-button { margin-block-end: 12px; min-width: 34px; }
+.override-row .field-help { display: none; }
+.topology-card { background: var(--surface); padding: 18px; }
+.topology-card h2 { font-size: 17px; }
+.topology-card details { border-block-start: 1px solid var(--line); padding-block-start: 8px; }
+.topology-card summary { cursor: pointer; }
+.entry-route { display: flex; gap: 8px; flex-wrap: wrap; margin-block: 12px 6px; color: var(--muted); font-size: 13px; }
+.entry-route > span { color: var(--text); }
+.empty-state { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 48px 20px; background: var(--surface); border: 1px dashed #3c5046; border-radius: 12px; color: var(--muted); }
+.empty-state .icon { color: var(--accent); width: 22px; height: 22px; }
+#v2-group-form [hidden], [hidden] { display: none !important; }
+@media (max-width: 950px) and (min-width: 761px) {
+  .workspace { grid-template-columns: 146px minmax(0, 1fr); gap: 16px; }
+  .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .connection-row { grid-template-columns: minmax(120px,1fr) minmax(100px,1fr) auto; }
+  .connection-row > .ports-cell, .connection-row > .speed-cell { grid-row: 2; }
+}
+@media (max-width: 760px) {
+  .workspace { display: block; padding-block-start: 4px; }
+  .navigation { position: static; padding: 0 0 14px; }
+  .section-tabs { display: flex; gap: 4px; padding-block: 3px 6px; }
+  .section-tabs a { flex: 1; justify-content: center; font-size: 13px; min-height: 40px; padding: 5px; }
+  .method-nav h2 { font-size: 12px; margin: 8px 0 5px; }
+  #method-tabs { display: grid; grid-template-columns: repeat(auto-fit,minmax(78px,1fr)); gap: 4px; }
+  .method-nav a { justify-content: center; text-align: center; min-height: 34px; padding: 5px 2px; font-size: 12px; background: var(--surface); border: 1px solid var(--line); }
+  .method-nav a[aria-current=page] { border-color: var(--accent); }
+  .workspace .page-heading { margin-block-end: 14px; align-items: center; }
+  .workspace .page-heading .button { margin-top: 0; }
+  .editor .form-grid, .workspace #settings-form .form-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .editor-actions .button { flex: 1; }
+}
+@media (max-width: 540px) {
+  .editor .form-grid, .workspace #settings-form .form-grid { grid-template-columns: minmax(0,1fr); }
+  .editor .form-grid { gap: 9px; }
+  #v2-group-form .listener-block { padding: 12px; }
+  .override-row { grid-template-columns: repeat(2,minmax(0,1fr)); padding-block-end: 10px; border-block-end: 1px solid var(--line); }
+  .workspace :is(input, select, textarea), dialog :is(input, select, textarea) { font-size: 16px; }
+  .sheet .dialog-body .form-grid { grid-template-columns: minmax(0,1fr); }
+  .editor-heading h2 { font-size: 20px; }
+}
