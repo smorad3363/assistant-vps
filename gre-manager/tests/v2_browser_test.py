@@ -70,6 +70,11 @@ def protocol_tabs(page, output, local, remote, original):
     form.locator('[data-value="ip"]').fill("192.0.2.11")
     form.locator('[data-value="ports"]').fill("۸۴۴۳")
     form.locator('[data-value="service"]').fill("203.0.113.50")
+    form.locator('[data-v2-member] [data-value="outer"]').fill("203.0.113.51")
+    ingress = form.locator('[data-listener-advanced]')
+    ingress.locator('summary').click()
+    ingress.locator('[data-value="outer"]').fill("192.0.2.10")
+    ingress.locator('[data-value="rate-up"]').fill("14")
     form.locator('[data-value="ttl"]').fill("48")
     form.get_by_text("تغییر پورت مقصد و سرعت هر پورت", exact=True).click()
     form.locator('[data-v2-edit="add-port"]').click()
@@ -95,6 +100,8 @@ def protocol_tabs(page, output, local, remote, original):
     assert listener["ports"] == "8443" and listener["port_map"] == {"8443": 443}
     assert listener["port_limits"] == {"8443": {"up": 18, "down": 0}}
     assert listener["node_id"] == local and member["node_id"] == remote and member["method"] == "ipip"
+    assert listener["outer_ip"] == "192.0.2.10" and member["outer_ip"] == "203.0.113.51"
+    assert float(listener["limits"]["up"]) == 14 and not member["limits"]
     assert member["ttl"] == 48 and reopened["group"]["selection"] == "single"
     page.locator('[data-page="wireguard"]').click()
     expect(page.locator('#v2-group-list')).not_to_contain_text("تونل تهران")
@@ -226,6 +233,7 @@ def run(page, output):
                 page.locator('[data-page="groups"]').click()
                 assert 0 <= cards.first.bounding_box()["y"] < 360
             if width in (390, 1440):
+                expect(page.locator("#toast")).not_to_be_visible(timeout=6500)
                 page.screenshot(path=str(output / f"v2-{target}-{width}.png"))
     for form_id in ("v2-group-form", "v2-bench-form", "settings-form"):
         missing = page.locator(f'#{form_id} input:not([type="hidden"]), #{form_id} select, #{form_id} textarea').evaluate_all(

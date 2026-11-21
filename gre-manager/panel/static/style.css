@@ -112,6 +112,10 @@ input[dir=ltr], textarea[dir=ltr] { text-align: left; }
 .field-with-help.captioned > .field-help { position: static; grid-column: 2; grid-row: 1; align-self: center; }
 .field-with-help.captioned > label > :is(input,select,textarea) { grid-column: 1 / -1; grid-row: 2; align-self: start; min-width: 0; }
 .field-with-help.captioned > [role=tooltip] { inset-inline-start: 0; inset-inline-end: auto; top: 26px; }
+.field-with-help:has(> .check-line) { display: flex; align-items: center; align-self: center; gap: 7px; }
+.field-with-help:has(> .check-line) > .field-help { position: static; flex: none; }
+.field-with-help:has(> .check-line) > [role=tooltip] { inset-inline-start: 0; inset-inline-end: auto; }
+.editor .field-with-help > .check-line { margin: 5px 0; }
 input[dir=ltr]::placeholder { unicode-bidi: plaintext; }
 .editor-actions { margin-block: 18px 0; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .editor-actions .button-row { justify-content: flex-end; }
@@ -126,6 +130,7 @@ input[dir=ltr]::placeholder { unicode-bidi: plaintext; }
 
 .topology-card { background: var(--surface); padding: 18px; }
 .topology-card h2 { font-size: 17px; }
+.topology-card-header > button { flex: none; white-space: nowrap; }
 .topology-card details { border-block-start: 1px solid var(--line); padding-block-start: 8px; }
 .topology-card summary { cursor: pointer; }
 .entry-route { display: flex; gap: 8px; flex-wrap: wrap; margin-block: 12px 6px; color: var(--muted); font-size: 13px; }

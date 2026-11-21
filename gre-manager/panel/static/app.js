@@ -688,7 +688,7 @@ function listenerForm(listener = {}) {
     <details class="fold" data-forwarding><summary>تغییر پورت مقصد و سرعت هر پورت</summary>
       <p class="muted small">برای هر پورت ورودی، پورت مقصد یا سقف سرعت را وارد کن. اگر پورت مقصد خالی باشد، شماره‌اش عوض نمی‌شود.</p><div data-port-overrides></div><button type="button" data-v2-edit="add-port" class="button secondary compact">افزودن پورت</button>
     </details>
-    <details class="fold"><summary>تنظیمات بیشتر ورودی</summary><div class="form-grid">
+    <details class="fold" data-listener-advanced><summary>تنظیمات بیشتر ورودی</summary><div class="form-grid">
       <label>آی‌پی سرور برای ساخت تونل<input data-value="outer" dir="ltr" ${local ? 'list="local-ip-options"' : ''} value="${esc(listener.outer_ip)}"></label>
       <label data-forwarding>پورت‌هایی که منتقل نمی‌شوند<input data-value="excluded" dir="ltr" placeholder="22,8080" value="${esc((listener.exclude_ports || []).join(','))}"></label>
       ${rateFields(listener.limits,'data-forwarding')}</div></details>
@@ -703,12 +703,14 @@ function listenerForm(listener = {}) {
     </div></details>
     <div data-v2-members></div><div class="button-row"><button type="button" class="button secondary" data-group-only data-v2-edit="add">افزودن مقصد دیگر</button>
     <button type="button" class="button secondary" data-group-only data-v2-edit="remove-listener">حذف این ورودی</button></div>`;
+  const members = $('[data-v2-members]',section);
+  if (groupDraft.method) $('details',section).before(members);
   const mappings = {...listener.port_map};
   if (listener.target_port && !(listener.ports in mappings)) mappings[listener.ports] = listener.target_port;
   const caps = listener.port_limits || {};
   const ports = new Set([...Object.keys(mappings),...Object.keys(caps)]);
   for (const port of ports) overrideRow(section,port,mappings[port],caps[port]);
-  for (const member of listener.members || [{}]) memberForm($('[data-v2-members]', section), member);
+  for (const member of listener.members || [{}]) memberForm(members, member);
   $('#v2-listener-list').append(section);
   decorateFields(section,'listener');
   syncListenerMethod(section);
@@ -992,11 +994,10 @@ groupForm.addEventListener('change', event => {
   } else if (input.dataset.value === 'node' && listener && !member) {
     const local = input.value === v2Local;
     const addresses = Object.keys(state.addresses);
-    for (const key of ['ip','outer']) {
-      const address = $(`[data-value="${key}"]`,listener);
+    for (const address of $$('[data-value="ip"],[data-listener-advanced] [data-value="outer"]',listener)) {
       if (local) address.setAttribute('list','local-ip-options');
       else address.removeAttribute('list');
-      address.value = local && addresses.length === 1 && key === 'ip' ? addresses[0] : '';
+      address.value = local && addresses.length === 1 && address.dataset.value === 'ip' ? addresses[0] : '';
     }
     for (const row of $$('[data-v2-member]',listener)) destinationNodes(row);
   } else if (member && input.dataset.value?.endsWith('-mode')) syncMemberMethod(member);
@@ -1028,10 +1029,10 @@ function groupRequest() {
   const l2tpv3 = member => Object.fromEntries(['ingress','destination'].map(side => [side,Object.fromEntries(
     ['tunnel_id','session_id','port'].map(key => [key,Number(value(member,side+'-l2tp-'+key))]))]));
   const listeners = $$('[data-v2-listener]', groupForm).map(row => ({
-    id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value(row,'outer'),
+    id:row.dataset.v2Listener, node_id:value(row,'node'), ip:value(row,'ip'), outer_ip:value($('[data-listener-advanced]',row),'outer'),
     ...(sitOnly(row) ? {ports:'all',protocols:[]} : {
       ports:value(row,'ports') === 'همه' ? 'all' : plainDigits(value(row,'ports')), ...readOverrides(row), exclude_ports:plainDigits(value(row,'excluded')),
-      protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')], limits:readRateFields(row),
+      protocols:value(row,'protocol') === 'both' ? ['tcp','udp'] : [value(row,'protocol')], limits:readRateFields($('[data-listener-advanced]',row)),
       watch_link:$('[data-value="watch-link"]', row).checked,
       ...(value(row,'probe-protocol') && {probe:{protocol:value(row,'probe-protocol'), port:Number(value(row,'probe-port')),
         request:$('[data-value="probe-request"]', row).value, response:$('[data-value="probe-response"]', row).value}}),

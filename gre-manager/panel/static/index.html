@@ -94,8 +94,8 @@
           <div class="form-grid">
             <label><span id="v2-name-label">نام گروه</span><input name="name" maxlength="80" dir="auto" required></label>
             <label data-group-only>اتصال‌ها چطور تقسیم شوند؟<select name="selection"><option value="weighted">تقسیم بین مقصدها</option><option value="failover">مسیر اصلی و پشتیبان</option><option value="single">یک مقصد</option></select></label>
+            <label class="check-line"><input name="enabled" type="checkbox" checked><span id="v2-enabled-label">گروه فعال باشد</span></label>
           </div>
-          <label class="check-line"><input name="enabled" type="checkbox" checked><span id="v2-enabled-label">گروه فعال باشد</span></label>
           <details class="fold"><summary>محدودیت سرعت</summary><div class="form-grid" id="v2-group-limits"></div></details>
         </section>
         <div id="v2-listener-list"></div>
