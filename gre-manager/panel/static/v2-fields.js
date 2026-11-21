@@ -159,6 +159,15 @@ function decorateFields(root, group) {
     input.setAttribute('aria-describedby', [described,tip.id].filter(Boolean).join(' '));
     label.before(wrapper);
     wrapper.hidden = label.hidden;
+    const caption = document.createElement('span');
+    if (input.type !== 'checkbox' && input.parentElement === label) {
+      while (label.firstChild && label.firstChild !== input) caption.append(label.firstChild);
+      if (caption.textContent.trim()) {
+        caption.className = 'field-caption';
+        label.prepend(caption);
+        wrapper.classList.add('captioned');
+      }
+    }
     wrapper.append(label,button,tip);
     isolateTechnical(wrapper);
     const help = {button,tip,wrapper,pinned:false};

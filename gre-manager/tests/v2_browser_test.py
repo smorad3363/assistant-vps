@@ -66,6 +66,8 @@ def protocol_tabs(page, output, local, remote, original):
     page.route("**/api/v2/apply", apply)
     page.route("**/api/v2/jobs?*", job)
     form.locator('[name="name"]').fill("تونل تهران")
+    expect(form.locator('[data-value="ip"]')).to_have_value("")
+    form.locator('[data-value="ip"]').fill("192.0.2.11")
     form.locator('[data-value="ports"]').fill("۸۴۴۳")
     form.locator('[data-value="service"]').fill("203.0.113.50")
     form.locator('[data-value="ttl"]').fill("48")
@@ -214,6 +216,14 @@ def run(page, output):
             expect(page.locator(f"#{target}-page")).to_be_visible()
             no_overflow(page)
             if target == "groups" and width == 390:
+                assert 0 <= cards.first.bounding_box()["y"] < 360
+                toggle = page.get_by_role("button", name="نمایش همه روش‌ها")
+                toggle.click()
+                expect(page.locator("#method-menu-toggle")).to_have_attribute("aria-expanded", "true")
+                page.locator('[data-page="sit"]').click()
+                expect(page.locator("#method-menu-toggle")).to_have_attribute("aria-expanded", "false")
+                expect(page.locator('[data-page="sit"]')).to_be_in_viewport()
+                page.locator('[data-page="groups"]').click()
                 assert 0 <= cards.first.bounding_box()["y"] < 360
             if width in (390, 1440):
                 page.screenshot(path=str(output / f"v2-{target}-{width}.png"))

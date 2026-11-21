@@ -51,11 +51,12 @@
         <a href="#settings" data-page="settings"><svg class="icon"><use href="#i-settings"/></svg>تنظیمات</a>
       </nav>
       <nav class="method-nav" aria-label="روش‌های اتصال">
-        <h2>روش‌های اتصال</h2>
+        <div class="method-nav-heading"><h2>روش‌های اتصال</h2><button type="button" id="method-menu-toggle" aria-expanded="false" aria-controls="method-tabs">نمایش همه روش‌ها</button></div>
         <div id="method-tabs"></div>
       </nav>
     </aside>
     <main>
+    <datalist id="local-ip-options"></datalist>
     <div id="recovery-alert" class="notice warning" role="status" hidden>پنل در حال برگرداندن تنظیمات قبلی اتصال است.</div>
     <section id="connections-page" aria-labelledby="page-title">
       <div class="page-heading"><div><h1 id="page-title">تونل‌های GRE</h1><p id="page-description" class="muted">وضعیت تونل و مصرف هر اتصال را اینجا ببین.</p></div><button id="add-connection" class="button primary"><svg class="icon"><use href="#i-plus"/></svg><span>افزودن GRE</span></button></div>
@@ -150,9 +151,9 @@
           <label>پورت‌های دیگری که روی سرور می‌مانند<input name="reserved_ports" dir="ltr" placeholder="2096,8443"></label>
           <label>حداکثر اندازه بسته در حالت خودکار<input name="mtu" type="number" min="576" max="1476" dir="ltr"></label>
           <label>آمار چند روز بماند؟<input name="retention_days" type="number" min="1" max="365" dir="ltr"></label>
-          <label>فضای آمار مصرف (مِبی‌بایت)<input name="telemetry_limit_mib" type="number" min="16" max="4096" dir="ltr"></label>
+          <label>حداکثر فضای آمار (MiB)<input name="telemetry_limit_mib" type="number" min="16" max="4096" dir="ltr"></label>
           <label>چند بکاپ بماند؟<input name="backup_keep" type="number" min="1" max="30" dir="ltr"></label>
-          <label>فضای همه بکاپ‌ها (مِبی‌بایت)<input name="backup_limit_mib" type="number" min="1" max="4096" dir="ltr"></label>
+          <label>حداکثر فضای بکاپ‌ها (MiB)<input name="backup_limit_mib" type="number" min="1" max="4096" dir="ltr"></label>
           <label>دامنه ورود پنل · اختیاری<input name="hostname" dir="ltr" placeholder="panel.example.com"></label>
           <label>سقف ارسال گروه‌ها روی این سرور (Mbps)<input name="v2_limit_up" type="number" min="0" step="0.001"></label>
           <label>سقف دریافت گروه‌ها روی این سرور (Mbps)<input name="v2_limit_down" type="number" min="0" step="0.001"></label>

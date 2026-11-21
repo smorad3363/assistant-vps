@@ -16,8 +16,33 @@ const methodNames = {
 const isMethod = name => Object.hasOwn(methodNames, name);
 const technical = value => `<bdi dir="ltr">${esc(value)}</bdi>`;
 const methodLabel = name => name === 'direct' ? methodNames.direct : technical(methodNames[name]);
-$('#method-tabs').innerHTML = Object.keys(methodNames).map(name =>
+const methodTabs = $('#method-tabs');
+const methodToggle = $('#method-menu-toggle');
+methodTabs.innerHTML = Object.keys(methodNames).map(name =>
   `<a href="#${name}" data-page="${name}"><span>${methodLabel(name)}</span></a>`).join('');
+function setMethodMenu(open) {
+  methodTabs.classList.toggle('expanded', open);
+  methodToggle.setAttribute('aria-expanded', String(open));
+  methodToggle.textContent = open ? 'جمع کردن فهرست' : 'نمایش همه روش‌ها';
+}
+function revealActiveMethod() {
+  if (methodTabs.scrollWidth <= methodTabs.clientWidth) return;
+  const link = $('[aria-current="page"]', methodTabs);
+  if (!link) return;
+  const item = link.getBoundingClientRect(), strip = methodTabs.getBoundingClientRect();
+  if (item.left < strip.left) methodTabs.scrollBy(item.left - strip.left, 0);
+  else if (item.right > strip.right) methodTabs.scrollBy(item.right - strip.right, 0);
+}
+methodToggle.addEventListener('click', () => {
+  setMethodMenu(methodToggle.getAttribute('aria-expanded') !== 'true');
+  revealActiveMethod();
+});
+methodTabs.addEventListener('click', event => {
+  if (event.target.closest('a[aria-current="page"]') && methodTabs.classList.contains('expanded')) {
+    setMethodMenu(false);
+    revealActiveMethod();
+  }
+});
 const errors = {
   auth:'نام کاربری یا رمز اشتباه است، یا باید دوباره وارد پنل شوی.',
   csrf:'صفحه را دوباره باز کن و تغییر را تکرار کن.',
@@ -79,7 +104,7 @@ function failText(error) {
   const field = {probe:'تنظیمات تست برنامه',vxlan:'شناسه شبکه و پورت تونل',geneve:'شناسه شبکه و پورت تونل',
     l2tpv3:'شماره تونل، شماره اتصال و پورت دو سرور',l2tpv2:'فایل‌های رمز و پورت دو سرور',eoip:'شماره تونل',
     sit:'آدرس‌های داخلی دو سر تونل',mtu:'اندازه بسته',ports:'پورت‌های ورودی'}[error.field];
-  if (field) return 'این بخش را بررسی کن‌ ' + field;
+  if (field) return field + ' را بررسی کن.';
   return 'درخواست انجام نشد. اتصال سرورها و اطلاعات فرم را بررسی کن.';
 }
 function eventText(message) {
@@ -134,7 +159,9 @@ function setBusy(form, value) {
 async function refresh(quiet = false) {
   try {
     state = await api('state'); csrf = state.csrf;
+    const opening = $('#app').hidden;
     $('#login-view').hidden = true; $('#app').hidden = false;
+    if (opening) revealActiveMethod();
     $('#sync-state').classList.toggle('stale', !state.sampled_at || Date.now()/1000 - state.sampled_at > 20);
     $('#sync-state span').textContent = state.sampled_at ? 'به‌روز · ' + when(state.sampled_at) : 'آمار در حال آماده‌شدن';
     $('#recovery-alert').hidden = !state.recovering;
@@ -153,12 +180,14 @@ function navigate() {
   page = isMethod(next) || ['groups','benchmark','settings'].includes(next) ? next : 'gre';
   if (previous !== page) {
     closeGroupEditor();
+    setMethodMenu(false);
     window.scrollTo(0,0);
   }
   for (const link of $$('.navigation [data-page]')) {
     if (link.dataset.page === page) link.setAttribute('aria-current','page');
     else link.removeAttribute('aria-current');
   }
+  revealActiveMethod();
   const classic = connectionPages.includes(page);
   $('#connections-page').hidden = !classic;
   $('#groups-page').hidden = !(page === 'groups' || isMethod(page));
@@ -273,8 +302,8 @@ function renderSettings() {
   const form=$('#settings-form');
   const storage=state.storage;
   if(storage){
-    const usage=(used,limit)=>`${fa.format(used/1048576)} از ${fa.format(limit/1048576)} مِبی‌بایت`;
-    $('#storage-status').textContent=`فضای آمار ${usage(storage.telemetry_bytes,storage.telemetry_limit)} · بکاپ‌ها ${usage(storage.backup_bytes,storage.backup_limit)} · فضای آزاد ${bytes(storage.free_bytes)}`;
+    const usage=(used,limit)=>`${fa.format(used/1048576)} از ${technical(fa.format(limit/1048576) + ' MiB')}`;
+    $('#storage-status').innerHTML=`فضای آمار ${usage(storage.telemetry_bytes,storage.telemetry_limit)} · بکاپ‌ها ${usage(storage.backup_bytes,storage.backup_limit)} · فضای آزاد ${technical(bytes(storage.free_bytes))}`;
   }
   if (!form.dataset.dirty) {
     form.elements.v2_limit_up.value = state.settings.v2_limits?.up ?? '';
@@ -645,11 +674,14 @@ function readOverrides(listener) {
 function listenerForm(listener = {}) {
   const section = document.createElement('fieldset');
   section.dataset.v2Listener = listener.id || topologyId();
-  const listenIP = listener.ip || (!listener.id && (!listener.node_id || listener.node_id === v2Local) ? Object.keys(state.addresses)[0] : '') || '';
+  const local = !listener.node_id || listener.node_id === v2Local;
+  const addresses = Object.keys(state.addresses);
+  const listenIP = listener.ip || (local && addresses.length === 1 ? addresses[0] : '');
+  $('#local-ip-options').replaceChildren(...addresses.map(ip => new Option(ip,ip)));
   section.className = 'listener-block';
   section.innerHTML = `<legend>ورودی</legend><div class="form-grid">
     <label>سرور ورودی<select data-value="node">${nodeOptions(listener.node_id || v2Local)}</select></label>
-    <label>آی‌پی ورودی کاربران<input data-value="ip" dir="ltr" required placeholder="192.0.2.10" value="${esc(listenIP)}"></label>
+    <label>آی‌پی ورودی کاربران<input data-value="ip" dir="ltr" required ${local ? 'list="local-ip-options"' : ''} placeholder="192.0.2.10" value="${esc(listenIP)}"></label>
     <label data-forwarding>پورت‌های ورودی<input data-value="ports" dir="ltr" required placeholder="443,8443" value="${esc(listener.ports === 'all' ? 'همه' : listener.ports)}"></label>
     <label data-forwarding>نوع ترافیک<select data-value="protocol"><option value="both">TCP + UDP</option><option value="tcp" ${listener.protocols?.join() === 'tcp' ? 'selected' : ''}>TCP</option>
       <option value="udp" ${listener.protocols?.join() === 'udp' ? 'selected' : ''}>UDP</option></select></label></div>
@@ -657,7 +689,7 @@ function listenerForm(listener = {}) {
       <p class="muted small">برای هر پورت ورودی، پورت مقصد یا سقف سرعت را وارد کن. اگر پورت مقصد خالی باشد، شماره‌اش عوض نمی‌شود.</p><div data-port-overrides></div><button type="button" data-v2-edit="add-port" class="button secondary compact">افزودن پورت</button>
     </details>
     <details class="fold"><summary>تنظیمات بیشتر ورودی</summary><div class="form-grid">
-      <label>آی‌پی سرور برای ساخت تونل<input data-value="outer" dir="ltr" value="${esc(listener.outer_ip)}"></label>
+      <label>آی‌پی سرور برای ساخت تونل<input data-value="outer" dir="ltr" ${local ? 'list="local-ip-options"' : ''} value="${esc(listener.outer_ip)}"></label>
       <label data-forwarding>پورت‌هایی که منتقل نمی‌شوند<input data-value="excluded" dir="ltr" placeholder="22,8080" value="${esc((listener.exclude_ports || []).join(','))}"></label>
       ${rateFields(listener.limits,'data-forwarding')}</div></details>
     <details data-forwarding ${listener.probe ? 'open' : ''}><summary>تست اتصال</summary><div class="form-grid">
@@ -684,6 +716,7 @@ function listenerForm(listener = {}) {
 }
 function resetGroupPlan() {
   groupEdit++;
+  if (!groupForm.inert) setBusy(groupForm,false);
   groupPlan = undefined;
   $('#v2-apply-group').disabled = true;
   groupOutput.textContent = '';
@@ -726,7 +759,7 @@ async function refreshGroups() {
   const [topology, groups, metrics] = await Promise.all([api('v2/topology'), api('v2/groups'), api('v2/metrics').catch(() => ({}))]);
   const pressure = metrics?.conntrack;
   $('#v2-host-resources').textContent = pressure?.percent == null ? '' :
-    `جدول اتصال‌های سرور ${fa.format(Math.round(pressure.percent))}٪ پُر است. فضای آزاد دیسک ${fa.format(Math.round(metrics.disk_free_bytes / 1048576))} مِبی‌بایت است.`;
+    `جدول اتصال‌های سرور ${fa.format(Math.round(pressure.percent))}٪ پُر است. فضای آزاد دیسک ${fa.format(metrics.disk_free_bytes / 1000000000)} گیگابایت است.`;
   v2Local = topology.local_node_id;
   v2Nodes = [{id:v2Local,name:'این پنل'}, ...topology.paired_nodes.map(node => ({id:node.id,name:node.hostname})),
     ...state.servers.filter(node => node.v2_node_id && node.key_ready).map(node => ({id:node.v2_node_id,name:node.name}))];
@@ -945,7 +978,7 @@ $('#v2-group-list').addEventListener('click', event => {
   openGroup(record, isMethod(page) ? page : undefined);
 });
 $('#v2-add-listener').addEventListener('click', () => { listenerForm(); resetGroupPlan(); });
-groupForm.addEventListener('input', () => { resetGroupPlan(); setBusy(groupForm,false); });
+groupForm.addEventListener('input', resetGroupPlan);
 groupForm.addEventListener('change', event => {
   const input = event.target;
   const member = input.closest('[data-v2-member]');
@@ -957,7 +990,14 @@ groupForm.addEventListener('change', event => {
   } else if (input.name === 'selection') {
     for (const row of $$('[data-v2-member]',groupForm)) syncMemberMethod(row);
   } else if (input.dataset.value === 'node' && listener && !member) {
-    $('[data-value="ip"]',listener).value = input.value === v2Local ? Object.keys(state.addresses)[0] || '' : '';
+    const local = input.value === v2Local;
+    const addresses = Object.keys(state.addresses);
+    for (const key of ['ip','outer']) {
+      const address = $(`[data-value="${key}"]`,listener);
+      if (local) address.setAttribute('list','local-ip-options');
+      else address.removeAttribute('list');
+      address.value = local && addresses.length === 1 && key === 'ip' ? addresses[0] : '';
+    }
     for (const row of $$('[data-v2-member]',listener)) destinationNodes(row);
   } else if (member && input.dataset.value?.endsWith('-mode')) syncMemberMethod(member);
 });
@@ -1031,8 +1071,8 @@ async function topologyJob(id, phase, showProgress = () => {}) {
 }
 groupForm.addEventListener('submit', async event => {
   event.preventDefault();
-  setBusy(groupForm, true);
   resetGroupPlan();
+  setBusy(groupForm, true);
   const edit = groupEdit;
   try {
     const request = groupRequest();
@@ -1116,9 +1156,9 @@ $('#backup-file').addEventListener('change',async e=>{
     if(file.size>32*1024*1024)throw new Error('backup');
     const data=new Uint8Array(await file.arrayBuffer());let text='';for(let i=0;i<data.length;i+=8192)text+=String.fromCharCode(...data.subarray(i,i+8192));const content=btoa(text);
     const preview=await api('backup.preview',{content});
-    const decision=confirmAction('بازیابی بکاپ',`${fa.format(preview.connections)} اتصال و ${fa.format(preview.servers)} سرور بازیابی می‌شوند. IP ورودی هر اتصال را با این سرور تطبیق بده. از تنظیمات فعلی بکاپ گرفته می‌شود.`,'بازیابی',false);
+    const decision=confirmAction('بازیابی بکاپ',`${fa.format(preview.connections)} اتصال و ${fa.format(preview.servers)} سرور بازیابی می‌شوند. آی‌پی ورودی هر اتصال را روی این سرور انتخاب کن. از تنظیمات فعلی بکاپ گرفته می‌شود.`,'بازیابی',false);
     const mapping=document.createElement('div');mapping.id='restore-addresses';
-    mapping.innerHTML=preview.addresses.map(ip=>`<label>IP ورودی <bdi dir="ltr">${esc(ip)}</bdi><select data-source-ip="${esc(ip)}" dir="ltr">${Object.keys(state.addresses).map(local=>`<option value="${esc(local)}" ${local===ip?'selected':''}>${esc(local)}</option>`).join('')}</select></label>`).join('');
+    mapping.innerHTML=preview.addresses.map(ip=>`<label>آی‌پی ورودی <bdi dir="ltr">${esc(ip)}</bdi><select data-source-ip="${esc(ip)}" dir="ltr">${Object.keys(state.addresses).map(local=>`<option value="${esc(local)}" ${local===ip?'selected':''}>${esc(local)}</option>`).join('')}</select></label>`).join('');
     $('#confirm-text').after(mapping);
     const accepted=await decision,address_map=Object.fromEntries($$('select',mapping).map(x=>[x.dataset.sourceIp,x.value]));mapping.remove();
     if(accepted)await runJob('backup.restore',{content,address_map});
@@ -1127,7 +1167,7 @@ $('#backup-file').addEventListener('change',async e=>{
 isolateTechnical(document.body);
 window.addEventListener('hashchange',navigate);navigate();refresh();
 let chartResizeFrame;
-window.addEventListener('resize',()=>{cancelAnimationFrame(chartResizeFrame);chartResizeFrame=requestAnimationFrame(()=>{if(state&&connectionPages.includes(page))renderChart();});});
+window.addEventListener('resize',()=>{cancelAnimationFrame(chartResizeFrame);chartResizeFrame=requestAnimationFrame(()=>{revealActiveMethod();if(state&&connectionPages.includes(page))renderChart();});});
 setInterval(()=>{if(!document.hidden)refresh(true);},5000);
 let liveBusy=false;
 async function refreshLive(){
